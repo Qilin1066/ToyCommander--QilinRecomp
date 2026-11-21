@@ -4,6 +4,11 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [Unreleased]
+
+### Changed
+- **Licence: GPL-3.0** (`LICENSE`), as in all the QilinRecomp projects, in place of MIT: anyone may use, share, change and sell it, but whatever they distribute that is built from it must come with its full source under the same licence. Earlier versions stay under MIT.
+
 ## [0.6.0] - 2026-11-21
 The lifter's FPU slice: every function of the game is lifted except the 66 that use `fmac`, `fsca` or `fsrra`.
 

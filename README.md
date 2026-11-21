@@ -89,7 +89,7 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 
 ## Licence
 
-This project's own code and documentation are under the [MIT licence](LICENSE), as in the other QilinRecomp projects.
+This project's own code and documentation are under the [GNU General Public License, version 3](LICENSE) (GPL-3.0), as in the other QilinRecomp projects: you may use, share, change and sell it, but anything you distribute that is built from it must come with its full source under the same licence. (Versions before 2026-11-21 were released under MIT, and those copies stay under MIT.)
 
 The game itself is Sega's and is not covered by anything here: you need your own copy, and nothing built from it may be shared.
 
