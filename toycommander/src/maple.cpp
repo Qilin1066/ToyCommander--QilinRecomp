@@ -19,9 +19,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <vector>
 
 #include "guest.hpp"
 #include "pvr.hpp"
+#include "qilin/host/paths.hpp"
+#include "system.hpp"
 #include "video.hpp"
 
 namespace toycommander::maple {
@@ -78,18 +83,175 @@ void device_info(uint32_t to, uint32_t recipient, uint32_t sender) {
     reply(to, kInfoReply, recipient, sender, data, 28);
 }
 
+// ---- the memory card (Sega's Visual Memory): a sub-unit with three
+// functions, storage, its screen and its clock. The storage is 256 blocks
+// of 512 bytes, kept as a file in the data folder (memory_card_a1.bin, an
+// image any Visual Memory tool reads). Sega's Maple bus and Visual Memory
+// specifications, cited by title, have the commands' formats and the file
+// system's.
+constexpr uint32_t kStorage = 0x02000000u, kScreen = 0x04000000u, kClock = 0x08000000u;
+enum : uint32_t { kMediaInfo = 10, kBlockRead = 11, kBlockWrite = 12, kWriteDone = 13 };
+constexpr uint32_t kBlocks = 256, kBlockBytes = 512, kWriteParts = 4;
+
+std::vector<uint8_t> g_card;
+std::filesystem::path g_card_file;
+
+void save_card(uint32_t at, uint32_t bytes) {
+    std::FILE* f = std::fopen(g_card_file.string().c_str(), "r+b");
+    if (!f) f = std::fopen(g_card_file.string().c_str(), "w+b");
+    if (!f) rt::fatal("cannot write %s", g_card_file.string().c_str());
+    if (std::fseek(f, 0, SEEK_END) == 0 && std::ftell(f) != long(g_card.size())) {
+        std::fseek(f, 0, SEEK_SET);
+        std::fwrite(g_card.data(), 1, g_card.size(), f);
+    } else {
+        std::fseek(f, long(at), SEEK_SET);
+        std::fwrite(g_card.data() + at, 1, bytes, f);
+    }
+    if (std::fclose(f) != 0) rt::fatal("cannot write %s", g_card_file.string().c_str());
+}
+
+// The file system's layout, which the media information reports too: the
+// root block last (255), the FAT before it (254, one block), the directory
+// below that (253 down to 241), 200 blocks for files from block 0 (and 31
+// more above them that a Visual Memory game can use).
+constexpr uint16_t kRoot = 255, kFat = 254, kFatBlocks = 1, kDirectory = 253, kDirectoryBlocks = 13, kUserBlocks = 200, kExtraBlocks = 31;
+
+uint8_t bcd(int v) { return static_cast<uint8_t>((v / 10) << 4 | (v % 10)); }
+
+// A newly formatted card: the root block (sixteen 0x55 bytes, the date it
+// was formatted in BCD, then the layout as 16-bit fields from 0x40, as in
+// the media information), the FAT (each block's next, 0xFFFC free, 0xFFFA
+// the last of its chain: the directory's blocks chained downwards, the FAT
+// and the root alone) and an empty directory.
+void format_card() {
+    auto put16 = [](uint8_t* p, uint16_t v) { p[0] = static_cast<uint8_t>(v), p[1] = static_cast<uint8_t>(v >> 8); };
+    uint8_t* root = g_card.data() + kRoot * kBlockBytes;
+    std::memset(root, 0x55, 16);
+    const std::time_t now = std::time(nullptr);
+    std::tm t{};
+#if defined(_WIN32)
+    localtime_s(&t, &now);
+#else
+    localtime_r(&now, &t);
+#endif
+    const int year = t.tm_year + 1900;
+    const uint8_t when[8] = {bcd(year / 100), bcd(year % 100), bcd(t.tm_mon + 1), bcd(t.tm_mday), bcd(t.tm_hour), bcd(t.tm_min), bcd(t.tm_sec),
+                             static_cast<uint8_t>((t.tm_wday + 6) % 7)};
+    std::memcpy(root + 0x30, when, sizeof when);
+    const uint16_t layout[12] = {kBlocks - 1, 0, kRoot, kFat, kFatBlocks, kDirectory, kDirectoryBlocks, 0, kUserBlocks, kExtraBlocks, 0, 0};
+    for (unsigned k = 0; k < 12; ++k) put16(root + 0x40 + 2 * k, layout[k]);
+    uint8_t* fat = g_card.data() + kFat * kBlockBytes;
+    for (unsigned b = 0; b < kBlocks; ++b) put16(fat + 2 * b, 0xFFFCu);
+    for (unsigned b = kDirectory; b > kDirectory - kDirectoryBlocks + 1; --b) put16(fat + 2 * b, static_cast<uint16_t>(b - 1));
+    put16(fat + 2 * (kDirectory - kDirectoryBlocks + 1), 0xFFFAu);
+    put16(fat + 2 * kFat, 0xFFFAu);
+    put16(fat + 2 * kRoot, 0xFFFAu);
+}
+
+void load_card() {
+    if (!g_card.empty()) return;
+    g_card_file = qilin::host::user_folder() / "memory_card_a1.bin";
+    g_card.assign(kBlocks * kBlockBytes, 0);
+    if (std::FILE* f = std::fopen(g_card_file.string().c_str(), "rb")) {
+        const size_t got = std::fread(g_card.data(), 1, g_card.size(), f);
+        std::fclose(f);
+        if (got != g_card.size()) rt::fatal("%s is not a %u-byte memory card", g_card_file.string().c_str(), kBlocks * kBlockBytes);
+    } else {
+        format_card();
+        save_card(0, kBlocks * kBlockBytes);
+    }
+}
+
+void memory_card(uint32_t header, uint32_t data_at, uint32_t to) {
+    const uint32_t command = header & 0xFFu, recipient = (header >> 8) & 0xFFu, sender = (header >> 16) & 0xFFu, words = header >> 24;
+    const uint32_t me = recipient;
+    load_card();
+    switch (command) {
+    case kDeviceInfo: {
+        uint8_t info[112] = {};
+        // The functions, and a word for each from the highest: the clock's,
+        // the screen's (48 x 32, one bit a pixel), the storage's (one
+        // partition, 512-byte blocks, written in 4 parts, read in 1).
+        const uint32_t ids[4] = {kStorage | kScreen | kClock, be(0x403F7E7Eu), be(0x00100500u), be(0x000F4100u)};
+        std::memcpy(info, ids, 16);
+        info[16] = 0xFF, info[17] = 0;
+        const char name[] = "Visual Memory";
+        std::memset(info + 18, ' ', 30 + 60);
+        std::memcpy(info + 18, name, sizeof name - 1);
+        const uint16_t standby = 124, max = 130;
+        std::memcpy(info + 108, &standby, 2), std::memcpy(info + 110, &max, 2);
+        uint32_t data[28];
+        std::memcpy(data, info, sizeof info);
+        reply(to, kInfoReply, sender, me, data, 28);
+        return;
+    }
+    case kReset:
+    case kShutdown: reply(to, kOk, sender, me, nullptr, 0); return;
+    default: break;
+    }
+    const uint32_t function = words >= 1 ? rt::ld32(data_at) : 0;
+    if (function != kStorage) throw rt::Stop{rt::Stop::Unsupported, 0, header};
+    // The location: [0] the partition, [1] the part of the block, [2] the block, high byte first.
+    const uint32_t location = words >= 2 ? rt::ld32(data_at + 4) : 0;
+    const uint32_t partition = location & 0xFFu, part = (location >> 8) & 0xFFu, block = (location >> 24) | ((location >> 8) & 0xFF00u);
+    if (partition != 0) throw rt::Stop{rt::Stop::Unsupported, 0, location};
+    switch (command) {
+    case kMediaInfo: {
+        // In 16-bit fields: the last block, the partition, the system area
+        // (the root block), the FAT's block and its size, the directory's
+        // first block and its size, the icon, the save area's first block
+        // and its size, the area reserved for a game.
+        const uint16_t f[12] = {kBlocks - 1, 0, kRoot, kFat, kFatBlocks, kDirectory, kDirectoryBlocks, 0, kUserBlocks, kExtraBlocks, 0, 0};
+        uint32_t data[7] = {kStorage};
+        std::memcpy(data + 1, f, sizeof f);
+        reply(to, kDataReply, sender, me, data, 7);
+        return;
+    }
+    case kBlockRead: {
+        if (block >= kBlocks || part != 0 || words != 2) throw rt::Stop{rt::Stop::Unsupported, 0, location};
+        uint32_t data[2 + kBlockBytes / 4] = {kStorage, location};
+        std::memcpy(data + 2, g_card.data() + block * kBlockBytes, kBlockBytes);
+        reply(to, kDataReply, sender, me, data, 2 + kBlockBytes / 4);
+        return;
+    }
+    case kBlockWrite: {
+        constexpr uint32_t part_bytes = kBlockBytes / kWriteParts;
+        if (block >= kBlocks || part >= kWriteParts || words != 2 + part_bytes / 4) throw rt::Stop{rt::Stop::Unsupported, 0, location};
+        const uint32_t at = block * kBlockBytes + part * part_bytes;
+        for (uint32_t k = 0; k < part_bytes; k += 4) {
+            const uint32_t w = rt::ld32(data_at + 8 + k);
+            std::memcpy(g_card.data() + at + k, &w, 4);
+        }
+        save_card(at, part_bytes);
+        reply(to, kOk, sender, me, nullptr, 0);
+        return;
+    }
+    case kWriteDone:
+        if (block >= kBlocks || part != kWriteParts) throw rt::Stop{rt::Stop::Unsupported, 0, location};
+        reply(to, kOk, sender, me, nullptr, 0);
+        return;
+    default: throw rt::Stop{rt::Stop::Unsupported, 0, header};
+    }
+}
+
 void frame(uint32_t port, uint32_t header, uint32_t data_at, uint32_t to) {
     const uint32_t command = header & 0xFFu, recipient = (header >> 8) & 0xFFu, sender = (header >> 16) & 0xFFu;
     const Controls in = video::controls(port);
     if (g_trace)
         std::fprintf(stderr, "maple: port %u command %u to %02X from %02X, %u words, reply at %08X, buttons %04X\n", port, command, recipient, sender,
                      header >> 24, to, in.buttons);
-    // Only the main unit (0x20 | the port's bits) is there, and only on a port with a pad.
+    // The main unit (0x20 | the port's bits) on a port with a pad, and a
+    // memory card in its first slot (sub-unit 0x01) on port A.
+    const bool card = port == 0 && in.connected;
+    if (in.connected && card && (recipient & 0x3Fu) == 0x01u) {
+        memory_card(header, data_at, to);
+        return;
+    }
     if (!in.connected || (recipient & 0x3Fu) != 0x20u) {
         rt::st32(to, 0xFFFFFFFFu);
         return;
     }
-    const uint32_t me = recipient;  // the reply's sender: the main unit, no sub-units
+    const uint32_t me = recipient | (card ? 0x01u : 0u);  // the reply's sender: the main unit, with its sub-units' bits
     switch (command) {
     case kDeviceInfo: device_info(to, sender, me); return;
     case kGetCondition: {
@@ -114,10 +276,10 @@ void run() {
     if (!(pvr_register(kMden) & 1u)) return;
     uint32_t at = ram(pvr_register(kMdstar));
     for (int n = 0; n < 64; ++n) {
-        const uint32_t control = rt::ld32(at), to = ram(rt::ld32(at + 4));
+        const uint32_t control = rt::ld32(at);
         const uint32_t length = control & 0xFFu, pattern = (control >> 8) & 7u, port = (control >> 16) & 3u;
         if (pattern == 0) {
-            const uint32_t header = rt::ld32(at + 8);
+            const uint32_t to = ram(rt::ld32(at + 4)), header = rt::ld32(at + 8);
             if ((header >> 24) != length) throw rt::Stop{rt::Stop::Unsupported, 0, control};
             frame(port, header, at + 12, to);
             at += 12 + length * 4;
