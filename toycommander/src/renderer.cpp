@@ -450,6 +450,35 @@ struct Renderer::Impl {
         else draws.push_back(d);
     }
 
+    // The translucent list in auto-sort mode (ISP_FEED_CFG's bit 0 clear):
+    // the hardware sorts it by depth for each pixel, so a polygon farther
+    // away is blended first. Here its triangles are drawn from the farthest
+    // to the nearest, by their mean z (1/w: smaller is farther), the order
+    // sent kept between equals.
+    void sort_translucent(size_t first_draw, size_t first_vertex) {
+        struct Tri {
+            float depth;
+            uint32_t draw, at;
+        };
+        std::vector<Tri> tris;
+        for (size_t d = first_draw; d < draws.size(); ++d)
+            for (uint32_t v = draws[d].first; v < draws[d].first + draws[d].count; v += 3)
+                tris.push_back({vertices[v].z + vertices[v + 1].z + vertices[v + 2].z, uint32_t(d), v});
+        std::stable_sort(tris.begin(), tris.end(), [](const Tri& a, const Tri& b) { return a.depth < b.depth; });
+        std::vector<HostVertex> sorted;
+        sorted.reserve(tris.size() * 3);
+        std::vector<Draw> out(draws.begin(), draws.begin() + std::ptrdiff_t(first_draw));
+        for (const Tri& t : tris) {
+            Draw d = draws[t.draw];
+            d.first = uint32_t(first_vertex + sorted.size()), d.count = 3;
+            sorted.insert(sorted.end(), vertices.begin() + t.at, vertices.begin() + t.at + 3);
+            if (out.size() > first_draw && out.back().same_state(d)) out.back().count += 3;
+            else out.push_back(d);
+        }
+        std::copy(sorted.begin(), sorted.end(), vertices.begin() + std::ptrdiff_t(first_vertex));
+        draws = std::move(out);
+    }
+
     void grow(Buffer& b, VkDeviceSize need, VkBufferUsageFlags usage) {
         if (b.size >= need) return;
         b.destroy(gpu);
@@ -471,9 +500,13 @@ struct Renderer::Impl {
         const ta::Scene& scene = *src.scene;
         if (!scene.modifiers.empty()) once(said_modifiers, "modifier volumes (shadows)");
         if (src.background.count) add_strip(src, src.background, src.background_vertices, true);
-        for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent})
+        size_t translucent_draws = 0, translucent_vertices = 0;
+        for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent}) {
+            if (list == ta::kTranslucent) translucent_draws = draws.size(), translucent_vertices = vertices.size();
             for (const ta::Strip& s : scene.strips)
                 if (s.list == list) add_strip(src, s, scene.vertices.data() + s.first, false);
+        }
+        if (!src.presort) sort_translucent(translucent_draws, translucent_vertices);
         stats.draws = uint32_t(draws.size());
 
         float z_max = 0.0f;

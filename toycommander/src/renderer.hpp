@@ -41,6 +41,9 @@ struct Source {
     // Registers: PAL_RAM_CTRL, TEXT_CONTROL's stride, PT_ALPHA_REF, and the
     // palette RAM's 1,024 entries.
     uint32_t palette_format = 0, stride = 0, punch_alpha_ref = 0;
+    // ISP_FEED_CFG's bit 0: the translucent list drawn in the order sent
+    // (presort); clear, the hardware sorts it by depth (auto-sort).
+    bool presort = true;
     const uint32_t* palette = nullptr;
     // Video memory as textures are addressed (pvr.hpp).
     void (*read)(uint32_t offset, uint8_t* out, uint32_t n) = nullptr;
