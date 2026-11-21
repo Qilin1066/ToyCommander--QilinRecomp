@@ -6,7 +6,7 @@
 A Dreamcast boot file is a flat image of memory from `0x8C010000` (`disc-analysis.md`). The loader checks it's non-empty, a whole number of 16-bit words, and fits in the 16 MB of RAM, and gives bounds-checked little-endian reads; errors are `std::expected` messages. The supported build is recognised by the file's SHA-256 (our own, `sha256.*`).
 
 ## The GD-ROM reader (`gdrom.*`)
-Reads a Redump-style dump: the `.cue`, the track table with each track's place on the disc (the high-density area starts at sector 45000), Mode 1 data sectors with their sync pattern and mode checked, the bootstrap's fields, and the ISO 9660 file system of the high-density area. It is runtime code too (no `std::format`): `qilin_run` will read the player's dump through it.
+Reads a Redump-style dump: the `.cue`, the track table with each track's place on the disc (the high-density area starts at sector 45000), Mode 1 data sectors with their sync pattern and mode checked, the bootstrap's fields, and the ISO 9660 file system of the high-density area. It is runtime code too (no `std::format`): the games' programs read the player's dump through it.
 
 What it refuses, each with a message: cue commands it doesn't know, more than one track in a file, track modes other than `MODE1/2352` and `AUDIO`, tracks out of order, a dump whose high-density area doesn't start at track 3, track files that aren't whole sectors, reads that run into an audio track or off the disc, sectors without a sync pattern or of another mode, malformed or multi-extent directory records.
 

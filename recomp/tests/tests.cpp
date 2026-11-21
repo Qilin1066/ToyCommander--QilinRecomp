@@ -80,6 +80,8 @@ void test_bootfile() {
     CHECK(!BootFile::load("no-such-file.bin").has_value());
     const KnownBuild* usa = known_build("ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd");
     CHECK(usa && usa->product == "MK-57020" && usa->version == "V1.022");
+    const KnownBuild* europe = known_build("da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4");
+    CHECK(europe && europe->product == "MK-5114950" && europe->version == "V1.050");
 }
 
 // ---------------------------------------------------------------- decoder
@@ -627,6 +629,10 @@ void test_cfg_v03() {
     const auto usa = layout("ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd");
     CHECK(!usa.empty() && usa.front().begin == kBootFileBase && usa.back().end == 0x8C0C6B9Cu);
     for (size_t i = 1; i < usa.size(); ++i) CHECK(usa[i].begin == usa[i - 1].end && usa[i].begin < usa[i].end);
+    // Toy Racer's too.
+    const auto europe = layout("da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4");
+    CHECK(!europe.empty() && europe.front().begin == kBootFileBase && europe.back().end == 0x8C0FD624u);
+    for (size_t i = 1; i < europe.size(); ++i) CHECK(europe[i].begin == europe[i - 1].end && europe[i].begin < europe[i].end);
     CHECK(layout("0000").empty());
 }
 

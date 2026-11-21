@@ -1,7 +1,7 @@
 // The game's boot file: the executable the Dreamcast's boot ROM loads.
 //
 // A GD-ROM names its boot file in its bootstrap sector (IP.BIN; see
-// gdrom.hpp): `1GUTH.BIN` on Toy Commander's disc. The file has no header and
+// gdrom.hpp): `1GUTH.BIN` on Toy Commander's disc, `1TOYRACE.BIN` on Toy Racer's. The file has no header and
 // no sections: it is the bytes of memory from 0x8C010000 up, code and
 // initialised data together, and execution starts at its first byte. Where
 // the code ends and what the BSS is are found by analysis, not read here.

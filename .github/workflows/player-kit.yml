@@ -1,0 +1,106 @@
+name: Windows downloads
+
+# Builds each game's Windows download (tools/player-kit): on every push, as
+# artifacts to check; on a game's version tag (toycommander-vX.Y.Z or
+# toyracer-vX.Y.Z), attached to that tag's GitHub Release as
+# <Game>--QilinRecomp-X.Y.Z-windows-x64.zip. No game data is used or
+# included: players lift the boot file from their own disc dump with the
+# bundled tools.
+on:
+  push:
+    branches: [main]
+    tags: ['toycommander-v*', 'toyracer-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to create the release and attach the download
+
+env:
+  LLVM_MINGW: "20261104"
+  LLVM_MINGW_CROSS_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
+  LLVM_MINGW_WINDOWS_SHA256: 552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f
+  NINJA: v1.13.2
+  NINJA_SHA256: 07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+            title: Toy Commander
+            disc: the USA release (MK-57020, version 1.022)
+            changelog: CHANGELOG.md
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+            title: Toy Racer
+            disc: the European release (MK-5114950, version 1.050)
+            changelog: toyracer/CHANGELOG.md
+    runs-on: ubuntu-24.04
+    steps:
+      # A tag builds only its own game's download (a job's own if can't read the matrix).
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v5
+        if: env.BUILD == 'yes'
+        with:
+          fetch-depth: 0   # the tags, for the version of an untagged build
+      - name: Ninja and zip (Linux)
+        if: env.BUILD == 'yes'
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build zip
+      - name: Get the toolchains (pinned, checked)
+        if: env.BUILD == 'yes'
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools" && cd "$RUNNER_TEMP/tools"
+          base=https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW
+          curl -sSfL -o cross.tar.xz "$base/llvm-mingw-$LLVM_MINGW-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          curl -sSfL -o windows.zip "$base/llvm-mingw-$LLVM_MINGW-ucrt-x86_64.zip"
+          curl -sSfL -o ninja-win.zip "https://github.com/ninja-build/ninja/releases/download/$NINJA/ninja-win.zip"
+          curl -sSfL -o COPYING "https://raw.githubusercontent.com/ninja-build/ninja/$NINJA/COPYING"
+          echo "$LLVM_MINGW_CROSS_SHA256  cross.tar.xz" | sha256sum -c
+          echo "$LLVM_MINGW_WINDOWS_SHA256  windows.zip" | sha256sum -c
+          echo "$NINJA_SHA256  ninja-win.zip" | sha256sum -c
+          mkdir cross windows ninja
+          tar xJf cross.tar.xz -C cross
+          unzip -q windows.zip -d windows
+          unzip -q ninja-win.zip -d ninja && mv COPYING ninja/
+          echo "LLVM_MINGW_CROSS=$PWD/cross/llvm-mingw-$LLVM_MINGW-ucrt-ubuntu-22.04-x86_64" >> "$GITHUB_ENV"
+          echo "LLVM_MINGW_WINDOWS=$PWD/windows/llvm-mingw-$LLVM_MINGW-ucrt-x86_64" >> "$GITHUB_ENV"
+          echo "NINJA_WINDOWS=$PWD/ninja" >> "$GITHUB_ENV"
+      - name: Package
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/$GAME-v* ]]; then version="${GITHUB_REF_NAME#$GAME-v}"
+          else version="$(git describe --tags --always --match "$GAME-v*")"; version="${version#$GAME-v}"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          tools/player-kit/package.sh "$GAME" "$version" "$PWD/$PACKAGE-$version-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          name: ${{ matrix.package }}-${{ env.VERSION }}-windows-x64
+          path: ${{ matrix.package }}-${{ env.VERSION }}-windows-x64.zip
+          retention-days: 14
+      - name: Attach to the release
+        if: env.BUILD == 'yes' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ matrix.package }}
+          TITLE: ${{ matrix.title }}
+          DISC: ${{ matrix.disc }}
+          CHANGELOG: ${{ matrix.changelog }}
+        run: |
+          zip="$PACKAGE-$VERSION-windows-x64.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$zip" --title "$TITLE QilinRecomp $VERSION" \
+              --notes "The Windows download: unpack it and double-click Play $TITLE.bat (see README.txt). You need your own disc, $DISC, dumped as a .cue with its .bin tracks. Changes: $CHANGELOG."
+          fi

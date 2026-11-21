@@ -113,12 +113,74 @@ constexpr DataBlock kUsaData[] = {
     {0x8C0C3FF8, 0x8C0C3FFC, "a literal nothing loads (0xAC004000) in Shinobi's exception code"},
 };
 
+// Toy Racer, Europe, MK-5114950, V1.050. The evidence for each boundary is in
+// docs/toyracer/code-analysis.md.
+constexpr Region kEurope[] = {
+    {0x8C010000, 0x8C010030, "start-up (cache set-up, jump to syStart)", Plan::replace},
+    {0x8C010030, 0x8C010080, "\"Lib Handle Start\" / \"Lib Handle End\" markers", Plan::data},
+    {0x8C010080, 0x8C04CA58, "game", Plan::lift},
+    {0x8C04CA58, 0x8C0A5B02,
+     "middleware: No Cliche's engine, the audio manager, Kamui 2, kmdk, the network libraries, C runtime",
+     Plan::undecided},
+    {0x8C0A5B02, 0x8C0C5440, "initialised data of the game and the middleware", Plan::data},
+    {0x8C0C5440, 0x8C0C5924, "Shinobi", Plan::replace},
+    {0x8C0C5924, 0x8C0C5AFC, "Shinobi's pdKbd (the keyboard, over the Maple driver)", Plan::lift},
+    {0x8C0C5AFC, 0x8C0C6530, "Shinobi", Plan::replace},
+    {0x8C0C6530, 0x8C0C7184, "Shinobi's bu (the memory card's file system): its API", Plan::lift},
+    {0x8C0C7184, 0x8C0C7D30, "Shinobi", Plan::replace},
+    {0x8C0C7D30, 0x8C0C9BE8, "Shinobi's gdFs (the GD-ROM file system, over gdd)", Plan::lift},
+    // Shinobi's peripheral library (pd), its memory card file system (bu) and
+    // their Maple bus driver are lifted, over the Maple bus the port provides,
+    // as in Toy Commander; the regions were found by matching its functions
+    // (docs/runtime.md).
+    {0x8C0C9BE8, 0x8C0CA150, "Shinobi's pd (peripherals)", Plan::lift},
+    {0x8C0CA150, 0x8C0CA2AC, "Shinobi", Plan::replace},
+    {0x8C0CA2AC, 0x8C0CA2FC, "Shinobi: the interrupt chains' tables cleared (for pd's set-up)", Plan::lift},
+    {0x8C0CA2FC, 0x8C0CAB1A, "Shinobi", Plan::replace},
+    {0x8C0CAB1A, 0x8C0CAB2E, "Shinobi: the peripherals' set-up", Plan::lift},
+    {0x8C0CAB2E, 0x8C0CAC28, "Shinobi", Plan::replace},
+    {0x8C0CAC28, 0x8C0D0B84, "Shinobi's Maple driver: the bus's servers, the devices' drivers, bu's core", Plan::lift},
+    {0x8C0D0B84, 0x8C0D0CEC, "Shinobi", Plan::replace},
+    {0x8C0D0CEC, 0x8C0D0DC0, "Shinobi: the peripherals' vibration and screen calls", Plan::lift},
+    {0x8C0D0DC0, 0x8C0D18B4, "Shinobi (with the extension check and part of the modem library)", Plan::replace},
+    {0x8C0D18B4, 0x8C0D216C, "Shinobi's gdd (the GD-ROM driver, over the boot ROM's system calls)", Plan::lift},
+    {0x8C0D216C, 0x8C0D2F50, "Shinobi", Plan::replace},
+    {0x8C0D2F50, 0x8C0D58B4, "Shinobi's Maple driver: its system bus set-up, the bus's DMA and frames; bu's device layer", Plan::lift},
+    {0x8C0D58B4, 0x8C0D5E24, "Shinobi (the boot ROM's system-call wrappers)", Plan::replace},
+    {0x8C0D5E24, 0x8C0D62A0, "Shinobi's vibration (Jump Pack) and screen (memory card) drivers", Plan::lift},
+    {0x8C0D62A0, 0x8C0E08CC, "Shinobi and Sega's modem library", Plan::replace},
+    {0x8C0E08CC, 0x8C0E0BC8, "Shinobi: the G2 bus's register helpers (for the Maple driver)", Plan::lift},
+    // bu's thread library is lifted but for its two switches, which run guest
+    // threads on host threads (toyracer/src/threads.cpp).
+    {0x8C0E0BC8, 0x8C0E0E8E, "Shinobi: bu's thread library", Plan::lift},
+    {0x8C0E0E8E, 0x8C0E0ECC, "Shinobi: bu's thread library: a thread's yield (host threads)", Plan::replace},
+    {0x8C0E0ECC, 0x8C0E0ED0, "Shinobi: bu's thread library", Plan::lift},
+    {0x8C0E0ED0, 0x8C0E0F9E, "Shinobi: bu's thread library: the scheduler's pass (host threads)", Plan::replace},
+    {0x8C0E0F9E, 0x8C0F9BB4, "Sega's modem library", Plan::replace},
+    {0x8C0F9BB4, 0x8C0FD624, "Shinobi's and the modem library's initialised data and version strings", Plan::data},
+};
+
+constexpr ReplacedFunction kEuropeReplaced[] = {
+    {0x8C05E01C, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
+    {0x8C04DE3C, "struct_copy_even", "the compiler's structure copy: a jump through a table into an unrolled run"},
+    {0x8C04DE48, "struct_copy_odd", "the same, for an odd number of words"},
+    {0x8C04D758, "shinobi_timer_start", "Shinobi's timer 0 set-up (linked among the middleware here)"},
+    {0x8C04D77E, "shinobi_timer_count", "timer 0's count so far"},
+    {0x8C04D788, "shinobi_timer_diff", "the ticks between two counts"},
+    {0x8C04DB04, "shinobi_cable", "Shinobi's cable query (linked among the middleware here): reads an I/O port"},
+    {0x8C05E108, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
+    {0x8C090AC6, "kamui_install_interrupt_handler", "puts Kamui 2's handler in the exception table (VBR)"},
+};
+
+constexpr std::string_view kEuropeSha = "da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4";
+
 constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd";
 
 }  // namespace
 
 std::span<const Region> layout(std::string_view sha256_hex) {
     if (sha256_hex == kUsaSha) return kUsa;
+    if (sha256_hex == kEuropeSha) return kEurope;
     return {};
 }
 
@@ -143,6 +205,7 @@ std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) {
 
 std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) {
     if (sha256_hex == kUsaSha) return kUsaReplaced;
+    if (sha256_hex == kEuropeSha) return kEuropeReplaced;
     return {};
 }
 

@@ -14,6 +14,9 @@ constexpr KnownBuild kKnownBuilds[] = {
     // bootstrap sector gives them; docs/disc-analysis.md has what was checked.
     {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", "MK-57020", "V1.022",
      "Toy Commander (USA)"},
+    // Toy Racer, Europe (En,Fr,De,Es): `1TOYRACE.BIN`.
+    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", "MK-5114950", "V1.050",
+     "Toy Racer (Europe)"},
 };
 
 std::string hex32(uint32_t v) {

@@ -2,11 +2,17 @@
 
 All notable changes to this project are recorded here, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Past entries are kept as written, never rewritten.
 
-Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
+This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A change to code both games share is recorded in both. Versions are tagged `toycommander-vX.Y.Z` (`vX.Y.Z` before the two games shared a repository); the number lives only in `CMakeLists.txt` (`QILIN_TOYCOMMANDER_VERSION`, the project's version). While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
 ## [Unreleased]
 
+### Changed
+- **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
+
 ### Added
+- **One repository for Toy Commander and Toy Racer, a program and a release for each** (the owner, 2026-11-21: "one repo, two releases"): the code both games share is `dreamcast/` (the hardware the port provides, the renderer, sound, the controller, memory card and Jump Pack, the settings file and menu), each game's own is `toycommander/src/` and `toyracer/src/`, and the recompiler knows both builds (`qilin info`, `layout`, `lift`). `qilin` now also takes a disc's `.cue` wherever it takes a boot file, reading the boot file from the dump.
+- **A Windows download for each game** (`tools/player-kit`, `.github/workflows/player-kit.yml`, as Punch-Out's): `ToyCommander--QilinRecomp-X.Y.Z-windows-x64.zip` and `ToyRacer--QilinRecomp-X.Y.Z-windows-x64.zip`, nothing from the game in either. Unpack, double-click `Play <game>.bat`, choose your own dump's `.cue`: the bundled recompiler lifts its boot file and the bundled compiler (LLVM-MinGW) links it with the prebuilt rest of the game, once. Each game's tag builds and attaches its own.
+- **Each game's program is checked without its disc**: its whole program but the lifted code is the library `<game>_game`, linked in every build with an empty function table (`<game>_link_check`), so CI compiles and links both games with every compiler.
 - **The bring-up goes on** (`docs/runtime.md`): natives for Shinobi's work-area pointer, the console's settings (a USA console, NTSC, English, stereo, a VGA cable), its hardware set-up, its allocator (Shinobi's own algorithm over the same guest RAM, so every block lands where it would on the console), its real-time clock's set-up, the C runtime's `memset` and more. The game now runs through the middleware's whole system initialisation, Kamui 2's included, to the GD-ROM file system's initialisation, which is next.
 - **The bus** (`recomp/runtime/bus.*`): RAM at `0x8C000000` stays the one-compare fast path; every other access goes to the bus, which handles RAM's other views, the SH-4's store queues (with QACR0/1) and the devices the port maps, and stops on anything else.
 - **Hardware under Kamui 2** (`toycommander/src/pvr.*`, `sh4.*`): the PowerVR2's and the system bus's registers, video memory with its 64-bit view, and the SH-4's timer unit (timer 0 free-running, as Shinobi leaves it, counting guest time).

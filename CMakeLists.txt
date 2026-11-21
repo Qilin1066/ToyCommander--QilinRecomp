@@ -8,6 +8,11 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
 project(ToyCommanderQilinRecomp VERSION 0.9.0 LANGUAGES C CXX)
+# Each game is released on its own (tags toycommander-vX.Y.Z and
+# toyracer-vX.Y.Z, its own CHANGELOG): its version is here. The project's
+# (the recompiler's, qilin --version) is Toy Commander's.
+set(QILIN_TOYCOMMANDER_VERSION ${PROJECT_VERSION})
+set(QILIN_TOYRACER_VERSION 0.2.0)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -200,11 +205,21 @@ if(QILIN_HOST)
         target_compile_options(qilin_imgui PRIVATE -w)
     endif()
 
-    add_library(qilin_host STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp)
-    target_include_directories(qilin_host PUBLIC host/include)
-    # The game's name in messages, the window's title and the data folder.
-    target_compile_definitions(qilin_host PUBLIC QILIN_APP="toycommander" QILIN_APP_TITLE="Toy Commander")
-    target_link_libraries(qilin_host PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)
+    # The host layer and the settings menu, once per game: the game's name in
+    # messages, the window's title, the data folder and the settings file.
+    # (The tests use Toy Commander's.)
+    function(qilin_game_host game title version)
+        add_library(qilin_host_${game} STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp)
+        target_include_directories(qilin_host_${game} PUBLIC host/include)
+        target_compile_definitions(qilin_host_${game} PUBLIC QILIN_APP="${game}" QILIN_APP_TITLE="${title}")
+        target_link_libraries(qilin_host_${game} PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)
+        add_library(dreamcast_menu_${game} STATIC dreamcast/src/settings.cpp dreamcast/src/menu.cpp)
+        target_include_directories(dreamcast_menu_${game} PUBLIC dreamcast/src recomp/runtime)
+        target_link_libraries(dreamcast_menu_${game} PUBLIC qilin_host_${game} qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
+        target_compile_definitions(dreamcast_menu_${game} PRIVATE QILIN_VERSION="${version}")
+    endfunction()
+    qilin_game_host(toycommander "Toy Commander" ${QILIN_TOYCOMMANDER_VERSION})
+    qilin_game_host(toyracer "Toy Racer" ${QILIN_TOYRACER_VERSION})
     # Vulkan structures are written {sType} with the rest zeroed: that's the idiom, not a mistake.
     # (On the sources, so it comes after -Wextra on the command line.)
     if(NOT MSVC)
@@ -216,7 +231,7 @@ if(QILIN_HOST)
     # The Vulkan layer's own test: a device, an offscreen frame, read back. Skips
     # (exit 77) where there's no Vulkan 1.3 device, as on CI runners.
     add_executable(qilin_vktest host/tests/vktest.cpp)
-    target_link_libraries(qilin_vktest PRIVATE qilin_host qilin_warnings)
+    target_link_libraries(qilin_vktest PRIVATE qilin_host_toycommander qilin_warnings)
     add_test(NAME qilin_vktest COMMAND qilin_vktest)
     set_tests_properties(qilin_vktest PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -224,16 +239,10 @@ if(QILIN_HOST)
     # skips where there's no Vulkan 1.3 device; the test then exits 77).
     add_executable(dreamcast_render_test dreamcast/tests/render_test.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp)
     target_include_directories(dreamcast_render_test PRIVATE dreamcast/src recomp/runtime)
-    target_link_libraries(dreamcast_render_test PRIVATE qilin_host qilin_warnings)
+    target_link_libraries(dreamcast_render_test PRIVATE qilin_host_toycommander qilin_warnings)
     add_test(NAME dreamcast_render_test COMMAND dreamcast_render_test)
     set_tests_properties(dreamcast_render_test PROPERTIES SKIP_RETURN_CODE 77)
 
-    # The settings file and the settings menu, built here (so CI compiles them
-    # with every compiler) and linked into qilin_run.
-    add_library(dreamcast_menu STATIC dreamcast/src/settings.cpp dreamcast/src/menu.cpp)
-    target_include_directories(dreamcast_menu PUBLIC dreamcast/src recomp/runtime)
-    target_link_libraries(dreamcast_menu PUBLIC qilin_host qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
-    target_compile_definitions(dreamcast_menu PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
 
     # The settings file's reader and writer (from Punch-Out's).
     add_executable(dreamcast_settings_test dreamcast/tests/settings_test.cpp dreamcast/src/settings.cpp)
@@ -248,20 +257,73 @@ if(QILIN_HOST)
     add_test(NAME qilin_frame_times_test COMMAND qilin_frame_times_test)
 endif()
 
-# ---- The game: built only from the player's own boot file ----
-# cmake -DQILIN_GAME_BOOT=<extracted disc>/files/1GUTH.BIN: qilin lift turns it
-# into C++ at build time (into the build tree, never the source tree), and
-# qilin_run is built from that with the runtime. It reads the rest of the game
-# from the player's disc dump at run time.
-set(QILIN_GAME_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GUTH.BIN, from qilin extract: builds qilin_run")
-option(QILIN_RUN_CHECKED "qilin_run checks every guest memory access (bring-up)" ON)
+# ---- The games: each built only from the player's own boot file ----
+# cmake -DQILIN_TOYCOMMANDER_BOOT=<extracted disc>/files/1GUTH.BIN and/or
+# -DQILIN_TOYRACER_BOOT=<extracted disc>/files/1TOYRACE.BIN (or the disc's
+# .cue): qilin lift turns each into C++ at build time (into the build tree,
+# never the source tree), and the game's program (toycommander, toyracer) is
+# linked from it and the rest, which is the library <game>_game: the game's
+# own code (<game>/src), the shared Dreamcast code (dreamcast/src) and the
+# runtime. That library is built whether or not a boot file is here, and
+# linked with an empty function table (<game>_link_check), so CI checks every
+# game's program with every compiler. It reads the rest of the game from the
+# player's disc dump at run time.
+set(QILIN_TOYCOMMANDER_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GUTH.BIN or the disc's .cue: builds toycommander")
+set(QILIN_TOYRACER_BOOT "" CACHE FILEPATH "Toy Racer (Europe, MK-5114950, V1.050) 1TOYRACE.BIN or the disc's .cue: builds toyracer")
+option(QILIN_RUN_CHECKED "the games check every guest memory access (bring-up; off for the player kit)" ON)
+option(QILIN_PLAYER_KIT "Build the player kits (tools/player-kit): each game's library as one archive, for the Windows downloads" OFF)
 set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp)
-if(QILIN_GAME_BOOT)
+set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
+                            dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
+                            dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp)
+set(QILIN_GAME_FILES main game boot natives heap gdrom_bios chain rtc threads)
+if(QILIN_HOST)
+    find_package(Threads REQUIRED)
+endif()
+# What the lifted code is compiled with, here and in the player kit's
+# kit.ninja: the same flags on both sides of the link.
+if(MSVC)
+    set(QILIN_LIFTED_OPTIONS /bigobj)
+else()
+    set(QILIN_LIFTED_OPTIONS -ffp-contract=off)
+endif()
+function(qilin_game game title boot version)
     if(NOT QILIN_HOST)
-        message(FATAL_ERROR "qilin_run needs the host layer: QILIN_HOST=ON")
+        if(boot)
+            message(FATAL_ERROR "${game} needs the host layer: QILIN_HOST=ON")
+        endif()
+        return()
+    endif()
+    set(own)
+    foreach(f IN LISTS QILIN_GAME_FILES)
+        list(APPEND own ${game}/src/${f}.cpp)
+    endforeach()
+    add_library(${game}_game STATIC ${own} ${QILIN_DREAMCAST_SOURCES} ${QILIN_RT_SOURCES})
+    target_include_directories(${game}_game PUBLIC ${game}/src dreamcast/src recomp/runtime)
+    target_link_libraries(${game}_game PUBLIC qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui SDL3::SDL3-static Threads::Threads
+                                       PRIVATE qilin_warnings)
+    target_compile_definitions(${game}_game PUBLIC QILIN_VERSION="${version}")
+    target_compile_options(${game}_game PUBLIC ${QILIN_LIFTED_OPTIONS})
+    if(QILIN_RUN_CHECKED)
+        target_compile_definitions(${game}_game PUBLIC QILIN_CHECKED_MEMORY)
+    endif()
+    if(MSVC)
+        target_link_options(${game}_game INTERFACE /STACK:16777216)  # lifted calls nest as deeply as the guest's
+    elseif(WIN32)
+        target_link_options(${game}_game INTERFACE -Wl,--stack,16777216)
+    endif()
+    # The program linked without the lifted code: the library is complete.
+    add_executable(${game}_link_check tools/player-kit/link_check.cpp)
+    target_link_libraries(${game}_link_check PRIVATE ${game}_game)
+
+    if(QILIN_PLAYER_KIT)
+        qilin_player_kit(${game})
+    endif()
+    if(NOT boot)
+        return()
     endif()
     set(QILIN_LIFT_FILES 24)
-    set(gen ${CMAKE_BINARY_DIR}/generated)
+    set(gen ${CMAKE_BINARY_DIR}/generated/${game})
     set(gen_sources ${gen}/table.cpp ${gen}/stubs.cpp)
     math(EXPR last "${QILIN_LIFT_FILES} - 1")
     foreach(i RANGE ${last})
@@ -275,32 +337,65 @@ if(QILIN_GAME_BOOT)
     endforeach()
     add_custom_command(
         OUTPUT ${gen}/functions.hpp ${gen_sources}
-        COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
-        DEPENDS qilin ${QILIN_GAME_BOOT}
-        COMMENT "Lifting the game's boot file to C++")
-    # The shared Dreamcast code (dreamcast/src: the hardware the port provides,
-    # the renderer, sound, the Maple bus, the window) and the game's own
-    # (toycommander/src: its start-up and the system software it replaces).
-    set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
-                                dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
-                                dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp)
-    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/game.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp
-                             toycommander/src/heap.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp
-                             toycommander/src/threads.cpp ${QILIN_DREAMCAST_SOURCES} ${QILIN_RT_SOURCES} ${gen_sources})
-    target_include_directories(qilin_run PRIVATE toycommander/src dreamcast/src recomp/runtime ${gen})
-    find_package(Threads REQUIRED)
-    target_link_libraries(qilin_run PRIVATE qilin_disc dreamcast_menu qilin_host qilin_imgui SDL3::SDL3-static qilin_warnings Threads::Threads)
-    target_compile_definitions(qilin_run PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
-    if(QILIN_RUN_CHECKED)
-        target_compile_definitions(qilin_run PRIVATE QILIN_CHECKED_MEMORY)
+        COMMAND qilin lift ${boot} --out ${gen} --files ${QILIN_LIFT_FILES}
+        DEPENDS qilin ${boot}
+        COMMENT "Lifting ${title}'s boot file to C++")
+    add_executable(${game} ${gen_sources})
+    target_include_directories(${game} PRIVATE ${gen})
+    target_link_libraries(${game} PRIVATE ${game}_game)
+endfunction()
+
+# ---- The player kits: the Windows downloads (tools/player-kit, as Punch-Out's) ----
+# Per game, everything but the lifted code in one archive (lib<game>_kit.a),
+# the runtime's headers, the recompiler, and kit.ninja (how the player's PC
+# compiles and links the code it lifts from its own disc). Cross-compiled on
+# Linux with llvm-mingw (tools/player-kit/package.sh).
+function(qilin_player_kit game)
+    if(NOT TARGET SDL3-static)
+        message(FATAL_ERROR "the player kit needs SDL3 built statically (QILIN_HOST=ON)")
     endif()
-    if(MSVC)
-        target_compile_options(qilin_run PRIVATE /bigobj)
-        target_link_options(qilin_run PRIVATE /STACK:16777216)  # lifted calls nest as deeply as the guest's
-    else()
-        target_compile_options(qilin_run PRIVATE -ffp-contract=off)
-    endif()
+    set(kit_libraries ${game}_game qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui qilin_volk SDL3-static)
+    set(kit_archive "${CMAKE_BINARY_DIR}/kit/${game}/lib${game}_kit.a")
+    set(mri "CREATE ${kit_archive}\n")
+    foreach(library IN LISTS kit_libraries)
+        string(APPEND mri "ADDLIB $<TARGET_FILE:${library}>\n")
+    endforeach()
+    string(APPEND mri "SAVE\nEND\n")
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/kit/${game}/kit.mri" CONTENT "${mri}")
+    add_custom_command(OUTPUT "${kit_archive}"
+        COMMAND "${CMAKE_COMMAND}" "-DAR=${CMAKE_AR}" "-DMRI=${CMAKE_BINARY_DIR}/kit/${game}/kit.mri" "-DOUT=${kit_archive}"
+                -P "${CMAKE_SOURCE_DIR}/tools/player-kit/merge.cmake"
+        DEPENDS ${kit_libraries} "${CMAKE_BINARY_DIR}/kit/${game}/kit.mri"
+        COMMENT "Merging ${game}'s player kit" VERBATIM)
+    add_custom_target(${game}_kit ALL DEPENDS "${kit_archive}")
+    # The system libraries SDL3 and the runtime need (MinGW names).
+    set(kit_system_libraries -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32
+        -lsetupapi -lshell32 -ldinput8 -lwinspool -lcomdlg32)
+    string(JOIN " " kit_system_text ${kit_system_libraries})
+    string(JOIN " " lifted_text ${QILIN_LIFTED_OPTIONS})
+    # Included by the build.ninja the player's play.ps1 writes ($kit is the kit's folder).
+    file(WRITE "${CMAKE_BINARY_DIR}/kit/${game}/kit.ninja"
+        "# Written by CMake for the player kit (QILIN_PLAYER_KIT).\n"
+        "cxxflags = -O2 -DNDEBUG -std=c++23 -w ${lifted_text} -I$kit/include\n"
+        "ldflags = -static -O2 -Wl,--stack,16777216\n"
+        "libs = $kit/lib/lib${game}_kit.a ${kit_system_text}\n")
+    # The kit's archive linked with stand-ins for the lifted code: it's complete.
+    add_executable(${game}_kit_link_check tools/player-kit/link_check.cpp)
+    target_include_directories(${game}_kit_link_check PRIVATE recomp/runtime)
+    target_link_libraries(${game}_kit_link_check PRIVATE "${kit_archive}" ${kit_system_libraries})
+    add_dependencies(${game}_kit_link_check ${game}_kit)
+    install(TARGETS qilin RUNTIME DESTINATION kit COMPONENT ${game})
+    install(FILES "${kit_archive}" DESTINATION kit/lib COMPONENT ${game})
+    install(FILES "${CMAKE_BINARY_DIR}/kit/${game}/kit.ninja" DESTINATION kit COMPONENT ${game})
+    file(GLOB kit_headers recomp/runtime/*.hpp)
+    install(FILES ${kit_headers} DESTINATION kit/include COMPONENT ${game})
+endfunction()
+
+if(QILIN_PLAYER_KIT AND QILIN_RUN_CHECKED)
+    message(FATAL_ERROR "the player kit is a release build: configure it with -DQILIN_RUN_CHECKED=OFF")
 endif()
+qilin_game(toycommander "Toy Commander" "${QILIN_TOYCOMMANDER_BOOT}" ${QILIN_TOYCOMMANDER_VERSION})
+qilin_game(toyracer "Toy Racer" "${QILIN_TOYRACER_BOOT}" ${QILIN_TOYRACER_VERSION})
 
 # ---- qilin_dcref: the FPU's approximate instructions against a Dreamcast emulator ----
 # A developer tool, not built by default and not in CI: it runs Flycast's

@@ -40,7 +40,7 @@ namespace rt = qilin::rt;
 
 int main(int argc, char** argv) {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: qilin_run <the game's .cue>\n");
+        std::fprintf(stderr, "usage: " QILIN_APP " <the game's .cue>\n");
         return 2;
     }
     auto disc = qilin::gdrom::Disc::open(argv[1]);

@@ -1,20 +1,20 @@
 # The runtime and the bring-up
 
-What runs the lifted program: guest memory, the registry of native replacements, the start-up, and the stops that say what to write next. The game executable is `qilin_run` during bring-up (`docs/naming.md`).
+What runs the lifted program: guest memory, the registry of native replacements, the start-up, and the stops that say what to write next. The game's program is `toycommander` (it was `qilin_run` during the early bring-up: `docs/naming.md`).
 
 ## Building and running
 The program is built only from the player's own boot file, as Punch-Out's is from its `main.dol`:
 
 ```sh
 build/qilin extract path/to/game.cue --out extracted        # outside the repo, or in an ignored folder
-cmake -S . -B build -DQILIN_GAME_BOOT=extracted/files/1GUTH.BIN
-cmake --build build --target qilin_run
-build/qilin_run path/to/game.cue
+cmake -S . -B build -DQILIN_TOYCOMMANDER_BOOT=extracted/files/1GUTH.BIN   # or the disc's .cue
+cmake --build build --target toycommander
+build/toycommander path/to/game.cue
 ```
 
-`qilin_run` opens a window (SDL3, Vulkan 1.3: the sister projects' host layer, `host/`) and shows each scene the game renders. Variables for the bring-up: `QILIN_HEADLESS=1` draws without a window (machines without a display, and the tests); `QILIN_SCALE=<n>` sets the host pixels per game pixel (default 2); `QILIN_SHOT=<folder>[,<every>]` writes every n-th picture (default 60) there as `frame_<number>.ppm` (pictures of the game: never commit them; `*.ppm` is ignored).
+`toycommander` opens a window (SDL3, Vulkan 1.3: the sister projects' host layer, `host/`) and shows each scene the game renders. Variables for the bring-up: `QILIN_HEADLESS=1` draws without a window (machines without a display, and the tests); `QILIN_SCALE=<n>` sets the host pixels per game pixel (default 2); `QILIN_SHOT=<folder>[,<every>]` writes every n-th picture (default 60) there as `frame_<number>.ppm` (pictures of the game: never commit them; `*.ppm` is ignored).
 
-At build time `qilin lift --files 24` writes the lifted C++ into the build tree (`build/generated`, never the source tree), and `qilin_run` is compiled from it. At run time `qilin_run` reads the boot file from the disc dump again, checks that its SHA-256 is the one the program was lifted from (`g_lifted_sha256` in the generated `table.cpp`), and boots it. While the port is being brought up it is built with checked memory (`QILIN_RUN_CHECKED`, on by default), so a stray access stops, naming the instruction.
+At build time `qilin lift --files 24` writes the lifted C++ into the build tree (`build/generated/toycommander`, never the source tree), and `toycommander` is linked from it and the library `toycommander_game` (everything else: the game's own code, `dreamcast/`, the runtime; the Windows download ships that library prebuilt, `tools/player-kit`). At run time `toycommander` reads the boot file from the disc dump again, checks that its SHA-256 is the one the program was lifted from (`g_lifted_sha256` in the generated `table.cpp`), and boots it. While the port is being brought up it is built with checked memory (`QILIN_RUN_CHECKED`, on by default), so a stray access stops, naming the instruction.
 
 ## The pieces (`recomp/runtime/`)
 - **`guest.hpp`:** the context, memory access and the helpers the lifted code calls, and `rt::replaced`.

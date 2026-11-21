@@ -2,34 +2,35 @@
 //
 //   qilin disc    <game.cue>                  the disc's bootstrap, tracks and files
 //   qilin extract <game.cue> --out <dir>      the disc's files and its bootstrap (IP.BIN), to a folder
-//   qilin info    <1GUTH.BIN> [--json out.json]
+//   qilin info    <boot file>   (any command taking a boot file also takes the disc's .cue) [--json out.json]
 //                                             SHA-256, supported build, load address
-//   qilin insns   <1GUTH.BIN> [-o out.txt]    every word of the boot file, decoded (a linear
+//   qilin insns   <boot file> [-o out.txt]    every word of the boot file, decoded (a linear
 //                                             sweep: data decodes too, until function discovery)
 //   qilin disasm  [--pc addr] [-o out.txt]    all 65,536 words decoded at one address
 //                                             (for the cross-check of the whole encoding space)
-//   qilin profile <1GUTH.BIN>                 instruction counts of the linear sweep
-//   qilin cfg     <1GUTH.BIN> [--json out.json]
+//   qilin profile <boot file>                 instruction counts of the linear sweep
+//   qilin cfg     <boot file> [--json out.json]
 //                                             function discovery and control flow, summary
-//   qilin coverage <1GUTH.BIN> [--list|--map] every byte: code, literal pool, jump table, padding
+//   qilin coverage <boot file> [--list|--map] every byte: code, literal pool, jump table, padding
 //                                             or unknown, per region of the build's layout (exit 3
 //                                             while a lifted region has unknown bytes);
 //                                             --map: every run with the function that claimed it
-//   qilin suspects <1GUTH.BIN>                functions with problems, for review
-//   qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]
+//   qilin suspects <boot file>                functions with problems, for review
+//   qilin fpmode   <boot file> [--list] [--json out.json]
 //                                             the FPSCR mode at every FPU instruction, per region;
 //                                             --list: every place it can't be proven;
 //                                             --json: every function's entry and exit modes
-//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--no-orphans] [--files N]
+//   qilin lift     <boot file> --out <dir> [--range lo-hi] [--no-orphans] [--files N]
 //                                             the lifted C++: functions.hpp, table.cpp, stubs.cpp,
 //                                             lifted_NNN.cpp (256 functions each), lift_report.txt
-//   qilin hwaccess <1GUTH.BIN> [--json out.json]
+//   qilin hwaccess <boot file> [--json out.json]
 //                                             loads, stores and cache operations at constant
 //                                             addresses outside cached RAM, per function
 //
 // Listings are one line per word: address, word, text ("8c010014 d005 mov.l 0x8c01002c,r0").
 // Exit status is non-zero on any error; nothing fails silently.
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -73,16 +74,16 @@ int usage() {
                "usage:\n"
                "  qilin disc    <game.cue>\n"
                "  qilin extract <game.cue> --out <dir>\n"
-               "  qilin info    <1GUTH.BIN> [--json out.json]\n"
-               "  qilin insns   <1GUTH.BIN> [-o out.txt]\n"
+               "  qilin info    <boot file> [--json out.json]\n"
+               "  qilin insns   <boot file> [-o out.txt]\n"
                "  qilin disasm  [--pc addr] [-o out.txt]\n"
-               "  qilin profile <1GUTH.BIN>\n"
-               "  qilin cfg     <1GUTH.BIN> [--json out.json]\n"
-               "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
-               "  qilin suspects <1GUTH.BIN>\n"
-               "  qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]\n"
-               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--no-orphans] [--files N]\n"
-               "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
+               "  qilin profile <boot file>\n"
+               "  qilin cfg     <boot file> [--json out.json]\n"
+               "  qilin coverage <boot file> [--list|--map]\n"
+               "  qilin suspects <boot file>\n"
+               "  qilin fpmode   <boot file> [--list] [--json out.json]\n"
+               "  qilin lift     <boot file> --out <dir> [--range lo-hi] [--no-orphans] [--files N]\n"
+               "  qilin hwaccess <boot file> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
 }
@@ -122,7 +123,27 @@ private:
     std::string path_;
 };
 
+// A boot file, or a disc's (a .cue): the file its bootstrap names.
 BootFile load_boot(const std::string& path) {
+    std::string ext = std::filesystem::path(path).extension().string();
+    for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (ext == ".cue") {
+        auto disc = gdrom::Disc::open(path);
+        if (!disc) throw Failure{disc.error()};
+        const auto ip = disc->bootstrap();
+        if (!ip) throw Failure{ip.error()};
+        const auto files = disc->files();
+        if (!files) throw Failure{files.error()};
+        for (const gdrom::File& f : *files)
+            if (f.path == ip->boot_file) {
+                const auto bytes = disc->read_file(f);
+                if (!bytes) throw Failure{bytes.error()};
+                auto boot = BootFile::parse(*bytes);
+                if (!boot) throw Failure{boot.error()};
+                return std::move(*boot);
+            }
+        throw Failure{std::format("{} has no {}, its boot file", path, ip->boot_file)};
+    }
     auto boot = BootFile::load(path);
     if (!boot) throw Failure{boot.error()};
     return std::move(*boot);

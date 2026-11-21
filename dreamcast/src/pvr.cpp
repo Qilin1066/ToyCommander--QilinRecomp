@@ -52,9 +52,7 @@ void vram_block(uint32_t a, const uint8_t* data, unsigned n);
 // renderer (video.cpp) draws the scene and the render ends at once: the
 // ISP's, the TSP's and the video's ends (normal events 1, 2 and 0) are raised.
 constexpr uint32_t kTaListInit = 0x005F8144u, kStartRender = 0x005F8014u;
-uint64_t g_renders = 0;
 void start_render() {
-    ++g_renders;
     video::render();
     raise_event(0), raise_event(1), raise_event(2);
 }
