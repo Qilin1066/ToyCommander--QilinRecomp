@@ -30,7 +30,7 @@ namespace rt = qilin::rt;
 
 namespace {
 
-constexpr VkFormat kColourFormat = VK_FORMAT_R8G8B8A8_UNORM, kDepthFormat = VK_FORMAT_D32_SFLOAT;
+constexpr VkFormat kColourFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 struct HostVertex {
     float x, y, z;
@@ -59,6 +59,13 @@ constexpr uint32_t v_size(uint32_t tsp) { return 8u << (tsp & 7u); }
 // Filter, clamp and flip: what a sampler is made from.
 constexpr uint32_t sampler_bits(uint32_t tsp) { return (tsp >> 13) & 0x3Fu; }
 
+// The stencil's use, for the cheap shadows of the opaque modifier volumes:
+// bit 1 says the polygon seen at a pixel takes shadows (its PCW's bit 7);
+// bit 0 is flipped by each face of one volume in front of it (odd: inside),
+// then moved into bit 2 (inside some volume) before the next volume; the
+// shadow darkens where bits 1 and 2 are set.
+enum class Stencil : uint8_t { off, mark_none, mark_shadow, volume, resolve, shade };
+
 struct Draw {
     uint32_t first = 0, count = 0;  // vertices
     uint32_t pipeline = 0;          // the pipeline's key
@@ -66,15 +73,19 @@ struct Draw {
     uint32_t flags = 0;
     uint32_t depth = 0;
     bool depth_write = false;
+    Stencil stencil = Stencil::off;
     bool same_state(const Draw& o) const {
-        return pipeline == o.pipeline && set == o.set && flags == o.flags && depth == o.depth && depth_write == o.depth_write;
+        return pipeline == o.pipeline && set == o.set && flags == o.flags && depth == o.depth && depth_write == o.depth_write &&
+               stencil == o.stencil;
     }
 };
 
-// A pipeline's key: bit 0 blending, 1-3 and 4-6 its factors, 7 punch-through.
+// A pipeline's key: bit 0 blending, 1-3 and 4-6 its factors, 7 punch-through,
+// 8 no colour written (the modifier volumes).
 constexpr uint32_t pipeline_key(bool blend, uint32_t src, uint32_t dst, bool punch) {
     return (blend ? 1u | src << 1 | dst << 4 : 0u) | (punch ? 0x80u : 0u);
 }
+constexpr uint32_t kVolumeKey = 0x100u;
 
 VkBlendFactor blend_factor(uint32_t f, bool source) {
     switch (f) {
@@ -114,6 +125,7 @@ void once(bool& said, const char* what) {
 struct Renderer::Impl {
     Gpu& gpu;
     uint32_t scale;
+    VkFormat depth_format = VK_FORMAT_D32_SFLOAT_S8_UINT;  // or D24 with S8, what the device has
     struct Target {
         Image colour;
         bool ready = false;  // drawn into at least once: its contents are kept
@@ -136,6 +148,7 @@ struct Renderer::Impl {
     uint64_t frame = 0;
     Stats stats{};
     bool said_modifiers = false, said_fog = false, said_two_volumes = false;
+    bool shadows = false;  // this scene has cheap shadows to draw
 
     // The frame being built.
     std::vector<HostVertex> vertices;
@@ -196,6 +209,11 @@ struct Renderer::Impl {
         frag = module(kPvrFrag, sizeof kPvrFrag);
         frag_punch = module(kPvrFragPunch, sizeof kPvrFragPunch);
 
+        // Depth with a stencil: one of these two every device has.
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(gpu.physical, VK_FORMAT_D32_SFLOAT_S8_UINT, &fp);
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
+
         // What untextured polygons sample (the shader has one sampler whatever it draws).
         white.image = Image::create(gpu, 1, 1, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     }
@@ -218,7 +236,7 @@ struct Renderer::Impl {
         if (!depth.image || depth.width < w || depth.height < h) {
             check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
             depth.destroy(gpu);
-            depth = Image::create(gpu, std::max(w, depth.width), std::max(h, depth.height), kDepthFormat,
+            depth = Image::create(gpu, std::max(w, depth.width), std::max(h, depth.height), depth_format,
                                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
         }
         return t;
@@ -273,15 +291,19 @@ struct Renderer::Impl {
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         cb.attachmentCount = 1;
         cb.pAttachments = &att;
+        if (key & kVolumeKey) att.colorWriteMask = 0;
         const VkDynamicState dynamic[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
-                                          VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};
+                                          VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP,
+                                          VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+                                          VK_DYNAMIC_STATE_STENCIL_REFERENCE};
         VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dy.dynamicStateCount = uint32_t(std::size(dynamic));
         dy.pDynamicStates = dynamic;
         VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         ri.colorAttachmentCount = 1;
         ri.pColorAttachmentFormats = &kColourFormat;
-        ri.depthAttachmentFormat = kDepthFormat;
+        ri.depthAttachmentFormat = depth_format;
+        ri.stencilAttachmentFormat = depth_format;
         VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
         ci.pNext = &ri;
         ci.stageCount = 2;
@@ -412,6 +434,7 @@ struct Renderer::Impl {
                   shading(tsp) << 4;
         d.depth = background ? 7u : depth_mode(s.isp);
         d.depth_write = !z_write_off(s.isp);
+        if (shadows && !translucent) d.stencil = (s.pcw & 0x80u) && !background ? Stencil::mark_shadow : Stencil::mark_none;
         d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[0]), sampler_bits(tsp)) : set_for(white, 0);
         d.first = uint32_t(vertices.size());
         const bool gouraud = s.pcw & 0x02u;
@@ -450,6 +473,65 @@ struct Renderer::Impl {
         else draws.push_back(d);
     }
 
+    // The opaque modifier volumes into the stencil, one volume at a time
+    // (a volume ends with the polygon whose ISP word has a volume
+    // instruction, bits 30-29), then the darkening where a surface that
+    // takes shadows is inside one: its colour times SHADOW_SCALE's low byte,
+    // in 256ths.
+    void add_shadows(const Source& src, const ta::Scene& scene) {
+        Draw faces;
+        faces.pipeline = kVolumeKey;
+        faces.set = set_for(white, 0);
+        faces.depth = 4;  // greater: a face nearer than the surface (z = 1/w)
+        faces.stencil = Stencil::volume;
+        float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;  // the volume's bounds on screen
+        bool any = false;
+        auto rectangle = [&](Draw d, float l, float t, float r, float b, float shade) {
+            d.first = uint32_t(vertices.size()), d.count = 6;
+            const float corners[6][2] = {{l, t}, {r, t}, {l, b}, {r, t}, {r, b}, {l, b}};
+            for (const auto& c : corners) {
+                HostVertex v{};
+                v.x = c[0], v.y = c[1], v.z = 1.0f;
+                v.base[0] = v.base[1] = v.base[2] = shade, v.base[3] = 1.0f;
+                vertices.push_back(v);
+            }
+            draws.push_back(d);
+        };
+        auto end_volume = [&] {
+            if (faces.count == 0) return;
+            draws.push_back(faces);
+            Draw resolve = faces;
+            resolve.depth = 7;  // always
+            resolve.stencil = Stencil::resolve;
+            rectangle(resolve, std::floor(x0), std::floor(y0), std::ceil(x1), std::ceil(y1), 1.0f);
+            faces.count = 0, any = true;
+            x0 = y0 = 1e30f, x1 = y1 = -1e30f;
+        };
+        for (const ta::Modifier& m : scene.modifiers) {
+            if (m.list != ta::kOpaqueModifier) continue;
+            for (uint32_t t = m.first; t < m.first + m.count; ++t) {
+                if (faces.count == 0) faces.first = uint32_t(vertices.size());
+                const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
+                for (int k = 0; k < 3; ++k) {
+                    HostVertex h{};
+                    h.x = f[3 * k], h.y = f[3 * k + 1], h.z = clean_z(f[3 * k + 2]);
+                    x0 = std::min(x0, h.x), y0 = std::min(y0, h.y), x1 = std::max(x1, h.x), y1 = std::max(y1, h.y);
+                    vertices.push_back(h);
+                }
+                faces.count += 3;
+            }
+            if (m.isp & 0x60000000u) end_volume();
+        }
+        end_volume();  // a list that ends without the instruction
+        if (!any) return;
+        Draw shade;
+        shade.pipeline = pipeline_key(true, 0, 2, false);  // zero, the colour drawn: the destination times it
+        shade.set = set_for(white, 0);
+        shade.depth = 7;
+        shade.stencil = Stencil::shade;
+        rectangle(shade, 0, 0, float(src.width), float(src.height), float(src.shadow_scale & 0xFFu) / 256.0f);
+    }
+
     // The translucent list in auto-sort mode (ISP_FEED_CFG's bit 0 clear):
     // the hardware sorts it by depth for each pixel, so a polygon farther
     // away is blended first. Here its triangles are drawn from the farthest
@@ -479,6 +561,32 @@ struct Renderer::Impl {
         draws = std::move(out);
     }
 
+    void set_stencil(Stencil s) {
+        const VkStencilFaceFlags both = VK_STENCIL_FACE_FRONT_AND_BACK;
+        vkCmdSetStencilTestEnable(cmd, s != Stencil::off);
+        if (s == Stencil::off) return;
+        switch (s) {
+        case Stencil::mark_none:
+        case Stencil::mark_shadow:  // what the visible surface is: bit 1 set or clear, bits 0 and 2 cleared
+            vkCmdSetStencilOp(cmd, both, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
+            vkCmdSetStencilWriteMask(cmd, both, 7), vkCmdSetStencilCompareMask(cmd, both, 0);
+            vkCmdSetStencilReference(cmd, both, s == Stencil::mark_shadow ? 2u : 0u);
+            break;
+        case Stencil::volume:  // each face in front flips bit 0
+            vkCmdSetStencilOp(cmd, both, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_INVERT, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
+            vkCmdSetStencilWriteMask(cmd, both, 1), vkCmdSetStencilCompareMask(cmd, both, 0), vkCmdSetStencilReference(cmd, both, 0);
+            break;
+        case Stencil::resolve:  // where bit 0 is set: set bit 2, clear bit 0
+            vkCmdSetStencilOp(cmd, both, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_NOT_EQUAL);
+            vkCmdSetStencilWriteMask(cmd, both, 5), vkCmdSetStencilCompareMask(cmd, both, 1), vkCmdSetStencilReference(cmd, both, 4);
+            break;
+        default:  // shade: where bits 1 and 2 are set
+            vkCmdSetStencilOp(cmd, both, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
+            vkCmdSetStencilWriteMask(cmd, both, 0), vkCmdSetStencilCompareMask(cmd, both, 6), vkCmdSetStencilReference(cmd, both, 6);
+            break;
+        }
+    }
+
     void grow(Buffer& b, VkDeviceSize need, VkBufferUsageFlags usage) {
         if (b.size >= need) return;
         b.destroy(gpu);
@@ -498,11 +606,23 @@ struct Renderer::Impl {
             queue_upload(white.image, &opaque_white, true);
         }
         const ta::Scene& scene = *src.scene;
-        if (!scene.modifiers.empty()) once(said_modifiers, "modifier volumes (shadows)");
+        // Cheap shadows (SHADOW_SCALE's bit 8): the opaque modifier volumes
+        // darken the polygons that take shadows inside them. Translucent
+        // modifier volumes and the two-volume mode aren't drawn yet.
+        bool opaque_volumes = false;
+        for (const ta::Modifier& m : scene.modifiers) {
+            if (m.list == ta::kOpaqueModifier) opaque_volumes = true;
+            else once(said_modifiers, "translucent modifier volumes");
+        }
+        shadows = opaque_volumes && (src.shadow_scale & 0x100u);
+        if (opaque_volumes && !shadows) once(said_modifiers, "modifier volumes in two-volume mode");
         if (src.background.count) add_strip(src, src.background, src.background_vertices, true);
         size_t translucent_draws = 0, translucent_vertices = 0;
         for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent}) {
-            if (list == ta::kTranslucent) translucent_draws = draws.size(), translucent_vertices = vertices.size();
+            if (list == ta::kTranslucent) {
+                if (shadows) add_shadows(src, scene);
+                translucent_draws = draws.size(), translucent_vertices = vertices.size();
+            }
             for (const ta::Strip& s : scene.strips)
                 if (s.list == list) add_strip(src, s, scene.vertices.data() + s.first, false);
         }
@@ -538,7 +658,8 @@ struct Renderer::Impl {
         }
         qilin::host::transition(cmd, colour.image, t.ready ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        qilin::host::transition(cmd, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        qilin::host::transition(cmd, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
         VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         ca.imageView = colour.view;
         ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -547,7 +668,7 @@ struct Renderer::Impl {
         ca.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
         VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         da.imageView = depth.view;
-        da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         da.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         da.clearValue.depthStencil = {0.0f, 0};  // the farthest: z = 1/w
@@ -561,6 +682,7 @@ struct Renderer::Impl {
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &ca;
         ri.pDepthAttachment = &da;
+        ri.pStencilAttachment = &da;
         vkCmdBeginRendering(cmd, &ri);
         // The game's pixels map onto the image one to `scale` (the image may be larger than this render's frame).
         const VkViewport viewport{0.0f, 0.0f, float(src.width * scale), float(src.height * scale), 0.0f, 1.0f};
@@ -582,6 +704,7 @@ struct Renderer::Impl {
             if (d.pipeline != bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(d.pipeline)), bound = d.pipeline;
             vkCmdSetDepthWriteEnable(cmd, d.depth_write);
             vkCmdSetDepthCompareOp(cmd, static_cast<VkCompareOp>(d.depth));  // the hardware's modes are Vulkan's, in order
+            set_stencil(d.stencil);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr);
             push.flags = d.flags;
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);

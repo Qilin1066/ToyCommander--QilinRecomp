@@ -312,7 +312,10 @@ Image Image::create(const Gpu& gpu, uint32_t width, uint32_t height, VkFormat fo
     vci.image = im.image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = format;
-    vci.subresourceRange = {is_depth(format) ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT) : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT), 0, levels, 0, 1};
+    const bool stencil = format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    vci.subresourceRange = {is_depth(format) ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT | (stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0))
+                                             : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
+                            0, levels, 0, 1};
     check(vkCreateImageView(gpu.device, &vci, nullptr, &im.view), "vkCreateImageView");
     return im;
 }

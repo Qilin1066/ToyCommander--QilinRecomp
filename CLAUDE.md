@@ -88,12 +88,13 @@ Before a milestone commit, all of these must hold: tests pass, warnings are clea
 
 ## Next steps, in order
 
-1. The bring-up: run `qilin_run`, read what it stops at (`docs/runtime.md`'s log), write the native replacement from what the guest code does, add it to `natives.cpp` and the log, repeat. Now the game plays into its first mission with a controller (`docs/runtime.md`, step 26; `QILIN_PRESS` drives it headless). Sound plays (step 27: the driver's commands done to the chip's registers as the driver does them, the chip's channels and CD audio mixed by guest time). The memory card works (step 28: port A's first slot, `memory_card_a1.bin` in the data folder, made formatted). The settings menu is there (step 29); ports B to D are the host's other pads (step 30). Next: the Jump Pack (rumble: read the vibration commands from the game's driver first, step 30), then what the renderer lacks (modifier volumes, fog, translucent sorting, mip-maps), checked against the console's pictures through Flycast as a black box.
+1. The bring-up: run `qilin_run`, read what it stops at (`docs/runtime.md`'s log), write the native replacement from what the guest code does, add it to `natives.cpp` and the log, repeat. Now the game plays into its first mission with a controller (`docs/runtime.md`, step 26; `QILIN_PRESS` drives it headless). Sound plays (step 27: the driver's commands done to the chip's registers as the driver does them, the chip's channels and CD audio mixed by guest time). The memory card works (step 28: port A's first slot, `memory_card_a1.bin` in the data folder, made formatted). The settings menu is there (step 29); ports B to D are the host's other pads (step 30). Cheap shadows are drawn (step 32: the opaque modifier volumes through the stencil). Next: the Jump Pack (rumble: read the vibration commands from the game's driver first, step 30), then what the renderer lacks (translucent modifier volumes, fog, mip-maps), checked against the console's pictures through Flycast as a black box.
 2. The window, input, sound and the settings menu follow the sister projects exactly (`docs/naming.md`, the menu section of `docs/roadmap-and-design-targets.md`; Punch-Out's `punchout/src/menu.cpp` is the model).
 
 ## Work in progress (two sessions push here)
 
 - Done: the settings menu (Toy Commander's session, 2026-11-21 18:40). Toy Racer's session: take `settings.*`/`menu.*` and `clock.cpp`'s pause from here rather than writing another; say in this list what you take on.
+- Done: cheap shadows in `renderer.cpp` (Toy Commander's session): the depth attachment now has a stencil, and `host/src/vulkan.cpp`'s `Image::create` gives such formats a depth-and-stencil view. Toy Racer's renderer can take both as they are.
 
 ## Conventions
 

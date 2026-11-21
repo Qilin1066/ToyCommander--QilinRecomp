@@ -44,6 +44,9 @@ struct Source {
     // ISP_FEED_CFG's bit 0: the translucent list drawn in the order sent
     // (presort); clear, the hardware sorts it by depth (auto-sort).
     bool presort = true;
+    // SHADOW_SCALE: bit 8 cheap shadows (the modifier volumes darken), bits
+    // 7-0 how much (256ths of the colour kept).
+    uint32_t shadow_scale = 0;
     const uint32_t* palette = nullptr;
     // Video memory as textures are addressed (pvr.hpp).
     void (*read)(uint32_t offset, uint8_t* out, uint32_t n) = nullptr;

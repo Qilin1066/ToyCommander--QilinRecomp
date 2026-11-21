@@ -76,7 +76,8 @@ struct Image {
     VkImageView view = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0, height = 0, levels = 1;
-    // Depth formats get a depth view; others a colour view of every level.
+    // Depth formats get a depth view (with the stencil, for a format that has
+    // one); others a colour view of every level.
     static Image create(const Gpu& gpu, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
                         uint32_t levels = 1);
     void destroy(const Gpu& gpu);
