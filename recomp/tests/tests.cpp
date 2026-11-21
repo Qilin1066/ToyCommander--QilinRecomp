@@ -717,6 +717,25 @@ void test_fpmode() {
         CHECK(callee.problems.empty() && modes.at(kB).problems.empty());
         CHECK(modes.at(kB).exit && sz(*modes.at(kB).exit) == 0);
     }
+    // A function called only from replaced code (the game's main, called by
+    // Shinobi's start-up) is analysed in the default mode, and so are its callees.
+    {
+        const BootFile boot = program({
+            0xB005,  // 00  replaced code: bsr 0x0E
+            0x0009,  // 02   nop
+            0x000B,  // 04  rts
+            0x0009,  // 06   nop
+            0x0009, 0x0009, 0x0009,
+            0xF21C,  // 0E  "main": fmov fr1,fr2
+            0x000B,  // 10  rts
+            0x0009,  // 12   nop
+        });
+        const Region regions[] = {{kB, kB + 0x0E, "replaced", Plan::replace}, {kB + 0x0E, kB + 0x14, "lifted", Plan::lift}};
+        const auto modes = fp_modes(boot, analyse(boot, regions), regions);
+        CHECK(modes.contains(kB + 0x0E) && !modes.contains(kB));
+        const FpModes& m = modes.at(kB + 0x0E);
+        CHECK(m.fpu == 1 && m.unproven == 0 && sz(m.at.at(kB + 0x0E)) == 0);
+    }
     // Paths that join in different modes: reported, and what follows is unproven.
     {
         const BootFile boot = program({0x8901, 0xF3FD, 0x0009, 0xF21C, 0x000B, 0x0009});

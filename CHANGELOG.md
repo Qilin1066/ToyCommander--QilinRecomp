@@ -4,6 +4,22 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.6.0] - 2026-11-21
+The lifter's FPU slice: every function of the game is lifted except the 66 that use `fmac`, `fsca` or `fsrra`.
+
+### Added
+- **Floating point in the lifter**, in the mode the FPSCR pass proves at each instruction:
+  - single and double precision arithmetic, comparisons, conversions and FPUL transfers;
+  - `fmov` with 32- and 64-bit transfers, including the back bank's XD registers;
+  - `fschg`, `frchg` (the two banks are arrays that swap), and FPSCR loads and stores.
+  
+  The current bank lives in host `float` locals. Denormals are flushed by the host itself, once `rt::host_fp_setup()` has set FTZ and DAZ on x86-64 or FZ on ARM64, as FPSCR.DN = 1 requires. Generated code is compiled without floating-point contraction. **2,708 functions are lifted** (was 1,832): 1,193 in the game, 1,515 in the middleware.
+- **Stops for what isn't pinned down:** `ftrc` out of range or of a NaN, and an FPSCR load that enables FPU exceptions. `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra` aren't lifted until a clean source gives their exact results (206 functions).
+- **End-to-end FPU tests:** single-precision arithmetic against exact bit patterns (1/3, √2, denormal operands and results) and 2,000 random operand sets; `ftrc` at its range's edges; 64-bit moves, XD pairs and bank changes, keeping the bits of a signalling NaN and a denormal; double precision over 1,000 random pairs. 121,469 checks in all.
+
+### Fixed
+- **The FPSCR pass skipped functions called only from replaced code.** The game's `main`, which only Shinobi's start-up calls, counted as called, so it was never entered in the default mode, and nor was anything reached only through it. They are analysed now: the game has 14,669 FPU instructions (v0.4.0 reported 14,432) and the middleware 21,290 (21,143), all proven.
+
 ## [0.5.0] - 2026-11-21
 The lifter's first slice: integer code, lifted to C++ and tested end to end under every CI compiler.
 

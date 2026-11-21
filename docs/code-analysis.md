@@ -89,12 +89,12 @@ Since v0.4.0 the CFG tracks PR, and 18 of what were indirect jumps are returns (
 Other findings that bear on the lifter: two functions with a call whose target register differs between paths (`0x8C075B54`, `0x8C075ED0`) and two in Shinobi (`0x8C0B08D8`, `0x8C0B80FE`), left as indirect calls; two hand-written copy routines that branch into a delay slot (`0x8C04EDF4`, `0x8C04EEE0`), which will be replaced natively, not lifted.
 
 ## The FPU's modes (v0.4.0)
-`qilin fpmode` works out FPSCR's mode bits at every FPU instruction (`recompiler-core.md`). On the supported build:
+`qilin fpmode` works out FPSCR's mode bits at every FPU instruction (`recompiler-core.md`). On the supported build (counts as of v0.6.0, which also analyses the functions reached only from Shinobi's start-up, such as `main`; v0.4.0 missed them):
 
 | Region | Functions with FPU code | FPU instructions | Unproven | Double precision | 64-bit transfers | In bank 1 |
 |---|---|---|---|---|---|---|
-| game | 542 | 14,432 | **0** | 0 | 0 | 0 |
-| middleware | 689 | 21,143 | **0** | 36 | 214 | 209 |
+| game | 547 | 14,669 | **0** | 0 | 0 | 0 |
+| middleware | 700 | 21,290 | **0** | 36 | 214 | 209 |
 
 The conventions it found:
 - **The default mode is `0x00040000`:** round to nearest, **denormals flushed to zero (DN = 1)**, single precision, 32-bit transfers, bank 0. Shinobi's start-up loads it (`mov #4,r0 ; shll16 r0 ; lds r0,fpscr`), and so does its exception handler. The lifted code must flush denormals to zero like the hardware does, in every arithmetic operation.

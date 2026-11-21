@@ -6,8 +6,15 @@
 // slots, conditional and unconditional branches, calls (direct, through a
 // literal-pool address, by loaded PR), returns (rts, and jmp through the saved
 // return address), tail calls, SHC's switch tables and indirect calls and
-// jumps through the generated function table. Floating point is slice 3: a
-// function that uses it isn't lifted yet, and the reason is reported.
+// jumps through the generated function table.
+//
+// Slice 3 covers the FPU, in the mode fpmode proves at each instruction:
+// single and double precision, 32- and 64-bit fmov (with the back bank's XD
+// registers), FPUL and FPSCR transfers, fschg, frchg (the banks are two
+// arrays that swap). Denormals are flushed by the host, which the runtime
+// sets up to do so (rt::host_fp_setup), so only code proven to run with
+// FPSCR.DN = 1 and round to nearest is lifted. fmac, fipr, ftrv, fsca and
+// fsrra aren't lifted until a clean source gives their exact results.
 // Privileged instructions are never lifted (they belong to replaced code).
 //
 // Generated code holds the guest registers it uses in host locals and writes
@@ -28,6 +35,7 @@
 
 #include "bootfile.hpp"
 #include "cfg.hpp"
+#include "fpmode.hpp"
 
 namespace qilin {
 
@@ -42,12 +50,14 @@ struct LiftResult {
 
 class Lifter {
 public:
-    Lifter(const BootFile& boot, const Cfg& cfg) : boot_(boot), cfg_(cfg) {}
+    // `modes`: fp_modes()'s result, the FPSCR mode at every FPU instruction.
+    Lifter(const BootFile& boot, const Cfg& cfg, const std::map<uint32_t, FpModes>& modes) : boot_(boot), cfg_(cfg), modes_(modes) {}
     LiftResult lift(const Function& f) const;
 
 private:
     const BootFile& boot_;
     const Cfg& cfg_;
+    const std::map<uint32_t, FpModes>& modes_;
 };
 
 }  // namespace qilin

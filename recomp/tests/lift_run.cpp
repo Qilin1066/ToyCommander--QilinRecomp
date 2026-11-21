@@ -4,7 +4,10 @@
 // from the instructions' definitions in Hitachi's SH-4 manual. Built with
 // QILIN_CHECKED_MEMORY, so a stray access stops instead of corrupting.
 // No game data.
+#include <bit>
 #include <cinttypes>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -236,6 +239,137 @@ void test_memory() {
     }
 }
 
+uint32_t u32(std::mt19937& rng) { return static_cast<uint32_t>(rng()); }
+uint32_t fbits(float f) { return std::bit_cast<uint32_t>(f); }
+float ffrom(uint32_t v) { return std::bit_cast<float>(v); }
+// What a word of the scratch block holds.
+uint32_t word_at(uint32_t a) {
+    uint32_t v;
+    std::memcpy(&v, g_host.data() + (a - kHostLo), 4);
+    return v;
+}
+void put_word(uint32_t a, uint32_t v) { std::memcpy(g_host.data() + (a - kHostLo), &v, 4); }
+
+// Single precision, with exact expected bits where the host mustn't decide
+// (denormals flushed, as FPSCR.DN = 1; IEEE rounding), and against the
+// host's own arithmetic for random operands (the lifter's operand order,
+// registers and results).
+void test_farith(std::mt19937& rng) {
+    const uint32_t in = g_p.data + 8, out = g_p.data + 24;
+    struct Case {
+        uint32_t a, b, c;
+    };
+    std::vector<Case> cases = {
+        {fbits(1.0f), fbits(3.0f), fbits(2.0f)},
+        {0x000116C2u /* a denormal, 1e-40 */, 0, 0x00000001u},
+        {0x0DA24260u /* 1e-30 */, 0x2EDBE6FFu /* 1e-10 */, fbits(-1.0f)},
+        {0x80000001u, fbits(0.0f), fbits(4.0f)},
+        {fbits(2.0f), fbits(2.0f), fbits(0.0f)},
+    };
+    for (int k = 0; k < 2000; ++k) cases.push_back({u32(rng), u32(rng), u32(rng) & 0x7FFFFFFFu});
+    const auto run_one = [&](const Case& x, uint32_t res[8], uint32_t& gt, uint32_t& eqf) {
+        reset_memory();
+        put_word(in, x.a), put_word(in + 4, x.b), put_word(in + 8, x.c);
+        Context c = fresh();
+        c.r[4] = in, c.r[5] = out;
+        if (!run(c, "farith")) return false;
+        for (unsigned k = 0; k < 8; ++k) res[k] = word_at(out + 4 * k);
+        gt = c.r[1], eqf = c.r[2];
+        eq("farith: r4 advanced", c.r[4], in + 12);
+        return true;
+    };
+    for (size_t k = 0; k < cases.size(); ++k) {
+        uint32_t r[8], gt, eqf;
+        if (!run_one(cases[k], r, gt, eqf)) continue;
+        // A NaN's bits are the host's (the SH-4's differ): compare NaNs as a class.
+        const auto same = [&](const char* what, uint32_t got, float want) {
+            const bool nan = std::isnan(ffrom(got)) && std::isnan(want);
+            expect(nan || got == fbits(want), what, got, fbits(want));
+        };
+        const float a = ffrom(cases[k].a), b = ffrom(cases[k].b), cc = ffrom(cases[k].c);
+        same("fadd", r[0], a + b), same("fsub", r[1], a - b), same("fmul", r[2], a * b), same("fdiv", r[3], a / b);
+        same("fsqrt", r[4], std::sqrt(cc));
+        eq("fneg", r[5], cases[k].a ^ 0x80000000u), eq("fabs", r[6], cases[k].b & 0x7FFFFFFFu);
+        same("fldi1, fadd", r[7], 1.0f + a);
+        eq("fcmp/gt", gt, a > b), eq("fcmp/eq", eqf, a == b);
+        if (k == 0) {  // exact values
+            eq("1/3", r[3], 0x3EAAAAABu), eq("sqrt 2", r[4], 0x3FB504F3u), eq("1-3", r[1], fbits(-2.0f));
+        } else if (k == 1) {  // a denormal operand is zero; so is a denormal result
+            eq("denormal + 0", r[0], 0), eq("denormal * 0", r[2], 0), eq("sqrt denormal", r[4], 0);
+            eq("fcmp/eq denormal 0", eqf, 1), eq("fcmp/gt denormal 0", gt, 0);
+            eq("fneg keeps the bits", r[5], 0x800116C2u);
+        } else if (k == 2) {
+            eq("1e-30 * 1e-10 flushed", r[2], 0);
+        } else if (k == 3) {
+            eq("-denormal + 0", r[0], 0), eq("fcmp/eq -denormal 0", eqf, 1);
+        } else if (k == 4) {
+            eq("2 == 2", eqf, 1), eq("2 > 2", gt, 0), eq("2 - 2", r[1], 0);
+        }
+    }
+}
+
+void test_ftrc() {
+    for (const float v : {0.0f, 1.5f, -1.5f, 2147483520.0f, -2147483648.0f, 123456.75f, -0.99f}) {
+        Context c = fresh();
+        c.r[4] = fbits(v);
+        if (!run(c, "ftrc")) continue;
+        eq("ftrc", c.r[0], static_cast<uint32_t>(static_cast<int32_t>(v)));
+        eq("float", c.r[1], fbits(static_cast<float>(static_cast<int32_t>(v))));
+    }
+    const uint32_t ftrc_pc = g_p.entry.at("ftrc") + 4;
+    for (const float v : {2147483648.0f, -2147483904.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+        Context c = fresh();
+        c.r[4] = fbits(v);
+        try {
+            qilin::rt::call(c, g_p.entry.at("ftrc"), 0);
+            ++g_failures, std::printf("FAIL ftrc out of range returned\n");
+        } catch (const Stop& st) {
+            eq("ftrc out of range", st.kind, Stop::Unsupported), eq("ftrc stop pc", st.pc, ftrc_pc);
+        }
+    }
+}
+
+void test_fpair() {
+    const uint32_t in = g_p.data + 8, out = g_p.data + 24;
+    // Patterns that aren't numbers: a moved word keeps its bits.
+    const uint32_t w[4] = {0x7F800001u /* a signalling NaN */, 0x00000001u /* a denormal */, 0xFFC12345u, 0x3F800000u};
+    reset_memory();
+    for (unsigned k = 0; k < 4; ++k) put_word(in + 4 * k, w[k]);
+    Context c = fresh();
+    c.r[4] = in, c.r[5] = out;
+    c.xf[2] = c.xf[7] = 123.0f;  // the back bank's other registers are left alone
+    if (!run(c, "fpair")) return;
+    const uint32_t want[7] = {w[2], w[3], w[0], w[1], w[2], w[1], w[0]};
+    for (unsigned k = 0; k < 7; ++k) eq("fpair", word_at(out + 4 * k), want[k]);
+    eq("fmov @r4+ (64-bit) advances by 8", c.r[4], in + 16);
+    eq("FPSCR in the back bank", c.r[1], 0x00240000u), eq("FPSCR after", c.r[2], 0x00040000u), eq("c.fpscr", c.fpscr, 0x00040000u);
+    eq("fr0", fbits(c.fr[0]), w[0]), eq("fr1", fbits(c.fr[1]), w[1]), eq("fr6", fbits(c.fr[6]), w[2]), eq("fr7", fbits(c.fr[7]), w[3]);
+    eq("xf2", fbits(c.xf[2]), w[2]), eq("xf3", fbits(c.xf[3]), w[3]), eq("xf4", fbits(c.xf[4]), w[0]), eq("xf5", fbits(c.xf[5]), w[1]);
+    eq("xf7 untouched", fbits(c.xf[7]), fbits(123.0f));
+}
+
+void test_fdouble(std::mt19937& rng) {
+    std::vector<std::pair<float, float>> cases = {{1.0f, 3.0f}, {2.0f, 2.0f}, {-5.5f, 0.25f}, {1e30f, 1e-30f}};
+    for (int k = 0; k < 1000; ++k) cases.emplace_back(ffrom(u32(rng) & 0xBFFFFFFFu), ffrom((u32(rng) & 0xBFFFFFFFu) | 0x00800000u));
+    for (const auto& [a, b] : cases) {
+        Context c = fresh();
+        c.r[4] = fbits(a), c.r[5] = fbits(b);
+        if (!run(c, "fdouble")) continue;
+        const double da = a, db = b;
+        eq("dadd", c.r[0], fbits(static_cast<float>(da + db)));
+        eq("dmul", c.r[1], fbits(static_cast<float>(da * db)));
+        eq("ddiv", c.r[2], fbits(static_cast<float>(da / db)));
+        eq("dcmp/gt", c.r[3], da > db);
+        const uint64_t q = std::bit_cast<uint64_t>(da / db);
+        eq("dr4: the high half in fr4", c.r[6], static_cast<uint32_t>(q >> 32)), eq("dr4: the low half in fr5", c.r[7], static_cast<uint32_t>(q));
+        eq("FPSCR restored", c.fpscr, 0x00040000u);
+    }
+    // 1/3 in double, exactly.
+    Context c = fresh();
+    c.r[4] = fbits(1.0f), c.r[5] = fbits(3.0f);
+    if (run(c, "fdouble")) eq("1/3 (double)", uint64_t(c.r[6]) << 32 | c.r[7], 0x3FD5555555555555ull);
+}
+
 // The runtime helpers on their own, at the edges.
 void test_helpers() {
     using namespace qilin::rt;
@@ -252,6 +386,18 @@ void test_helpers() {
             eq("shad", shad(x, s), ref_shad(x, s)), eq("shld", shld(x, s), ref_shld(x, s));
     eq("cmp/str", cmpstr(0x11223344u, 0x55663377u), 1);
     eq("cmp/str none", cmpstr(0x11223344u, 0x55667788u), 0);
+    // set_fpscr: a change of FR swaps the banks; exception enables stop.
+    Context c;
+    c.fr[0] = 1.0f, c.xf[0] = 2.0f;
+    set_fpscr(c, 0x00240000u, 0), eq("set_fpscr FR", fbits(c.fr[0]), fbits(2.0f)), eq("set_fpscr value", c.fpscr, 0x00240000u);
+    set_fpscr(c, 0x00340000u, 0), eq("set_fpscr same FR", fbits(c.fr[0]), fbits(2.0f));
+    try {
+        set_fpscr(c, 0x00040200u, 0x42);
+        ++g_failures, std::printf("FAIL set_fpscr with an enable returned\n");
+    } catch (const Stop& s) {
+        eq("set_fpscr enable", s.kind, Stop::Unsupported), eq("set_fpscr enable pc", s.pc, 0x42);
+    }
+    eq("dbl", std::bit_cast<uint64_t>(dbl(ffrom(0x3FF00000u), ffrom(1))), 0x3FF0000000000001ull);
 }
 
 }  // namespace
@@ -263,6 +409,7 @@ int main() {
     qilin::rt::g_regions[0] = {kStackTop - kStackSize, T::kBase + static_cast<uint32_t>(g_p.image.size() * 2)};
     qilin::rt::g_region_count = 1;
     reset_memory();
+    qilin::rt::host_fp_setup();
     std::mt19937 rng(20261121);
     test_helpers();
     test_arith(rng);
@@ -272,6 +419,10 @@ int main() {
     test_control();
     test_stops();
     test_memory();
+    test_farith(rng);
+    test_ftrc();
+    test_fpair();
+    test_fdouble(rng);
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

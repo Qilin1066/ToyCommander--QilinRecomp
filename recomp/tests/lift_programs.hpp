@@ -139,6 +139,10 @@ inline Programs build() {
     a.b12(0xB000, "badjump"), a.word(kNop);
     a.b12(0xB000, "fpu"), a.word(kNop);
     a.b12(0xB000, "memory"), a.word(kNop);
+    a.b12(0xB000, "farith"), a.word(kNop);
+    a.b12(0xB000, "ftrc"), a.word(kNop);
+    a.b12(0xB000, "fpair"), a.word(kNop);
+    a.b12(0xB000, "fdouble"), a.word(kNop);
     a.word(kRts), a.word(kNop);
 
     // add64: (r5:r4) + (r7:r6) -> (r1:r0)
@@ -241,9 +245,9 @@ inline Programs build() {
     a.movl(1, kBase + 0x4000);
     a.word(n_(0x400B, 1)), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(kNop);
     a.pool();
-    // fpu: floating point is a later slice: not lifted
+    // fpu: fmac, whose exact result no clean source here gives: not lifted
     a.label("fpu");
-    a.word(nm(0xF000, 1, 2)), a.word(kRts), a.word(kNop);
+    a.word(nm(0xF00E, 1, 2)), a.word(kRts), a.word(kNop);
     // memory: r4 = a scratch address, r5 a value: stores and loads of every
     // size, sign extension, pre-decrement and post-increment, GBR forms,
     // mac.w, tas.b
@@ -261,6 +265,60 @@ inline Programs build() {
     a.word(nm(0x400F, 8, 9)), a.word(n_(0x001A, 10));                               // mac.w @r9+,@r8+ ; r10 = macl
     a.word(imm(0x7000, 4, 32)), a.word(n_(0x401B, 4)), a.word(n_(0x0029, 11));     // r4 += 32 ; tas.b @r4 ; r11 = T
     a.word(kRts), a.word(kNop);
+    // farith: r4 -> three floats a, b, c; r5 -> eight results:
+    // a+b, a-b, a*b, a/b, sqrt(c), -a, |b|, 1+a; r1 = a > b, r2 = a == b
+    a.label("farith");
+    a.word(nm(0xF009, 0, 4)), a.word(nm(0xF009, 1, 4)), a.word(nm(0xF009, 2, 4));  // fmov.s @r4+,fr0..fr2
+    a.word(nm(0xF00C, 4, 0)), a.word(nm(0xF000, 4, 1));                            // fr4 = a ; fadd fr1,fr4
+    a.word(nm(0xF00C, 5, 0)), a.word(nm(0xF001, 5, 1));                            // fsub fr1,fr5
+    a.word(nm(0xF00C, 6, 0)), a.word(nm(0xF002, 6, 1));                            // fmul fr1,fr6
+    a.word(nm(0xF00C, 7, 0)), a.word(nm(0xF003, 7, 1));                            // fdiv fr1,fr7
+    a.word(nm(0xF00C, 8, 2)), a.word(n_(0xF06D, 8));                               // fsqrt fr8
+    a.word(nm(0xF00C, 9, 0)), a.word(n_(0xF04D, 9));                               // fneg fr9
+    a.word(nm(0xF00C, 10, 1)), a.word(n_(0xF05D, 10));                             // fabs fr10
+    a.word(n_(0xF09D, 11)), a.word(nm(0xF000, 11, 0));                             // fldi1 fr11 ; fadd fr0,fr11
+    a.word(nm(0xF005, 0, 1)), a.word(n_(0x0029, 1));                               // fcmp/gt fr1,fr0 ; movt r1
+    a.word(nm(0xF004, 0, 1)), a.word(n_(0x0029, 2));                               // fcmp/eq fr1,fr0 ; movt r2
+    a.word(imm(0xE000, 0, 0));
+    for (unsigned k = 4; k < 12; ++k) a.word(nm(0xF007, 5, k)), a.word(imm(0x7000, 0, 4));  // fmov.s frk,@(r0,r5) ; add #4,r0
+    a.word(kRts), a.word(kNop);
+    // ftrc: r4 = a float's bits -> r0 = ftrc, r1 = the bits of float(r0)
+    a.label("ftrc");
+    a.word(n_(0x405A, 4)), a.word(n_(0xF00D, 0));  // lds r4,fpul ; fsts fpul,fr0
+    a.word(n_(0xF03D, 0)), a.word(n_(0x005A, 0));  // ftrc fr0,fpul ; sts fpul,r0
+    a.word(n_(0xF02D, 1)), a.word(n_(0xF01D, 1));  // float fpul,fr1 ; flds fr1,fpul
+    a.word(n_(0x005A, 1)), a.word(kRts), a.word(kNop);
+    // fpair: r4 -> four words in; r5 -> seven words out; 64-bit moves, XD, frchg.
+    // r1 = FPSCR in the other bank, r2 = FPSCR at the end.
+    a.label("fpair");
+    a.word(0xF3FD);                                // fschg: 64-bit moves
+    a.word(nm(0xF009, 0, 4)), a.word(nm(0xF009, 3, 4));  // fmov @r4+,dr0 ; fmov @r4+,xd2
+    a.word(nm(0xF00C, 5, 0)), a.word(nm(0xF00C, 6, 3));  // fmov dr0,xd4 ; fmov xd2,dr6
+    a.word(nm(0xF00A, 5, 6));                      // fmov dr6,@r5      -> out[0..1] = in[2..3]
+    a.word(nm(0x6003, 6, 5)), a.word(imm(0x7000, 6, 16));
+    a.word(nm(0xF00B, 6, 5));                      // fmov xd4,@-r6     -> out[2..3] = in[0..1]
+    a.word(0xF3FD), a.word(0xFBFD);                // fschg ; frchg: the back bank is current
+    a.word(imm(0xE000, 0, 16)), a.word(nm(0xF007, 5, 2));  // fmov.s fr2,@(r0,r5) -> out[4] = in[2]
+    a.word(imm(0xE000, 0, 20)), a.word(nm(0xF007, 5, 5));  // fmov.s fr5,@(r0,r5) -> out[5] = in[1]
+    a.word(n_(0x006A, 1)), a.word(0xFBFD);         // sts fpscr,r1 ; frchg
+    a.word(imm(0xE000, 0, 24)), a.word(nm(0xF007, 5, 0));  // fmov.s fr0,@(r0,r5) -> out[6] = in[0]
+    a.word(n_(0x006A, 2)), a.word(kRts), a.word(kNop);
+    // fdouble: r4, r5 = floats a, b; in double precision: r0 = (float)(a+b),
+    // r1 = (float)(a*b), r2 = (float)(a/b), r3 = a > b, r6:r7 = a/b's bits
+    a.label("fdouble");
+    a.movl(8, 0x000C0000u), a.word(n_(0x406A, 8));                  // lds r8,fpscr: PR = 1
+    a.word(n_(0x405A, 4)), a.word(n_(0xF0AD, 0));                   // lds r4,fpul ; fcnvsd fpul,dr0
+    a.word(n_(0x405A, 5)), a.word(n_(0xF0AD, 2));                   // fcnvsd fpul,dr2
+    const auto copy0to4 = [&] { a.word(nm(0xF00C, 4, 0)), a.word(nm(0xF00C, 5, 1)); };
+    copy0to4(), a.word(nm(0xF000, 4, 2)), a.word(n_(0xF0BD, 4)), a.word(n_(0x005A, 0));  // fadd dr2,dr4 ; fcnvds dr4,fpul ; sts fpul,r0
+    copy0to4(), a.word(nm(0xF002, 4, 2)), a.word(n_(0xF0BD, 4)), a.word(n_(0x005A, 1));  // fmul
+    copy0to4(), a.word(nm(0xF003, 4, 2)), a.word(n_(0xF0BD, 4)), a.word(n_(0x005A, 2));  // fdiv
+    a.word(nm(0xF005, 0, 2)), a.word(n_(0x0029, 3));                // fcmp/gt dr2,dr0 ; movt r3
+    a.word(n_(0xF01D, 4)), a.word(n_(0x005A, 6));                   // flds fr4,fpul ; sts fpul,r6
+    a.word(n_(0xF01D, 5)), a.word(n_(0x005A, 7));
+    a.movl(8, 0x00040000u), a.word(n_(0x406A, 8));                  // back to the default mode
+    a.word(kRts), a.word(kNop);
+    a.pool();
     // data: the indirect-call table (inc, dbl), then scratch
     a.align4();
     a.label("data");
@@ -269,7 +327,7 @@ inline Programs build() {
     p.image = a.finish();
     p.data = a.at("data");
     for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "badjump",
-                             "fpu", "memory", "inc", "dbl", "tail"})
+                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "inc", "dbl", "tail"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.
     const size_t t = (a.at("sw_table") - kBase) / 2;

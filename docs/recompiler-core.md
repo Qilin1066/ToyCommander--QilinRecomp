@@ -132,7 +132,7 @@ What an FPU instruction does depends on FPSCR: PR (single or double precision), 
 4. What was still lost came from two control-flow errors in hand-written code: the call made by loading PR and the return through a saved PR, and a return address kept in a scratch register across a helper. Fixed in the CFG (above).
 5. What then remained was real: the engine runs in bank 1 after some matrix calls, and paths rejoin there in different banks. That is why FR is handled by swapping banks rather than by knowing it.
 
-Results are in `code-analysis.md`: every FPU instruction of the game (14,432) and of the middleware (21,143) is proven, with 1 entry-dependent.
+Results are in `code-analysis.md`: every FPU instruction of the game (14,669) and of the middleware (21,290) is proven, with 1 entry-dependent. (v0.4.0 counted 14,432 and 21,143: a function called only from replaced code, such as the game's `main`, which only Shinobi's start-up calls, wasn't analysed, and nor was anything reached only through it. Since v0.6.0 calls from replaced code don't count, so such functions start in the default mode.)
 
 ## Hardware-access profile (`hwaccess.*`, v0.3.0)
 `qilin hwaccess` lists, per function, every load, store and cache operation whose address is a constant outside cached RAM, with the hardware block it reaches (`hw_region`: the SH-4's own registers in P4, then the Dreamcast's area 0 registers, sound chip, video memory, tile accelerator and RAM views, from the SH7750 hardware manual's and the Dreamcast's memory maps). Addresses come from the CFG's register constants (`register_constants`, the same dataflow). Accesses through pointers loaded from memory, or relative to GBR, aren't seen. Results are in `code-analysis.md`: 76 functions, none of them in the game.
@@ -173,11 +173,49 @@ The output compiles without a warning under Clang with `-Wall -Wextra -Wpedantic
 
 At build time `qilin_liftgen` lifts the image with the real analysis and lifter. `qilin_lift_tests` compiles the result with the compiler under test, so CI checks generated code under GCC 14, Clang 19, Apple Clang and MSVC with warnings as errors. It then runs it with checked memory against results computed from the instructions' definitions: 86,286 checks, including thousands of random operands for the divisions, shifts and multiplies, and the stops (a bad jump, a function not lifted, an access outside the mapped regions). Breaking `div1`'s Q update, or one case of a generated switch, makes them fail.
 
+## The lifter's FPU slice (v0.6.0)
+Floating point is lifted in the mode `fpmode` proves at each instruction. An instruction whose mode isn't proven, or that would round towards zero or run with denormals kept (DN = 0), stops the lift of its function with the reason; none of the game's or the middleware's does.
+
+**Registers.** The current bank's fr0–fr15 live in host `float` locals, declared only for the registers used, and are stored to and reloaded from the context around calls, returns and bank changes. The back bank stays in the context (`c.xf`). A double register DRn is the pair FRn (the high half) and FRn+1. Copies keep a float's bits on every 64-bit host (SSE and NEON moves don't touch them), so `fmov` moves words that aren't numbers, such as signalling NaNs and denormals, unchanged; the end-to-end tests check that on every CI compiler.
+
+**What is lifted:**
+- `fadd`, `fsub`, `fmul`, `fdiv`, `fsqrt`, `fcmp/eq`, `fcmp/gt`, `float` and `ftrc` in single and double precision; `fabs` and `fneg` as operations on the sign bit; `fldi0`, `fldi1`; `fcnvsd`, `fcnvds`; `flds`, `fsts` and every FPUL transfer.
+- `fmov` with 32-bit transfers, and with 64-bit transfers (SZ = 1) between pairs, including the back bank's XD registers. A 64-bit transfer to or from memory moves FRn at the lower address and FRn+1 at the higher one.
+- `fschg`; `frchg`, which stores the bank's locals, swaps the two bank arrays and reloads; `lds` and `lds.l` to FPSCR, which swap the banks when FR changes; `sts` and `sts.l` of FPSCR.
+
+**Denormals and rounding.** The SH-4 with DN = 1 treats a denormal operand as zero and flushes a denormal result to zero. The host does the same once `rt::host_fp_setup()` has set its mode: FTZ and DAZ on x86-64, FZ on ARM64, round to nearest on both. The runtime calls it on every thread that runs lifted code. Generated code is compiled with `-ffp-contract=off` (MSVC doesn't contract by default), so no multiply and add are fused into one rounding. With those, single and double arithmetic is IEEE 754's, which is the SH-4's for these operations.
+
+**What stops:**
+- `ftrc` of a value outside the 32-bit integer range, or of a NaN;
+- an `lds` to FPSCR that sets an exception enable (the port doesn't model FPU traps).
+
+**What isn't modelled:**
+- the bit patterns of NaNs that arithmetic produces (the host's; the tests compare NaNs as a class);
+- FPSCR's cause and flag bits, which read as 0. Nothing in the game reads them that the analysis has seen; the differential test is to confirm it.
+
+**Not lifted yet:** `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra`, until a clean source gives their exact results (CLAUDE.md). `fmac` is whether one rounding or two; `fsca` and `fsrra` are table or approximation results, as are `fipr` and `ftrv`'s. Measurements on a Dreamcast would settle them.
+
+**Results on the supported build.** **2,708 functions are lifted**, 1,193 in the game and 1,515 in the middleware: every function of the game except the 66 that use `fmac` (57), `fsca` (4) or `fsrra` (5). What remains outside Shinobi's stubs and the unreferenced functions:
+- 206 functions use those instructions (66 in the game, 140 in the middleware, which also uses `fipr` and `ftrv`);
+- 21 have privileged instructions;
+- 1 has a branch into a delay slot;
+- 1 has `mov.l r15,@-r15`, whose stored value (before or after the decrement) no clean source here pins down.
+
+The output compiles without a warning under Clang for x86-64 and ARM64, with and without checked memory.
+
+**End-to-end tests for the slice:**
+- `farith`: single-precision arithmetic, comparisons, `fneg`, `fabs`, `fldi1`. It runs 2,000 random operand sets against the host and exact bit patterns for 1/3, √2, denormal operands, a denormal result and −denormal + 0.
+- `ftrc`: `ftrc` and `float` at the range's edges, with stops outside it.
+- `fpair`: 64-bit moves to and from memory, DR and XD pairs, `frchg` and FPSCR across a bank change. It moves a signalling NaN and a denormal and checks their bits are kept.
+- `fdouble`: `lds` to FPSCR setting PR, then `fcnvsd`, double-precision add, multiply, divide and compare, and `fcnvds`, over 1,000 random pairs; 1/3 is checked exactly.
+
+Swapping an operand order in the lifter, leaving out the host's flush mode, or swapping a pair's halves makes them fail.
+
 ## Unit tests (`recomp/tests/tests.cpp`)
-No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
+No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, a function called only from replaced code (v0.6.0), and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
 
 ## What comes next
 In the order the sister projects took:
 
-1. **The lifter's FPU slice:** from `fpmode`'s modes, with the two banks as arrays swapped by `frchg`, denormals flushed as DN = 1 requires, and run-time FPSCR where a mode isn't proven. `fmac`, `fsca`, `fsrra`, `fipr` and `ftrv` need a clean source for their exact results first. Then the branch into a delay slot, by duplicating the slot.
+1. **The rest of the lifter:** `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra` once a clean source gives their results (206 functions, 66 of them the game's); the branch into a delay slot, by duplicating the slot; `mov.l r15,@-r15`.
 2. **The differential test.** The sister projects run each lifted function against the original code under Unicorn; Unicorn has no SuperH. The candidates for the reference: QEMU's SH-4 as an external tool, driven through its GDB stub, and an independent model of the instructions written from Hitachi's manual (as Beat the Beat's `paired.py` is for the paired singles). To be decided when the lifter's first slice exists; the requirement stays the same: every function, whole call trees, 0 unexplained mismatches, also under UBSan.

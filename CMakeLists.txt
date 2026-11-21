@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.5.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.6.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -113,5 +113,10 @@ add_custom_command(
 add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp ${QILIN_LIFT_TEST_SOURCES})
 target_include_directories(qilin_lift_tests PRIVATE recomp/runtime recomp/tests ${QILIN_LIFT_TEST_GEN})
 target_compile_definitions(qilin_lift_tests PRIVATE QILIN_CHECKED_MEMORY)
+# Lifted code: each guest FPU operation rounds on its own, so the host compiler
+# must not fuse a multiply and an add into one (MSVC doesn't by default).
+if(NOT MSVC)
+    target_compile_options(qilin_lift_tests PRIVATE -ffp-contract=off)
+endif()
 target_link_libraries(qilin_lift_tests PRIVATE qilin_warnings)
 add_test(NAME qilin_lift_tests COMMAND qilin_lift_tests)

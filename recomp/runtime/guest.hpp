@@ -10,8 +10,16 @@
 #pragma once
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <utility>
+
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>
+#elif defined(_M_ARM64)
+#include <intrin.h>
+#endif
 
 namespace qilin::rt {
 
@@ -198,6 +206,67 @@ inline void mac(uint32_t& mach, uint32_t& macl, int64_t product, uint32_t s, uin
 // over (until it does, it stops).
 inline void pref(uint32_t a, uint32_t pc) {
     if ((a & 0xFC000000u) == 0xE0000000u) unsupported(pc, a);
+}
+
+// ---- the FPU ----
+// FPU registers are floats; a double register DRn is the pair FRn (the high
+// half) and FRn+1. Copies keep a float's bits on every 64-bit host (SSE and
+// NEON moves don't touch them), so bit patterns that aren't numbers survive
+// fmov, as on the SH-4.
+inline uint32_t bits(float f) { return std::bit_cast<uint32_t>(f); }
+inline float flt(uint32_t v) { return std::bit_cast<float>(v); }
+inline double dbl(float hi, float lo) { return std::bit_cast<double>(uint64_t(bits(hi)) << 32 | bits(lo)); }
+inline void set_dbl(float& hi, float& lo, double d) {
+    const uint64_t v = std::bit_cast<uint64_t>(d);
+    hi = flt(static_cast<uint32_t>(v >> 32));
+    lo = flt(static_cast<uint32_t>(v));
+}
+inline float ldf(uint32_t a) { return flt(ld32(a)); }
+inline void stf(uint32_t a, float f) { st32(a, bits(f)); }
+inline float fabs_bits(float f) { return flt(bits(f) & 0x7FFFFFFFu); }
+inline float fneg_bits(float f) { return flt(bits(f) ^ 0x80000000u); }
+
+// ftrc: truncation towards zero. Out of range or NaN the result depends on
+// rules no clean source here pins down: stop.
+inline uint32_t ftrc(double v, uint32_t pc) {
+    if (!(v > -2147483649.0 && v < 2147483648.0)) unsupported(pc, 0);
+    return static_cast<uint32_t>(static_cast<int32_t>(v));
+}
+
+// FPSCR's bits the lifted code relies on: FR (21), SZ (20), PR (19), DN (18), RM (1-0).
+inline constexpr uint32_t kFpscrFR = 1u << 21, kFpscrSZ = 1u << 20, kFpscrEnables = 0x00000F80u;
+
+// frchg: the banks swap. The lifted code stores its bank's registers before
+// and reloads them after.
+inline void frchg(Context& c) {
+    std::swap(c.fr, c.xf);
+    c.fpscr ^= kFpscrFR;
+}
+// lds to FPSCR: a change of FR swaps the banks. Exception enables would need
+// traps the port doesn't model: stop.
+inline void set_fpscr(Context& c, uint32_t v, uint32_t pc) {
+    if (v & kFpscrEnables) unsupported(pc, v);
+    if ((v ^ c.fpscr) & kFpscrFR) std::swap(c.fr, c.xf);
+    c.fpscr = v;
+}
+
+// The host's floating-point mode lifted code needs: denormals flushed to zero
+// in and out, as the SH-4 does with FPSCR.DN = 1 (the game never clears it;
+// the lifter only lifts code proven to run with it set), round to nearest.
+// Call once on every thread that runs lifted code.
+inline void host_fp_setup() {
+#if defined(_M_X64) || defined(__x86_64__)
+    _mm_setcsr((_mm_getcsr() & ~0x6000u) | 0x8040u);  // FTZ, DAZ; RC = nearest
+#elif defined(_M_ARM64)
+    _WriteStatusReg(ARM64_FPCR, (_ReadStatusReg(ARM64_FPCR) & ~(3ll << 22)) | (1ll << 24));  // FZ; RMode = nearest
+#elif defined(__aarch64__)
+    uint64_t fpcr;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+    fpcr = (fpcr & ~(uint64_t(3) << 22)) | (uint64_t(1) << 24);
+    __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+#else
+#error "host_fp_setup: an x86-64 or ARM64 host is required"
+#endif
 }
 
 // ---- calls through the function table ----

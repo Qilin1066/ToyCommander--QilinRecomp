@@ -353,11 +353,14 @@ std::map<uint32_t, FpModes> fp_modes(const BootFile& boot, const Cfg& cfg, std::
     };
     std::map<Context, Summary, ContextLess> contexts;
     std::map<Context, std::optional<KnownBits>, ContextLess> exits;
+    // Called by analysed code: calls from replaced code (Shinobi's start-up
+    // calls the game's main) don't count, so their targets start in the default mode.
     std::set<uint32_t> called;
-    for (const auto& [e, f] : cfg.functions)
+    for (const auto& [e, f] : cfg.functions) {
+        if (replaced(e)) continue;
         for (const auto& [site, target] : f.calls) called.insert(target);
-    for (const auto& [e, f] : cfg.functions)
         for (const auto& [site, target] : f.tail_jumps) called.insert(target);
+    }
     for (const auto& [e, f] : cfg.functions)
         if (!replaced(e) && (taken.contains(e) || !called.contains(e))) contexts.try_emplace({e, kDefaultMode});
     std::vector<std::string> global_problems;

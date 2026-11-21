@@ -24,11 +24,13 @@ struct Fail {
 };
 
 // The locals generated code keeps guest registers in. r0-r15 are bits 0-15.
-enum : uint32_t { kT = 1u << 16, kPr = 1u << 17, kGbr = 1u << 18, kMach = 1u << 19, kMacl = 1u << 20, kS = 1u << 21, kQ = 1u << 22, kM = 1u << 23 };
+enum : uint32_t {
+    kT = 1u << 16, kPr = 1u << 17, kGbr = 1u << 18, kMach = 1u << 19, kMacl = 1u << 20, kS = 1u << 21, kQ = 1u << 22, kM = 1u << 23, kFpul = 1u << 24
+};
 
 class Emitter {
 public:
-    Emitter(const BootFile& boot, const Cfg& cfg, const Function& f) : boot_(boot), cfg_(cfg), f_(f) {}
+    Emitter(const BootFile& boot, const Cfg& cfg, const Function& f, const FpModes* modes) : boot_(boot), cfg_(cfg), f_(f), modes_(modes) {}
 
     LiftResult run() {
         try {
@@ -49,6 +51,8 @@ public:
                 if (used_ & (1u << n)) out += std::format("    uint32_t r{} = c.r[{}];\n", n, n);
             for (const auto& [bit, name] : kNamed)
                 if (used_ & bit) out += std::format("    uint32_t {} = c.{};\n", name, name);
+            for (unsigned n = 0; n < 16; ++n)
+                if (fused_ & (1u << n)) out += std::format("    float f{} = c.fr[{}];\n", n, n);
             if (body.begin()->first != f_.entry) {
                 labels_.insert(f_.entry);
                 out += std::format("    goto {};\n", label(f_.entry));
@@ -59,13 +63,18 @@ public:
             }
             out += "}\n";
             // The sync points: the context holds every register the function uses.
-            std::string store, load;
+            std::string store, load, fstore, fload;
             for (unsigned n = 0; n < 16; ++n)
                 if (used_ & (1u << n)) store += std::format(" c.r[{0}] = r{0};", n), load += std::format(" r{0} = c.r[{0}];", n);
             for (const auto& [bit, name] : kNamed)
                 if (used_ & bit) store += std::format(" c.{0} = {0};", name), load += std::format(" {0} = c.{0};", name);
+            for (unsigned n = 0; n < 16; ++n)
+                if (fused_ & (1u << n)) fstore += std::format(" c.fr[{0}] = f{0};", n), fload += std::format(" f{0} = c.fr[{0}];", n);
+            store += fstore, load += fload;
             replace_all(out, "@OUT@", store.empty() ? "" : store.substr(1));
             replace_all(out, "@IN@", load.empty() ? "" : load.substr(1));
+            replace_all(out, "@FOUT@", fstore.empty() ? "" : fstore.substr(1));
+            replace_all(out, "@FIN@", fload.empty() ? "" : fload.substr(1));
             return {true, std::move(out), 0, {}};
         } catch (const Fail& fail) {
             return {false, {}, fail.pc, fail.why};
@@ -74,7 +83,8 @@ public:
 
 private:
     static constexpr std::pair<uint32_t, const char*> kNamed[] = {{kT, "t"},       {kPr, "pr"}, {kGbr, "gbr"}, {kMach, "mach"},
-                                                                  {kMacl, "macl"}, {kS, "s"},   {kQ, "q"},     {kM, "m"}};
+                                                                  {kMacl, "macl"}, {kS, "s"},   {kQ, "q"},     {kM, "m"},
+                                                                  {kFpul, "fpul"}};
 
     static void replace_all(std::string& s, std::string_view from, std::string_view to) {
         for (size_t at = s.find(from); at != std::string::npos; at = s.find(from, at + to.size())) s.replace(at, from.size(), to);
@@ -129,8 +139,8 @@ private:
     std::string plain(uint32_t pc, const Insn& i) {
         const sh4::Spec& spec = sh4::spec(i.op);
         const std::string text = sh4::disasm(i, pc);
-        if (spec.flags & sh4::kFloat) throw Fail{pc, std::format("floating point (slice 3): {}", spec.name)};
         if (spec.flags & sh4::kPrivileged) throw Fail{pc, std::format("privileged: {}", text)};
+        if (spec.flags & sh4::kFloat) return fpu(pc, i);
         const unsigned n = i.n(), m = i.m();
         const auto same = [&](const char* what) {
             if (n == m) throw Fail{pc, std::format("{} with the same register twice: {}", what, text)};
@@ -292,6 +302,141 @@ private:
         case Op::ocbp:
         case Op::ocbwb: line(std::format("(void){};  // {}: no caches to manage", R(n), spec.name)); break;
         case Op::pref: line(std::format("rt::pref({}, {});", R(n), hex(pc))); break;
+        default: throw Fail{pc, std::format("not lifted: {}", text)};
+        }
+        return s;
+    }
+
+    // ---- the FPU ----
+    std::string F(unsigned n) {
+        fused_ |= 1u << n;
+        return std::format("f{}", n);
+    }
+    std::string FPUL() { return use(kFpul, "fpul"); }
+    // A 64-bit register of fmov with SZ = 1: DRn (this bank's pair) or, with
+    // the field's low bit set, XDn (the back bank's).
+    std::pair<std::string, std::string> pair64(unsigned field) {
+        const unsigned k = field & 14u;
+        if (field & 1u) return {std::format("c.xf[{}]", k), std::format("c.xf[{}]", k + 1)};
+        return {F(k), F(k + 1)};
+    }
+    std::string D(unsigned n, uint32_t pc) {
+        if (n & 1u) throw Fail{pc, "a double-precision operation on an odd register"};
+        return std::format("rt::dbl({}, {})", F(n), F(n + 1));
+    }
+
+    std::string fpu(uint32_t pc, const Insn& i) {
+        const sh4::Spec& spec = sh4::spec(i.op);
+        const std::string text = sh4::disasm(i, pc);
+        const unsigned n = i.n(), m = i.m();
+        switch (i.op) {  // no clean source for their exact results yet
+        case Op::fmac: case Op::fipr: case Op::ftrv: case Op::fsca: case Op::fsrra:
+            throw Fail{pc, std::format("exact results unknown: {}", spec.name)};
+        default: break;
+        }
+        // The mode the instruction runs in, as fpmode proved it.
+        bool pr = false, sz = false;
+        if (spec.flags & (sh4::kFpPr | sh4::kFpSz)) {
+            if (!modes_ || !modes_->at.contains(pc)) throw Fail{pc, std::format("FPU mode not proven: {}", text)};
+            const KnownBits& k = modes_->at.at(pc);
+            if ((spec.flags & sh4::kFpPr) && !k.known(fpscr::kPR | fpscr::kRM | fpscr::kDN))
+                throw Fail{pc, std::format("FPU mode not proven: {}", text)};
+            if ((spec.flags & sh4::kFpSz) && !k.known(fpscr::kSZ)) throw Fail{pc, std::format("FPU mode not proven: {}", text)};
+            if (spec.flags & sh4::kFpPr) {
+                if (k.value & fpscr::kRM) throw Fail{pc, std::format("rounding towards zero: {}", text)};
+                if (!(k.value & fpscr::kDN)) throw Fail{pc, std::format("denormals not flushed (DN = 0): {}", text)};
+                pr = k.value & fpscr::kPR;
+            }
+            sz = k.value & fpscr::kSZ;
+        }
+        std::string s;
+        const auto line = [&](std::string code) { s += "    " + code + "\n"; };
+        if (spec.flags & (sh4::kLoad | sh4::kStore)) s += mem(pc);
+        // Binary arithmetic: FRn = FRn op FRm, or DRn = DRn op DRm.
+        const auto arith = [&](const char* op) {
+            if (pr) line(std::format("rt::set_dbl({}, {}, {} {} {});", F(n & 14), F((n & 14) + 1), D(n, pc), op, D(m, pc)));
+            else line(std::format("{} = {} {} {};", F(n), F(n), op, F(m)));
+        };
+        // A 64-bit fmov between memory and a pair: FRn at the lower address.
+        const auto load64 = [&](unsigned field, const std::string& a) {
+            const auto [hi, lo] = pair64(field);
+            line(std::format("{{ const uint32_t a = {}; {} = rt::ldf(a); {} = rt::ldf(a + 4u); }}", a, hi, lo));
+        };
+        const auto store64 = [&](unsigned field, const std::string& a) {
+            const auto [hi, lo] = pair64(field);
+            line(std::format("{{ const uint32_t a = {}; rt::stf(a, {}); rt::stf(a + 4u, {}); }}", a, hi, lo));
+        };
+        switch (i.op) {
+        // ---- transfers ----
+        case Op::fmov:
+            if (sz) {
+                const auto [dh, dl] = pair64(n);
+                const auto [sh, sl] = pair64(m);
+                line(std::format("{{ const float hi = {}, lo = {}; {} = hi; {} = lo; }}", sh, sl, dh, dl));
+            } else {
+                line(std::format("{} = {};", F(n), F(m)));
+            }
+            break;
+        case Op::fmov_ld: sz ? load64(n, R(m)) : line(std::format("{} = rt::ldf({});", F(n), R(m))); break;
+        case Op::fmov_ld_r0: sz ? load64(n, R(0) + " + " + R(m)) : line(std::format("{} = rt::ldf({} + {});", F(n), R(0), R(m))); break;
+        case Op::fmov_ld_inc:
+            sz ? load64(n, R(m)) : line(std::format("{} = rt::ldf({});", F(n), R(m)));
+            line(std::format("{} += {};", R(m), sz ? "8u" : "4u"));
+            break;
+        case Op::fmov_st: sz ? store64(m, R(n)) : line(std::format("rt::stf({}, {});", R(n), F(m))); break;
+        case Op::fmov_st_r0: sz ? store64(m, R(0) + " + " + R(n)) : line(std::format("rt::stf({} + {}, {});", R(0), R(n), F(m))); break;
+        case Op::fmov_st_dec:
+            line(std::format("{} -= {};", R(n), sz ? "8u" : "4u"));
+            sz ? store64(m, R(n)) : line(std::format("rt::stf({}, {});", R(n), F(m)));
+            break;
+        case Op::flds: line(std::format("{} = rt::bits({});", FPUL(), F(n))); break;
+        case Op::fsts: line(std::format("{} = rt::flt({});", F(n), FPUL())); break;
+        case Op::lds_fpul: line(std::format("{} = {};", FPUL(), R(n))); break;
+        case Op::ldsl_fpul: line(std::format("{} = rt::ld32({}); {} += 4u;", FPUL(), R(n), R(n))); break;
+        case Op::sts_fpul: line(std::format("{} = {};", R(n), FPUL())); break;
+        case Op::stsl_fpul: line(std::format("{} -= 4u; rt::st32({}, {});", R(n), R(n), FPUL())); break;
+        // ---- FPSCR ----
+        case Op::sts_fpscr: line(std::format("{} = c.fpscr;", R(n))); break;
+        case Op::stsl_fpscr: line(std::format("{} -= 4u; rt::st32({}, c.fpscr);", R(n), R(n))); break;
+        case Op::lds_fpscr: line(std::format("@FOUT@ rt::set_fpscr(c, {}, {}); @FIN@", R(n), hex(pc))); break;
+        case Op::ldsl_fpscr: line(std::format("@FOUT@ rt::set_fpscr(c, rt::ld32({}), {}); {} += 4u; @FIN@", R(n), hex(pc), R(n))); break;
+        case Op::fschg: line("c.fpscr ^= rt::kFpscrSZ;"); break;
+        case Op::frchg: line("@FOUT@ rt::frchg(c); @FIN@"); break;
+        // ---- arithmetic ----
+        case Op::fadd: arith("+"); break;
+        case Op::fsub: arith("-"); break;
+        case Op::fmul: arith("*"); break;
+        case Op::fdiv: arith("/"); break;
+        case Op::fsqrt:
+            if (pr) line(std::format("rt::set_dbl({}, {}, std::sqrt({}));", F(n & 14), F((n & 14) + 1), D(n, pc)));
+            else line(std::format("{} = std::sqrt({});", F(n), F(n)));
+            break;
+        case Op::fabs: line(std::format("{} = rt::fabs_bits({});", F(pr ? n & 14 : n), F(pr ? n & 14 : n))); break;
+        case Op::fneg: line(std::format("{} = rt::fneg_bits({});", F(pr ? n & 14 : n), F(pr ? n & 14 : n))); break;
+        case Op::fcmp_eq:
+            line(pr ? std::format("{} = {} == {};", T(), D(n, pc), D(m, pc)) : std::format("{} = {} == {};", T(), F(n), F(m)));
+            break;
+        case Op::fcmp_gt:
+            line(pr ? std::format("{} = {} > {};", T(), D(n, pc), D(m, pc)) : std::format("{} = {} > {};", T(), F(n), F(m)));
+            break;
+        case Op::fldi0:
+        case Op::fldi1:
+            if (pr) throw Fail{pc, std::format("{} in double precision", spec.name)};
+            line(std::format("{} = {};", F(n), i.op == Op::fldi0 ? "0.0f" : "1.0f"));
+            break;
+        case Op::float_:
+            if (pr) line(std::format("rt::set_dbl({}, {}, static_cast<double>(static_cast<int32_t>({})));", F(n & 14), F((n & 14) + 1), FPUL()));
+            else line(std::format("{} = static_cast<float>(static_cast<int32_t>({}));", F(n), FPUL()));
+            break;
+        case Op::ftrc: line(std::format("{} = rt::ftrc({}, {});", FPUL(), pr ? D(n, pc) : F(n), hex(pc))); break;
+        case Op::fcnvsd:
+            if (!pr) throw Fail{pc, "fcnvsd in single precision"};
+            line(std::format("rt::set_dbl({}, {}, static_cast<double>(rt::flt({})));", F(n & 14), F((n & 14) + 1), FPUL()));
+            break;
+        case Op::fcnvds:
+            if (!pr) throw Fail{pc, "fcnvds in single precision"};
+            line(std::format("{} = rt::bits(static_cast<float>({}));", FPUL(), D(n, pc)));
+            break;
         default: throw Fail{pc, std::format("not lifted: {}", text)};
         }
         return s;
@@ -462,12 +607,17 @@ private:
     const BootFile& boot_;
     const Cfg& cfg_;
     const Function& f_;
+    const FpModes* modes_;
     uint32_t used_ = 0;
+    uint32_t fused_ = 0;  // fr0-fr15 of the current bank
     std::set<uint32_t> labels_;
 };
 
 }  // namespace
 
-LiftResult Lifter::lift(const Function& f) const { return Emitter(boot_, cfg_, f).run(); }
+LiftResult Lifter::lift(const Function& f) const {
+    const auto m = modes_.find(f.entry);
+    return Emitter(boot_, cfg_, f, m == modes_.end() ? nullptr : &m->second).run();
+}
 
 }  // namespace qilin
