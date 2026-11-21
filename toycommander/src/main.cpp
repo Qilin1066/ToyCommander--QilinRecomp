@@ -9,20 +9,24 @@
 // reached and from where (exit code 3).
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 
 #include "boot.hpp"
 #include "chain.hpp"
 #include "bootfile.hpp"
 #include "gdrom.hpp"
 #include "gdrom_bios.hpp"
+#include "interrupts.hpp"
 #include "memory.hpp"
 #include "natives.hpp"
 #include "pvr.hpp"
 #include "rtc.hpp"
 #include "sh4.hpp"
 #include "system.hpp"
+#include "ta.hpp"
 
 namespace rt = qilin::rt;
 
@@ -65,9 +69,30 @@ int main(int argc, char** argv) {
     toycommander::provide_rtc();
     toycommander::insert_disc(*disc);
     toycommander::map_pvr();
+    toycommander::ta::map();
     toycommander::map_sh4_peripherals();
+    toycommander::start_interrupts();
 
     rt::Context c;
+    // QILIN_TIMEOUT=<seconds>: a run that hasn't stopped by then is stuck in
+    // a wait (on hardware the port doesn't provide yet, as a rule): report
+    // where the guest is and end with exit code 4. Diagnostic only: it reads
+    // the running guest's state without stopping it.
+    if (const char* t = std::getenv("QILIN_TIMEOUT")) {
+        const int seconds = std::atoi(t);
+        std::thread([&c, seconds] {
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+#ifdef QILIN_CHECKED_MEMORY
+            const uint32_t pc = rt::g_pc;
+#else
+            const uint32_t pc = 0;
+#endif
+            std::fprintf(stderr, "qilin_run: still running after %d s, at %08X (in fn_%08X)\n", seconds, pc, rt::function_containing(pc));
+            if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) rt::backtrace(stderr, c, 0x8C00F400u);
+            std::fflush(stderr);
+            std::_Exit(4);
+        }).detach();
+    }
     try {
         toycommander::boot(c, boot_file->image());
     } catch (const rt::Stop& s) {

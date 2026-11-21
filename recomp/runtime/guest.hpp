@@ -9,6 +9,7 @@
 // mac.w with S set).
 #pragma once
 
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -349,12 +350,36 @@ inline void host_fp_setup() {
 #endif
 }
 
+// ---- interrupts ----
+// The runtime's interrupts are taken at loops' backward branches, as a
+// real interrupt would come at some instruction: generated code tests
+// g_irq_pending there (one relaxed load) and calls poll_irq, which passes the
+// stack pointer (the handler's frame goes below it) and runs g_irq_service.
+// The service runs the handlers on the context and puts every register back
+// afterwards, as an interrupt's return does; the interrupted function's own
+// registers are its locals and stay as they were. g_irq_waiting: something
+// is pending that IMASK holds back; lowering IMASK makes it pending again.
+inline std::atomic<bool> g_irq_pending{false};
+inline bool g_irq_waiting = false;
+inline void (*g_irq_service)(Context&) = nullptr;
+inline void poll_irq(Context& c, uint32_t r15) {
+    g_irq_pending.store(false, std::memory_order_relaxed);
+    if (!g_irq_service) return;
+    c.r[15] = r15;
+    g_irq_service(c);
+}
+#define QILIN_POLL_IRQ(r15) \
+    do { \
+        if (::qilin::rt::g_irq_pending.load(std::memory_order_relaxed)) [[unlikely]] ::qilin::rt::poll_irq(c, (r15)); \
+    } while (0)
+
 // ldc to SR: IMASK and the other free bits are kept (the runtime delivers
 // interrupts only where IMASK allows them); a change of mode, register bank,
 // exception blocking or the FPU's enable isn't something lifted code can
 // follow: stop. T, S, Q and M go to their fields (the lifter does that).
 inline void set_sr(Context& c, uint32_t v, uint32_t pc) {
     if ((v & kSrSystem) != kSrFixed) unsupported(pc, v);
+    if (g_irq_waiting && ((v >> 4) & 15u) < ((c.sr >> 4) & 15u)) g_irq_pending.store(true, std::memory_order_relaxed);
     c.sr = v & ~kSrTSQM;
 }
 

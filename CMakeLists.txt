@@ -179,7 +179,7 @@ if(QILIN_GAME_BOOT)
         COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
         DEPENDS qilin ${QILIN_GAME_BOOT}
         COMMENT "Lifting the game's boot file to C++")
-    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp ${QILIN_RT_SOURCES} ${gen_sources})
+    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp toycommander/src/ta.cpp toycommander/src/interrupts.cpp ${QILIN_RT_SOURCES} ${gen_sources})
     target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
     target_link_libraries(qilin_run PRIVATE qilin_disc qilin_warnings)
     if(QILIN_RUN_CHECKED)

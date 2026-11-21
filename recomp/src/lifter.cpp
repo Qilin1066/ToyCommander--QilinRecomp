@@ -115,8 +115,10 @@ private:
     std::string MACH() { return use(kMach, "mach"); }
     std::string MACL() { return use(kMacl, "macl"); }
 
+    // A backward branch (a loop) is where interrupts are taken (guest.hpp).
     std::string go(uint32_t target) {
         labels_.insert(target);
+        if (target <= branch_pc_) return std::format("{{ QILIN_POLL_IRQ({}); goto {}; }}", R(15), label(target));
         return std::format("goto {};", label(target));
     }
 
@@ -529,6 +531,7 @@ private:
     }
 
     std::string branch(uint32_t pc, const Insn& i) {
+        branch_pc_ = pc;
         const sh4::Spec& spec = sh4::spec(i.op);
         if (spec.flags & sh4::kPrivileged) throw Fail{pc, std::format("privileged: {}", sh4::disasm(i, pc))};
         const bool delayed = spec.flags & sh4::kDelayed;
@@ -692,6 +695,7 @@ private:
     uint32_t used_ = 0;
     uint32_t fused_ = 0;  // fr0-fr15 of the current bank
     std::set<uint32_t> labels_;
+    uint32_t branch_pc_ = 0;  // the branch being lifted (0: none)
 };
 
 }  // namespace

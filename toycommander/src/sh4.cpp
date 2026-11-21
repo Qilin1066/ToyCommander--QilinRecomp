@@ -102,9 +102,40 @@ void write(uint32_t a, uint32_t v, unsigned) {
     unsupported(a, v);
 }
 
+// The DMA controller (DMAC), 0xFFA00000: four channels of SAR, DAR, DMATCR
+// and CHCR, 16 bytes apart, and DMAOR at 0x40. Only channel 2 is used, by
+// Kamui 2, in the one way the Dreamcast uses it: from RAM to the graphics
+// chip in 32-byte blocks, started by the system bus's C2DST (pvr.cpp). The
+// registers are kept as written; what a channel does is the bus's.
+constexpr uint32_t kDmacBase = 0xFFA00000u;
+uint32_t g_dmac[0x44 / 4];
+
+uint32_t dmac_read(uint32_t a, unsigned n) {
+    if (n != 4 || (a & 3u)) unsupported(a, 0);
+    return g_dmac[(a - kDmacBase) / 4];
+}
+void dmac_write(uint32_t a, uint32_t v, unsigned n) {
+    if (n != 4 || (a & 3u)) unsupported(a, v);
+    const uint32_t off = a - kDmacBase;
+    // Channels 0, 1 and 3 are never started by the code: one being enabled is new.
+    if (off < 0x40 && (off & 0xFu) == 0xCu && off != 0x2Cu && (v & 1u)) unsupported(a, v);
+    g_dmac[off / 4] = v;
+}
+
 }  // namespace
 
-void map_sh4_peripherals() { rt::map({kBase, kBase + 0x30u, "SH-4 timer unit", read, write}); }
+void map_sh4_peripherals() {
+    rt::map({kBase, kBase + 0x30u, "SH-4 timer unit", read, write});
+    rt::map({kDmacBase, kDmacBase + 0x44u, "SH-4 DMA controller", dmac_read, dmac_write});
+}
+
+Dma2 dma_channel2() { return {g_dmac[0x20 / 4], g_dmac[0x28 / 4], g_dmac[0x2C / 4], g_dmac[0x40 / 4]}; }
+
+void end_dma_channel2(uint32_t bytes) {
+    g_dmac[0x20 / 4] += bytes;  // SAR2 has moved on
+    g_dmac[0x28 / 4] = 0;       // DMATCR2: nothing left
+    g_dmac[0x2C / 4] |= 2u;     // CHCR2.TE: transfer ended
+}
 
 void start_free_running_timer0() {
     write(kBase + 0x00, 0, 1);

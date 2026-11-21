@@ -29,6 +29,17 @@ uint32_t current_pc() {
 }
 [[noreturn]] void nothing_there(uint32_t a) { throw Stop{Stop::Memory, current_pc(), a}; }
 
+// A device's own stops leave the instruction to the bus, which knows it.
+template <class F>
+auto at_instruction(uint32_t pc, F&& f) {
+    try {
+        return f();
+    } catch (Stop& s) {
+        if (s.pc == 0) s.pc = pc;
+        throw;
+    }
+}
+
 // The store queues: two of 32 bytes, at 0xE0000000-0xE3FFFFFF (bit 5 picks
 // the queue), and QACR0/QACR1 (0xFF000038, 0xFF00003C), whose bits 4-2 give
 // the area of the address a queue is sent to.
@@ -81,7 +92,7 @@ uint32_t bus_read(uint32_t a, unsigned n) {
     } else if (a == kQacr0 || a == kQacr1) {
         v = g_qacr[a == kQacr1];
     } else if (const Device* d = device_at(a, n); d && d->read) {
-        v = d->read(device_address(a), n);
+        v = at_instruction(current_pc(), [&] { return d->read(device_address(a), n); });
     } else {
         nothing_there(a);
     }
@@ -99,7 +110,7 @@ void bus_write(uint32_t a, uint32_t v, unsigned n) {
     } else if (a == kQacr0 || a == kQacr1) {
         g_qacr[a == kQacr1] = v;
     } else if (const Device* d = device_at(a, n); d && d->write) {
-        d->write(device_address(a), v, n);
+        at_instruction(current_pc(), [&] { d->write(device_address(a), v, n); });
     } else {
         nothing_there(a);
     }
@@ -116,7 +127,7 @@ void bus_flush_store_queue(uint32_t a, uint32_t pc) {
     const Device* d = device_at(target, 32);
     if (!d) throw Stop{Stop::Memory, pc, target};
     if (d->write_block) {
-        d->write_block(device_address(target), q, 32);
+        at_instruction(pc, [&] { d->write_block(device_address(target), q, 32); });
         return;
     }
     if (!d->write) throw Stop{Stop::Memory, pc, target};

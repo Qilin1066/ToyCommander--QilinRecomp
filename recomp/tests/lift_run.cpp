@@ -201,6 +201,27 @@ void expect_stop(const char* name, Stop::Kind kind, uint32_t pc, uint32_t value)
     }
 }
 
+// An interrupt pending while a loop runs is taken at its backward branch:
+// the service runs once, sees the loop's stack pointer, may use any register,
+// and the loop's result is as without it.
+int g_serviced = 0;
+uint32_t g_serviced_r15 = 0;
+void test_interrupt_poll() {
+    qilin::rt::g_irq_service = [](Context& c) {
+        ++g_serviced, g_serviced_r15 = c.r[15];
+        for (uint32_t& r : c.r) r = 0xDEADBEEFu;
+    };
+    Context c = fresh();
+    c.r[4] = 10;
+    const uint32_t sp = c.r[15];
+    qilin::rt::g_irq_pending.store(true);
+    if (run(c, "loop")) eq("loop with an interrupt", c.r[0], 55u);
+    eq("interrupt taken once", static_cast<uint32_t>(g_serviced), 1u);
+    eq("interrupt sees the stack pointer", g_serviced_r15, sp);
+    eq("interrupt no longer pending", qilin::rt::g_irq_pending.load() ? 1u : 0u, 0u);
+    qilin::rt::g_irq_service = nullptr;
+}
+
 void test_stops() {
     // badjump: its jsr is the instruction after sts.l and mov.l.
     expect_stop("badjump", Stop::BadJump, g_p.entry.at("badjump") + 4, T::kBase + 0x4000);
@@ -557,6 +578,7 @@ int main() {
     test_bits(rng);
     test_mul(rng);
     test_control();
+    test_interrupt_poll();
     test_stops();
     test_memory();
     test_farith(rng);

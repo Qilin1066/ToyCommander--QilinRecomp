@@ -172,6 +172,15 @@ void shinobi_copy(rt::Context& c) {
 // the runtime calls them when it delivers that interrupt.
 std::map<uint32_t, uint32_t> g_vector;
 
+}  // namespace
+
+uint32_t interrupt_handler(uint32_t offset) {
+    const auto it = g_vector.find(offset);
+    return it == g_vector.end() ? 0 : it->second;
+}
+
+namespace {
+
 // 0x8C085E16, Kamui 2's interrupt set-up, with r4 its handler (0x8C085C78 or
 // 0x8C085B8C). With interrupts masked it saves IMASK and the level-9 interrupt
 // masks (0xA05F6930 normal events, 0xA05F6938 errors) in its state at

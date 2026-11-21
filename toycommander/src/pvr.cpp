@@ -10,6 +10,9 @@
 
 #include "bus.hpp"
 #include "guest.hpp"
+#include "interrupts.hpp"
+#include "sh4.hpp"
+#include "ta.hpp"
 
 namespace toycommander {
 
@@ -39,9 +42,67 @@ uint32_t read(uint32_t a, unsigned n) {
     }
 }
 
+void vram_block(uint32_t a, const uint8_t* data, unsigned n);
+
+// TA_LIST_INIT (0x005F8144): bit 31 starts a new scene's lists.
+// STARTRENDER (0x005F8014): renders the scene the lists built. For now the
+// render is counted and ends at once: the ISP's, the TSP's and the video's
+// ends (normal events 1, 2 and 0) are raised. The Vulkan renderer comes here.
+constexpr uint32_t kTaListInit = 0x005F8144u, kStartRender = 0x005F8014u;
+uint64_t g_renders = 0;
+void start_render() {
+    ++g_renders;
+    raise_event(0), raise_event(1), raise_event(2);
+}
+
+// Channel 2's DMA, from RAM to the graphics chip: C2DSTAT (0x005F6800) is
+// where to, C2DLEN (0x005F6804) how many bytes, and writing 1 to C2DST
+// (0x005F6808) starts it, with the SH-4's channel 2 programmed for 32-byte
+// blocks from SAR2 (CHCR2 = 0x12C1, DMAOR's DME set). The transfer is done
+// at once; then C2DST reads 0, channel 2 shows it ended, and the normal
+// event 19 (channel 2's DMA end) is raised.
+constexpr uint32_t kC2Dstat = 0x005F6800u, kC2Dlen = 0x005F6804u, kC2Dst = 0x005F6808u;
+void dma_to_chip() {
+    const Dma2 ch = dma_channel2();
+    const uint32_t to = reg(kC2Dstat), bytes = reg(kC2Dlen);
+    if (ch.chcr != 0x12C1u || !(ch.dmaor & 1u) || bytes == 0 || bytes % 32 || ch.dmatcr * 32 != bytes)
+        throw rt::Stop{rt::Stop::Unsupported, 0, ch.chcr};
+    // Where it goes: 0x10000000-0x10FFFFFF the tile accelerator (its
+    // parameter stream, then the YUV converter), 0x11000000-0x11FFFFFF
+    // texture memory through the 64-bit path, then both again.
+    const uint32_t area = to & 0x03800000u;
+    const bool to_ta = area == 0, to_texture = (area & 0x03000000u) == 0x01000000u;
+    if (!to_ta && !to_texture) throw rt::Stop{rt::Stop::Unsupported, 0, to};
+    if (to_texture && (reg(0x005F6884u) & 1u)) throw rt::Stop{rt::Stop::Unsupported, 0, to};  // LMMODE0: the 32-bit path
+    uint8_t block[32];
+    for (uint32_t k = 0; k < bytes; k += 32) {
+        for (uint32_t i = 0; i < 32; i += 4) {
+            const uint32_t w = rt::ld32(ch.sar + k + i);
+            std::memcpy(block + i, &w, 4);
+        }
+        if (to_ta) ta::feed(block, 32);
+        else vram_block(0x04000000u | ((to + k) & 0x00FFFFFFu), block, 32);
+    }
+    end_dma_channel2(bytes);
+    reg(kC2Dst) = 0;
+    raise_event(19);
+}
+
 void write(uint32_t a, uint32_t v, unsigned n) {
     if (n != 4 || (a & 3u)) throw rt::Stop{rt::Stop::Unsupported, 0, a};
     switch (a) {
+    case kC2Dst:
+        reg(a) = v & 1u;
+        if (v & 1u) dma_to_chip();
+        return;
+    case kTaListInit:
+        reg(a) = v & 0x7FFFFFFFu;  // reads back without the start bit
+        if (v & 0x80000000u) ta::list_init();
+        return;
+    case kStartRender:
+        reg(a) = v;
+        start_render();
+        return;
     case kStatusNormal:
     case kStatusExternal:
     case kStatusError: reg(a) &= ~v; return;
@@ -84,6 +145,9 @@ const uint8_t* vram() { return g_vram; }
 
 uint32_t pvr_register(uint32_t a) { return reg(a & 0x1FFFFFFFu); }
 void set_pvr_register(uint32_t a, uint32_t v) { write(a & 0x1FFFFFFFu, v, 4); }
-void raise_event(unsigned bit) { reg(kStatusNormal) |= 1u << bit; }
+void raise_event(unsigned bit) {
+    reg(kStatusNormal) |= 1u << bit;
+    interrupt_pending();
+}
 
 }  // namespace toycommander
