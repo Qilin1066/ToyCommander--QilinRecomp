@@ -225,21 +225,6 @@ void shinobi_clear(rt::Context& c) {
     c.r[4] = dst + n, c.r[5] = 0, c.t = 1;
 }
 
-// 0x8C0B486A, called by the middleware's system initialisation, which
-// doesn't use its result: clears Shinobi's interrupt-handler tables
-// (0x8C0B394C) and goes on to 0x8C0BE9AC, which sets up Shinobi's records
-// for the four controller ports (52 bytes each). All Shinobi's own state; the
-// controllers will be the port's, through Shinobi's API: nothing to do.
-void shinobi_peripheral_init(rt::Context&) {}
-
-// 0x8C0B3288 (r4 = 0, r5 = 0x8C0E007C, r6 = 0x8C0EC09C: two buffers), called
-// by the middleware's system initialisation, which doesn't use its result.
-// Unidentified: it clears and sets up 24 records of 52 bytes of Shinobi's
-// own (each with a pointer into a table of 120-byte entries, 0x8C0BF518),
-// keeps the two buffers (0x8C0B4FAC), and reaches an interrupt-mask update
-// (0x8C0B399C) and a DMA set-up (0x8C0BF6D0). All Shinobi's own state, so
-// nothing to do; if anything lifted reads it, that will show.
-void shinobi_module_init_8C0B3288(rt::Context&) {}
 
 // 0x8C0B4244, the real-time clock's initialisation: reads the AICA's clock
 // (0xA0710000, two 16-bit halves of seconds since 1950, read until two reads
@@ -293,7 +278,6 @@ const rt::Provided kNatives[] = {
     {0x8C0B3FACu, "shinobi_free", shinobi_free},
     {0x8C0B3FB6u, "shinobi_free_2", shinobi_free},
     {0x8C0B27E4u, "shinobi_record_init_8C0B27E4", shinobi_record_init_8C0B27E4},
-    {0x8C0B3288u, "shinobi_module_init_8C0B3288", shinobi_module_init_8C0B3288},
     {0x8C0B4244u, "shinobi_rtc_init", shinobi_rtc_init},
     {0x8C0B4840u, "shinobi_hardware_init", shinobi_hardware_init},
     {0x8C0BDB94u, "shinobi_cache_invalidate", shinobi_cache_invalidate},
@@ -302,7 +286,6 @@ const rt::Provided kNatives[] = {
     {0x8C0B4958u, "shinobi_timer_start", shinobi_timer_start},
     {0x8C0B497Eu, "shinobi_timer_count", shinobi_timer_count},
     {0x8C0B4988u, "shinobi_timer_diff", shinobi_timer_diff},
-    {0x8C0B486Au, "shinobi_peripheral_init", shinobi_peripheral_init},
     {0x8C0BAB98u, "shinobi_set_work_area", shinobi_set_work_area},
     {0x8C0BAF20u, "shinobi_copy", shinobi_copy},
     {0x8C0BAF74u, "shinobi_clear", shinobi_clear},

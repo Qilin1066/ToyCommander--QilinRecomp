@@ -424,6 +424,20 @@ void test_cfg_guesses() {
     const Cfg ic = analyse(island);
     CHECK(ic.functions.size() == 1 && ic.at(kB + 4) == Kind::unknown && has_rejected(ic, kB + 4, Origin::orphan));
 
+    // An address the image holds of a short entry that falls into a shared
+    // tail (code a function branches to) is a function; the same bytes with
+    // nothing pointing at them stay unknown (above).
+    const uint32_t entry = kB + 6;
+    const BootFile tail = program({
+        0xA002, 0xE401,  // 00  bra 0x08 ; mov #1,r4
+        0x0009,          // 04  nop
+        0xE407,          // 06  mov #7,r4 (falls into 08)
+        0x000B, 0x0009,  // 08  rts
+        static_cast<uint16_t>(entry), static_cast<uint16_t>(entry >> 16),  // 0C  a pointer to 06
+    });
+    const Cfg tc = analyse(tail);
+    CHECK(tc.functions.contains(entry) && tc.functions.at(entry).origin == Origin::pointer);
+
     // Unreferenced code after a function is kept, marked as an orphan.
     const BootFile orphan = program({0x000B, 0x0009, 0xE001, 0x000B, 0x0009});
     const Cfg oc = analyse(orphan);

@@ -69,6 +69,8 @@ A `call` or `tail` target that fails is not a guess but a finding, and is listed
 
 **Pointers into a known function** (v0.10.0). A function-pointer table can point at code an earlier function already took in through a branch that is really a tail call: gdFs's driver table points at `0x8C0B1FD6`, which `0x8C0B1704` reaches with `bra`. Such a pointer becomes a function when the words on both sides of it in the table point at function entries and it isn't a delay slot; the next pass then treats the branch as a tail call. On the supported build it finds exactly that one (4,306 functions). The rule is narrow on purpose: any word that happens to point into code would split functions that aren't split.
 
+**Shared tails** (v0.10.0). A guess is rejected when it runs on into known code, because data that decodes does that. But compiled and hand-written code also has short entries that fall into a tail other entries branch to: bu's table of `bra tail ; mov #n,r4` entries ends with one, `mov #7,r4` at `0x8C0B6778`, that falls into the tail, and the matrix library has a run of them (`0x8C0613AC`–`0x8C061A2C`, before a 920-byte unknown run). So a guess from an address the image holds (not an orphan) may run into code that some function branches to. It found 16 functions, and the unknown runs went from 49 to 44 (4,322 functions). Bytes nothing points at that a branch skips are still data (a unit test keeps both).
+
 **Switches.** SHC compiles a dense `switch` to a bounds check and `shll r0 ; mov r0,rX ; mova table,r0 ; mov.w @(r0,rX),r0 ; braf r0`. The table's size is the constant the `cmp/hs` a few instructions back compares with; without that bound there is no table to trust, and the `braf` is reported as an indirect jump. Table words are classified as jump table, targets become branch targets of the function.
 
 **Delay slots** belong to their branch. A branch target that is also some branch's delay slot is kept and reported.
@@ -80,7 +82,7 @@ A `call` or `tail` target that fails is not a guess but a finding, and is listed
 
 | | |
 |---|---|
-| Functions | 4,306: 1 entry, 2,317 call targets, 303 tail-call targets, 902 from pointers (one of them inside a function found earlier, from a pointer table: see below), 783 orphans. By region: 1,319 in the game, 2,190 in the middleware, 796 in Shinobi |
+| Functions | 4,322: 1 entry, 2,316 call targets, 303 tail-call targets, 907 from pointers (one inside a function found earlier, from a pointer table, and some into shared tails: see below), 795 orphans. By region: 1,319 in the game, 2,205 in the middleware, 797 in Shinobi |
 | Direct calls resolved | 11,410; constant tail calls 709; calls by loaded PR 2; returns by `jmp` 18 (v0.4.0) |
 | Indirect calls (through a pointer loaded at run time) | 529 |
 | Indirect jumps with no constant target and no table | 127: 3 in the game, 44 in the middleware, 80 in Shinobi (`code-analysis.md`) |

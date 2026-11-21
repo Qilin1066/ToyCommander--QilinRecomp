@@ -167,6 +167,7 @@ public:
         f.entry = entry;
         f.origin = origin;
         guess_ = origin == Origin::pointer || origin == Origin::orphan;
+        pointer_ = origin == Origin::pointer;
         state_.clear();
         todo_.clear();
         literals_.clear();
@@ -297,6 +298,10 @@ private:
             if (w & (1u << k)) r[k].reset();
     }
 
+    bool shared_tail(uint32_t pc) const {
+        return std::ranges::any_of(cfg_.functions, [&](const auto& kv) { return std::ranges::binary_search(kv.second.leaders, pc); });
+    }
+
     // A branch to another function is a tail call: to an entry an earlier
     // pass found, or to the start of a compiled prologue, which compiled code
     // only ever reaches from outside its function.
@@ -357,7 +362,13 @@ private:
                 // can, which is why this only tests guesses.)
                 // (Following a branch into known code and on through it is fine.)
                 if (guess_ && sequential && cfg_.at(pc - 2) != Kind::code) {
-                    if (cfg_.at(pc) == Kind::code)
+                    // Except, for an address the image holds, into a shared
+                    // tail: code functions branch to, which compiled code falls
+                    // into from a short entry of its own (bu's `mov #7,r4` at
+                    // 0x8C0B6778, before the tail the entries beside it reach
+                    // with `bra`). Bytes nothing points at that a branch skips
+                    // are still data.
+                    if (cfg_.at(pc) == Kind::code && !(pointer_ && shared_tail(pc)))
                         throw Reject{std::format("it runs on into known code at {:08X}", pc), pc};
                     if (cfg_.functions.contains(pc) || candidates_.contains(pc))
                         throw Reject{std::format("it runs on into the start of another function at {:08X}", pc), pc};
@@ -493,6 +504,7 @@ private:
     const std::set<uint32_t>& entries_;     // function entries an earlier pass found
     std::map<uint32_t, uint16_t>& scratch_cache_;  // function -> scratch registers a call to it can change
     bool guess_ = false;
+    bool pointer_ = false;  // a guess from an address the image holds
     std::map<uint32_t, Regs> state_;  // registers on entry to each instruction reached
     std::vector<std::pair<uint32_t, Regs>> todo_;
     std::map<uint32_t, uint32_t> literals_;

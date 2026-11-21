@@ -20,8 +20,11 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
 - **The SH-4's DMA controller and channel 2's transfer** (`sh4.cpp`, `pvr.cpp`): Kamui 2's DMA from RAM to the tile accelerator or to texture memory, with its end event.
 - **`QILIN_TIMEOUT=<seconds>`**: a run still going by then reports where the guest is and its call chain (exit code 4), for waits on hardware the port doesn't provide yet.
 
+- **pd, bu and the Maple driver lifted** (`recomp/src/layout.cpp`): Shinobi's peripheral library, its memory card file system and their Maple bus driver, spread over several regions of Shinobi, are lifted like gdFs, for the port to provide the Maple bus beneath them; the natives that skipped their set-up are gone. bu's coroutines stay replaced (next).
+- **Discovery: shared tails.** A pointer guess may fall into code other functions branch to (`docs/recompiler-core.md`): 16 more functions, 44 unknown runs instead of 49, 4,322 functions.
+
 ### Changed
-- **The game now runs past the middleware's system initialisation into `main`'s own start-up** and its first frames' set-up, to Shinobi's peripheral server (controllers, next).
+- **The game now runs past the middleware's system initialisation into `main`'s own start-up** and its first frames' set-up, through the lifted peripheral server, to bu's initialisation, which starts a coroutine.
 - **Graphics: Kamui 2 is lifted and the port replaces the hardware under it** (the PowerVR2's registers, the tile accelerator's parameter stream, video memory) rather than Kamui 2's API. Without symbols, telling Kamui 2's functions apart inside the interleaved middleware proved unreliable, and Kamui 2 is the code that knows how its own calls become hardware commands: the parameter stream it writes is a small, documented format to decode into Vulkan 1.3 draws. The interrupt registration (`0x8C085E16`) is the one Kamui 2 function replaced.
 - **The stop report ends with the guest call chain**, read from the return addresses saved on the stack; `QILIN_STACK=1` dumps the stack too.
 - **Three rules from ToyRacer--QilinRecomp's core**, which started from this one and found them on its boot file (`docs/recompiler-core.md`), each with unit and end-to-end tests:

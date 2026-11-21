@@ -15,7 +15,7 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies--Qil
 | GD-ROM reader (Redump-style `.cue` + `.bin` dumps: tracks, bootstrap, files) | ✅ reads the supported disc; `qilin disc`, `qilin extract` |
 | Boot file loader (`1GUTH.BIN`, recognised by SHA-256) | ✅ |
 | SH-4 decoder (all 209 instruction forms, table-driven) | ✅ agrees with Capstone on every word of the 16-bit encoding space, the reviewed differences listed |
-| Function discovery and control flow (recursive descent, constants through literal pools, switch tables, tail calls, far branches, function pointers, unreferenced code) | ✅ 4,306 functions, 14 switch tables |
+| Function discovery and control flow (recursive descent, constants through literal pools, switch tables, tail calls, far branches, function pointers, unreferenced code) | ✅ 4,322 functions, 14 switch tables |
 | Layout: the game, the middleware, Shinobi and the data regions | ✅ every boundary with its evidence (`docs/code-analysis.md`). The game's code is fully accounted for: 0 unknown bytes. 0.27% of the whole image is still unknown, all in libraries not yet attributed |
 | Hardware-access profile | ✅ 76 functions reach hardware at constant addresses, none in the game itself (`qilin hwaccess`) |
 | FPSCR modes (precision, transfer size, bank, rounding, denormals) at every FPU instruction | ✅ all 35,959 FPU instructions in the game and the middleware proven (`qilin fpmode`) |
