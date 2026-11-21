@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.6.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.7.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -120,3 +120,24 @@ if(NOT MSVC)
 endif()
 target_link_libraries(qilin_lift_tests PRIVATE qilin_warnings)
 add_test(NAME qilin_lift_tests COMMAND qilin_lift_tests)
+
+# ---- qilin_dcref: the FPU's approximate instructions against a Dreamcast emulator ----
+# A developer tool, not built by default and not in CI: it runs Flycast's
+# libretro core (GPL, fetched by tools/dcref/fetch.sh, never committed) as a
+# black box. Linux x86-64, with Mesa's EGL (the core needs OpenGL to boot).
+option(QILIN_DCREF "Build qilin_dcref (needs QILIN_DCREF_DIR, the folder tools/dcref/fetch.sh filled)" OFF)
+set(QILIN_DCREF_DIR "" CACHE PATH "The folder tools/dcref/fetch.sh filled (libretro.h, flycast_libretro.so)")
+if(QILIN_DCREF)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        message(FATAL_ERROR "qilin_dcref runs on Linux x86-64 only")
+    endif()
+    if(NOT EXISTS "${QILIN_DCREF_DIR}/libretro.h")
+        message(FATAL_ERROR "QILIN_DCREF_DIR has no libretro.h: run tools/dcref/fetch.sh <folder> and pass -DQILIN_DCREF_DIR=<folder>")
+    endif()
+    add_executable(qilin_dcref tools/dcref/dcref.cpp)
+    target_include_directories(qilin_dcref PRIVATE recomp/runtime recomp/tests)
+    target_include_directories(qilin_dcref SYSTEM PRIVATE "${QILIN_DCREF_DIR}")
+    target_compile_options(qilin_dcref PRIVATE -ffp-contract=off)
+    target_link_libraries(qilin_dcref PRIVATE qilin_warnings ${CMAKE_DL_LIBS})
+    qilin_tool(qilin_dcref)
+endif()

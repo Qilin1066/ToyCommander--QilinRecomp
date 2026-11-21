@@ -34,17 +34,27 @@ public:
 
     LiftResult run() {
         try {
-            for (const std::string& p : f_.problems)
-                if (p.contains("lands in a delay slot")) throw Fail{f_.entry, "a branch lands in a delay slot"};
             std::map<uint32_t, std::string> body;
             for (size_t k = 0; k < f_.insns.size(); ++k) {
                 const uint32_t pc = f_.insns[k];
                 if (is_slot(pc)) continue;  // emitted with its branch
                 body[pc] = instruction(pc);
             }
+            // A branch into a delay slot runs the slot's instruction on its own and
+            // goes on with the next one (the branch before it isn't taken): a
+            // copy of the instruction, under the slot's label, then a jump on.
+            // The copies go after the body, where nothing falls into them.
+            std::map<uint32_t, std::string> slot_copies;
+            for (const uint32_t target : std::set<uint32_t>(labels_)) {
+                if (body.contains(target) || !is_slot(target)) continue;
+                const Insn si = sh4::decode(boot_.u16(target));
+                if (sh4::spec(si.op).flags & (sh4::kBranch | sh4::kPcRelative))
+                    throw Fail{target, "a branch into a delay slot that holds a branch or a PC-relative instruction"};
+                slot_copies[target] = plain(target, si) + "    " + go(target + 2) + "\n";
+            }
             // Every label jumped to must be an instruction emitted on its own.
             for (uint32_t target : labels_)
-                if (!body.contains(target))
+                if (!body.contains(target) && !slot_copies.contains(target))
                     throw Fail{target, std::format("a branch to {:08X}, which isn't an instruction of its own here", target)};
             std::string out = std::format("void {}(rt::Context& c) {{\n", fn_name(f_.entry));
             for (unsigned n = 0; n < 16; ++n)
@@ -61,6 +71,7 @@ public:
                 if (labels_.contains(pc)) out += label(pc) + ":\n";
                 out += code;
             }
+            for (const auto& [pc, code] : slot_copies) out += std::format("{}:  // the delay slot at {:08X}, branched to\n{}", label(pc), pc, code);
             out += "}\n";
             // The sync points: the context holds every register the function uses.
             std::string store, load, fstore, fload;
@@ -126,6 +137,15 @@ private:
         return std::format("rt::call(c, {}, {});", hex(target), hex(pc));
     }
 
+    // mov.x Rm,@-Rn: with Rm and Rn the same register, the value stored is
+    // the register before the decrement (as the operand is read before the
+    // address is updated; a Dreamcast emulator agrees, tools/dcref).
+    template <typename Line>
+    void pre_dec(unsigned n, unsigned m, const char* size, const char* store, const Line& line) {
+        if (n == m) line(std::format("{{ const uint32_t v = {}; {} -= {}; rt::{}({}, v); }}", R(m), R(n), size, store, R(n)));
+        else line(std::format("{} -= {}; rt::{}({}, {});", R(n), size, store, R(n), R(m)));
+    }
+
     std::string mem(uint32_t pc) const { return std::format("    QILIN_PC({});\n", hex(pc)); }
 
     // ---- one instruction that isn't a branch ----
@@ -163,9 +183,9 @@ private:
         case Op::movb_ld: line(std::format("{} = rt::ld8s({});", R(n), R(m))); break;
         case Op::movw_ld: line(std::format("{} = rt::ld16s({});", R(n), R(m))); break;
         case Op::movl_ld: line(std::format("{} = rt::ld32({});", R(n), R(m))); break;
-        case Op::movb_st_dec: same("a pre-decrement store"); line(std::format("{} -= 1u; rt::st8({}, {});", R(n), R(n), R(m))); break;
-        case Op::movw_st_dec: same("a pre-decrement store"); line(std::format("{} -= 2u; rt::st16({}, {});", R(n), R(n), R(m))); break;
-        case Op::movl_st_dec: same("a pre-decrement store"); line(std::format("{} -= 4u; rt::st32({}, {});", R(n), R(n), R(m))); break;
+        case Op::movb_st_dec: pre_dec(n, m, "1u", "st8", line); break;
+        case Op::movw_st_dec: pre_dec(n, m, "2u", "st16", line); break;
+        case Op::movl_st_dec: pre_dec(n, m, "4u", "st32", line); break;
         case Op::movb_ld_inc: same("a post-increment load"); line(std::format("{} = rt::ld8s({}); {} += 1u;", R(n), R(m), R(m))); break;
         case Op::movw_ld_inc: same("a post-increment load"); line(std::format("{} = rt::ld16s({}); {} += 2u;", R(n), R(m), R(m))); break;
         case Op::movl_ld_inc: same("a post-increment load"); line(std::format("{} = rt::ld32({}); {} += 4u;", R(n), R(m), R(m))); break;
@@ -329,11 +349,6 @@ private:
         const sh4::Spec& spec = sh4::spec(i.op);
         const std::string text = sh4::disasm(i, pc);
         const unsigned n = i.n(), m = i.m();
-        switch (i.op) {  // no clean source for their exact results yet
-        case Op::fmac: case Op::fipr: case Op::ftrv: case Op::fsca: case Op::fsrra:
-            throw Fail{pc, std::format("exact results unknown: {}", spec.name)};
-        default: break;
-        }
         // The mode the instruction runs in, as fpmode proved it.
         bool pr = false, sz = false;
         if (spec.flags & (sh4::kFpPr | sh4::kFpSz)) {
@@ -436,6 +451,32 @@ private:
         case Op::fcnvds:
             if (!pr) throw Fail{pc, "fcnvds in single precision"};
             line(std::format("{} = rt::bits(static_cast<float>({}));", FPUL(), D(n, pc)));
+            break;
+        // ---- the approximate instructions: definitions of our own (guest.hpp) ----
+        case Op::fmac:
+            if (pr) throw Fail{pc, "fmac in double precision"};
+            line(std::format("{} = rt::fmac({}, {}, {});", F(n), F(0), F(m), F(n)));
+            break;
+        case Op::fsrra:
+            if (pr) throw Fail{pc, "fsrra in double precision"};
+            line(std::format("{} = rt::fsrra({});", F(n), F(n)));
+            break;
+        case Op::fipr: {
+            if (pr) throw Fail{pc, "fipr in double precision"};
+            const unsigned vn = n & 12u, vm = (n & 3u) * 4u;
+            line(std::format("{} = rt::fipr({}, {}, {}, {}, {}, {}, {}, {});", F(vn + 3), F(vm), F(vm + 1), F(vm + 2), F(vm + 3), F(vn), F(vn + 1),
+                             F(vn + 2), F(vn + 3)));
+            break;
+        }
+        case Op::ftrv: {
+            if (pr) throw Fail{pc, "ftrv in double precision"};
+            const unsigned vn = n & 12u;
+            line(std::format("rt::ftrv(c.xf, {}, {}, {}, {});", F(vn), F(vn + 1), F(vn + 2), F(vn + 3)));
+            break;
+        }
+        case Op::fsca:
+            if (pr) throw Fail{pc, "fsca in double precision"};
+            line(std::format("rt::fsca({}, {}, {});", FPUL(), F(n & 14u), F((n & 14u) + 1)));
             break;
         default: throw Fail{pc, std::format("not lifted: {}", text)};
         }

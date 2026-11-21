@@ -109,3 +109,7 @@ The conventions it found:
 2. **The middleware's hardware-facing parts:** Kamui 2 and `kmdk` (to Vulkan), the audio manager (to the native mixer; `AUDIO64.DRV` is not run), the DMA and store-queue copy routines. Which functions exactly is the attribution's result.
 3. **Lifted:** the game, and the middleware's pure computation: No Cliché's engine, the movie player's decoder, the C runtime and maths, as far as the attribution confirms.
 4. **The development system's leftovers** (CodeScape file names, the debugger stubs): replaced by no-ops, with a log line if one is ever reached.
+
+## The store-queue memset (v0.7.0)
+`0x8C04EEE0` is the C runtime's `memset`, hand-written. Byte stores reach a 32-byte boundary. Then each 32 bytes are cleared through the SH-4's store queues: zeros are written with `fmov` (64-bit transfers) downwards from `0xE0000040`, the address is turned into a store-queue address by XOR with `0x6C000000`, and `pref` sends the queue to memory. It ends with a computed jump into an unrolled run of `mov.b` stores. `qilin hwaccess` doesn't list it, since its store-queue addresses are computed. The game calls it, so it is among the first native replacements the runtime needs. Until then the lifted code stops at its first store-queue store, naming it.
+

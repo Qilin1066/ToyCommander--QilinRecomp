@@ -4,10 +4,26 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-21
+Every function of the game is lifted. The FPU's approximate instructions are measured against a Dreamcast emulator, as the owner asked with no console at hand.
+
+### Added
+- **`fmac`, `fsrra`, `fipr`, `ftrv` and `fsca` in the lifter**, with definitions of our own (`recomp/runtime/guest.hpp`):
+  - `fmac` rounds once;
+  - `fsrra` divides 1 by the rounded square root;
+  - `fipr` and `ftrv` sum in double and round once, with the matrix column-major in the back bank;
+  - `fsca` reads a table of the exact sine values, built once at start-up.
+  
+  With DN = 1, denormal operands are zero, as for every FPU instruction.
+- **`qilin_dcref`** (`tools/dcref/`): measures those definitions against Flycast's libretro core, run as a black box. A probe program is booted as an ELF on the emulator's BIOS replacement, with an OpenGL context and no window; its results come from guest RAM. Over 50,000 cases each, `fmac`, `fsrra`, `fipr`, `ftrv` and the ordinary arithmetic agree with the emulator on every input without a denormal; the emulator keeps denormal operands where the manual flushes them. `fsca` agrees on 18,510 of 65,536 angles: the emulator has a table of its own, at most 2⁻²³ from the exact values, and copying a GPL table isn't allowed. `tools/dcref/fetch.sh` fetches the core; nothing of it is committed. Opt-in (`-DQILIN_DCREF=ON`), Linux x86-64.
+- **A branch into a delay slot** is lifted: the slot's instruction is copied under its own label after the function's body, followed by a jump on. That function, `0x8C04EEE0`, is the C runtime's store-queue `memset` (`docs/code-analysis.md`): its lifted code stops at the store queue until the runtime replaces it.
+- **`mov.l Rn,@-Rn`** stores the register's value from before the decrement, as the emulator does.
+- **End-to-end tests** for the five instructions' wiring and exact values (one rounding in `fmac`, the matrix's orientation in `ftrv`, `fsca` at the quarter points and its symmetry), and for `mov.l r14,@-r14`: 128,947 checks.
 
 ### Changed
 - **Licence: GPL-3.0** (`LICENSE`), as in all the QilinRecomp projects, in place of MIT: anyone may use, share, change and sell it, but whatever they distribute that is built from it must come with its full source under the same licence. Earlier versions stay under MIT.
+- **2,916 functions are lifted** (was 2,708): all 1,259 of the game's and 1,657 of the middleware's. Outside Shinobi and the unreferenced functions, only the 21 middleware functions with privileged instructions are left, to be replaced.
+- The differential test's reference follows the sister projects: a reference interpreter of our own, written from the manual, with the emulator as a black-box check where the manual leaves room.
 
 ## [0.6.0] - 2026-11-21
 The lifter's FPU slice: every function of the game is lifted except the 66 that use `fmac`, `fsca` or `fsrra`.

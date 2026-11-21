@@ -193,7 +193,7 @@ Floating point is lifted in the mode `fpmode` proves at each instruction. An ins
 - the bit patterns of NaNs that arithmetic produces (the host's; the tests compare NaNs as a class);
 - FPSCR's cause and flag bits, which read as 0. Nothing in the game reads them that the analysis has seen; the differential test is to confirm it.
 
-**Not lifted yet:** `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra`, until a clean source gives their exact results (CLAUDE.md). `fmac` is whether one rounding or two; `fsca` and `fsrra` are table or approximation results, as are `fipr` and `ftrv`'s. Measurements on a Dreamcast would settle them.
+**Not lifted in v0.6.0:** `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra`, whose exact results no clean source gave. Since v0.7.0 they are lifted with definitions of our own, measured against an emulator (below).
 
 **Results on the supported build.** **2,708 functions are lifted**, 1,193 in the game and 1,515 in the middleware: every function of the game except the 66 that use `fmac` (57), `fsca` (4) or `fsrra` (5). What remains outside Shinobi's stubs and the unreferenced functions:
 - 206 functions use those instructions (66 in the game, 140 in the middleware, which also uses `fipr` and `ftrv`);
@@ -211,11 +211,41 @@ The output compiles without a warning under Clang for x86-64 and ARM64, with and
 
 Swapping an operand order in the lifter, leaving out the host's flush mode, or swapping a pair's halves makes them fail.
 
+## The approximate instructions, measured against an emulator (v0.7.0)
+On the hardware, `fmac`, `fsrra`, `fipr`, `ftrv` and `fsca` give results within error bounds, and their exact results aren't documented. No Dreamcast was at hand to measure them on. So the owner asked (2026-11-21) for an emulator to be used for testing: Flycast, the most maintained Dreamcast emulator, run as a black box as the project's rules allow. Nothing of its code or its tables is read or copied. The port's definitions are our own, written from the instructions' descriptions, and the emulator only says which of them agrees with it.
+
+**The tool** (`tools/dcref/`, `qilin_dcref`). `fetch.sh` downloads Flycast's libretro core and libretro's header (MIT) to a folder outside the repository. The tool is a minimal libretro host, about 150 lines. It boots a probe program as an ELF on the emulator's own BIOS replacement, so no Dreamcast BIOS is needed, and gives the core an OpenGL context with no window (EGL's surfaceless platform on Mesa's software renderer). It then reads the results from guest RAM. The probe is built with the end-to-end tests' assembler: one loop per instruction over tens of thousands of inputs (ordinary magnitudes, raw bit patterns, and the edges: zeros, infinities, NaNs, denormals), and all 65,536 angles for `fsca`. Each candidate definition is counted three ways: on all inputs, on ordinary inputs (normal numbers and zeros), and on inputs without denormals. It is a Linux x86-64 developer tool, built with `-DQILIN_DCREF=ON -DQILIN_DCREF_DIR=<folder>`; CI doesn't build it, since the core isn't in the repository.
+
+**What it found** (Flycast nightly of 2026-11-20, 50,000 cases per instruction):
+
+| Instruction | The port's definition | Agrees with the emulator |
+|---|---|---|
+| `fmac` | one rounding (`fmaf`) | every input without a denormal (47,329); two roundings agree on 94% |
+| `fsrra` | `1.0f / sqrtf(x)` (two roundings) | every input without a denormal (49,032); the correctly rounded value agrees on 87% |
+| `fipr` | the four products summed in double, rounded once | every input without a denormal (43,077); single-precision sums in any order agree on 85–91% |
+| `ftrv` | each row as `fipr`, the matrix column-major in the back bank | every input without a denormal (17,238) |
+| `fsca` | the exact sine and cosine, rounded | 18,510 of 65,536 angles: the emulator has a table of its own, at most 2⁻²³ from the exact values |
+| `fadd`, `fsub`, `fmul`, `fdiv`, `fsqrt` | IEEE, denormals flushed | every input without a denormal: a check on the slice of v0.6.0 |
+
+**Denormals are the one disagreement.** Hitachi's SH-4 software manual describes DN = 1 as treating a denormalised number as zero, and the port applies that to operands and results alike, as it has since v0.6.0. Flycast flushes results but computes with denormal operands. The port keeps the manual's reading; a console would settle it. The game's code, which runs in DN = 1 throughout, shouldn't care either way, since denormals are 10⁻³⁸ and below.
+
+**`fsca`.** Flycast's results are multiples of 2⁻³⁰ that sit up to 15 units off the true values, which a formula doesn't give: they are a table, whatever its origin. Copying it would bring a GPL table into the port. The port's table is the exact values: the first quarter wave computed in double and rounded, the rest by symmetry, built once at start-up (256 KB). The two differ by at most 2⁻²³, about the hardware's own documented error.
+
+**Also measured:** `mov.l Rn,@-Rn`, with the same register as source and address, stores the register's value from before the decrement. The lifter now lifts it that way. It occurs once, in the middleware.
+
+**Tests** (end to end, every CI compiler):
+- the five instructions' wiring (which registers, operand order, the matrix's orientation) against the runtime's definitions over random operands;
+- exact values: `fmac` 3 × 4 + 5; `fmac` of (1 + 2⁻¹²)² − 1, which only one rounding gets right; a denormal operand; `fsrra` 4; `fipr` (1, 2, 3, 4) · (5, 6, 7, 8); `ftrv` with a matrix whose transpose gives other results; `fsca` at the quarter points, its symmetry and its accuracy over every 97th angle.
+
+Transposing the matrix, or rounding `fmac` twice, makes them fail.
+
+**Results on the supported build:** **2,916 functions are lifted, every one of the game's 1,259 and 1,657 of the middleware.** The branch into a delay slot (`0x8C04EEE0`) is now lifted too, by copying the slot's instruction under its own label after the function's body, followed by a jump to the instruction after it. That function is the C runtime's `memset`. It clears memory through the SH-4's store queues (`fmov` to `0xE0000040` downwards, then `pref` of a store-queue address) and finishes with a computed jump into an unrolled run of `mov.b` stores, so the lifted code stops there, naming the store-queue access, until the runtime gives it a native replacement. What isn't lifted: Shinobi (796 stubs), the 574 unreferenced functions, and the 21 middleware functions with privileged instructions, which are hardware-facing and are to be replaced.
+
 ## Unit tests (`recomp/tests/tests.cpp`)
 No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, a function called only from replaced code (v0.6.0), and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
 
 ## What comes next
 In the order the sister projects took:
 
-1. **The rest of the lifter:** `fmac`, `fipr`, `ftrv`, `fsca` and `fsrra` once a clean source gives their results (206 functions, 66 of them the game's); the branch into a delay slot, by duplicating the slot; `mov.l r15,@-r15`.
-2. **The differential test.** The sister projects run each lifted function against the original code under Unicorn; Unicorn has no SuperH. The candidates for the reference: QEMU's SH-4 as an external tool, driven through its GDB stub, and an independent model of the instructions written from Hitachi's manual (as Beat the Beat's `paired.py` is for the paired singles). To be decided when the lifter's first slice exists; the requirement stays the same: every function, whole call trees, 0 unexplained mismatches, also under UBSan.
+1. **The differential test.** The sister projects run each lifted instruction from random states against a reference interpreter of their own, written from the manual separately from the lifter (Punch-Out's `recomp/tests/difftest/`), then whole call trees. The same here, with the end-to-end tests' assembler for the cases. Flycast (`tools/dcref`) is the black-box check on the reference where the manual leaves room, as it was for the approximate instructions. The requirement stays the same: every instruction the lifter lifts, 0 unexplained mismatches, also under UBSan.
+2. **The runtime** (roadmap step 3): `qilin_run`, guest RAM at its aliases, the registry of native replacements (the store-queue `memset` among the first), stopping on anything unregistered and naming it.

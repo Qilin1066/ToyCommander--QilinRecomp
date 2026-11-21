@@ -8,6 +8,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -226,6 +227,10 @@ void test_memory() {
         eq("tas.b T", c.r[11], 1);
         eq("tas.b sets bit 7", g_host[p + 32 - kHostLo], 0x80);
         eq("tas.b address", c.r[4], p + 32);
+        eq("mov.l r14,@-r14: the register after", c.r[14], p + 60);
+        uint32_t stored;
+        std::memcpy(&stored, g_host.data() + (p + 60 - kHostLo), 4);
+        eq("mov.l r14,@-r14: the value before the decrement", stored, p + 64);
     }
     // An access outside the mapped regions stops, naming the instruction.
     reset_memory();
@@ -370,6 +375,68 @@ void test_fdouble(std::mt19937& rng) {
     if (run(c, "fdouble")) eq("1/3 (double)", uint64_t(c.r[6]) << 32 | c.r[7], 0x3FD5555555555555ull);
 }
 
+// The approximate instructions: the wiring (which registers, which operand
+// order, the matrix's orientation) against the runtime's definitions, and
+// values every definition must give exactly.
+void test_approximate(std::mt19937& rng) {
+    namespace rt = qilin::rt;
+    const uint32_t in = g_p.data + 8, out = g_p.data + 160;
+    const auto ordinary = [&] { return ffrom((u32(rng) & 0x807FFFFFu) | (127u - 10u + u32(rng) % 21u) << 23); };
+    const auto run_with = [&](const char* name, const std::vector<float>& x, std::optional<uint32_t> r4) {
+        reset_memory();
+        for (size_t k = 0; k < x.size(); ++k) put_word(in + 4 * static_cast<uint32_t>(k), fbits(x[k]));
+        Context c = fresh();
+        c.r[4] = r4 ? *r4 : in, c.r[5] = out;
+        return std::pair(run(c, name), c);
+    };
+    for (int k = 0; k < 300; ++k) {
+        const float a = ordinary(), b = ordinary(), cc = ordinary();
+        if (run_with("fmac", {a, b, cc}, {}).first) eq("fmac", word_at(out), fbits(rt::fmac(a, b, cc)));
+        if (run_with("fsrra", {std::fabs(a)}, {}).first) eq("fsrra", word_at(out), fbits(rt::fsrra(std::fabs(a))));
+        std::vector<float> v(8);
+        for (float& x : v) x = ordinary();
+        if (run_with("fipr", v, {}).first) eq("fipr", word_at(out), fbits(rt::fipr(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])));
+    }
+    // Exact values.
+    if (run_with("fmac", {3.0f, 4.0f, 5.0f}, {}).first) eq("fmac 3*4+5", word_at(out), fbits(17.0f));
+    // One rounding: (1 + 2^-12)^2 - 1 is 2^-11 + 2^-24, which a single holds;
+    // rounding the square first (a tie, to even) would lose the 2^-24.
+    if (run_with("fmac", {ffrom(0x3F800800u), ffrom(0x3F800800u), -1.0f}, {}).first) eq("fmac one rounding", word_at(out), 0x3A000400u);
+    if (run_with("fmac", {ffrom(0x00000001u), 1.0f, 0.0f}, {}).first) eq("fmac denormal operand", word_at(out), 0);
+    if (run_with("fsrra", {4.0f}, {}).first) eq("fsrra 4", word_at(out), fbits(0.5f));
+    if (run_with("fipr", {1, 2, 3, 4, 5, 6, 7, 8}, {}).first) eq("fipr", word_at(out), fbits(70.0f));
+    {
+        // A matrix whose rows are distinct, so a transposed one gives other results:
+        // row r is (r+1, 10(r+1), 100(r+1), 1000(r+1)), stored column-major.
+        std::vector<float> m(20);
+        for (int r = 0; r < 4; ++r)
+            for (int col = 0; col < 4; ++col) m[r + 4 * col] = static_cast<float>((r + 1) * (col == 0 ? 1 : col == 1 ? 10 : col == 2 ? 100 : 1000));
+        m[16] = 1, m[17] = 2, m[18] = 3, m[19] = 4;
+        const auto [ok, c] = run_with("ftrv", m, {});
+        if (ok) {
+            for (int r = 0; r < 4; ++r) eq("ftrv", word_at(out + 4 * static_cast<uint32_t>(r)), fbits(static_cast<float>(4321 * (r + 1))));
+            eq("ftrv: the matrix stays in the back bank", fbits(c.xf[5]), fbits(20.0f));
+        }
+    }
+    const struct {
+        uint32_t angle;
+        float s, c;
+    } quarter[] = {{0, 0.0f, 1.0f}, {0x4000, 1.0f, 0.0f}, {0x8000, 0.0f, -1.0f}, {0xC000, -1.0f, 0.0f}, {0x12340000u, 0.0f, 1.0f}};
+    for (const auto& q : quarter)
+        if (run_with("fsca", {}, q.angle).first) eq("fsca sin", word_at(out) & 0x7FFFFFFFu, fbits(q.s) & 0x7FFFFFFFu), eq("fsca cos", word_at(out + 4), fbits(q.c));
+    for (uint32_t k = 0; k < 65536; k += 97) {
+        if (!run_with("fsca", {}, k).first) break;
+        const double t = k * (6.283185307179586 / 65536.0);
+        expect(std::abs(ffrom(word_at(out)) - std::sin(t)) <= 6e-8 && std::abs(ffrom(word_at(out + 4)) - std::cos(t)) <= 6e-8, "fsca accuracy", k, 0);
+        float s0, c0;
+        rt::fsca(k, s0, c0);
+        eq("fsca", word_at(out), fbits(s0)), eq("fsca", word_at(out + 4), fbits(c0));
+        float sn, cn;
+        rt::fsca(65536 - k, sn, cn);
+        if (k) eq("fsca odd", fbits(sn), fbits(s0) ^ 0x80000000u), eq("fsca even", fbits(cn), fbits(c0));
+    }
+}
+
 // The runtime helpers on their own, at the edges.
 void test_helpers() {
     using namespace qilin::rt;
@@ -423,6 +490,7 @@ int main() {
     test_ftrc();
     test_fpair();
     test_fdouble(rng);
+    test_approximate(rng);
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

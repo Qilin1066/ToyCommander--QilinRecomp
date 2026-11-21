@@ -233,6 +233,57 @@ inline uint32_t ftrc(double v, uint32_t pc) {
     return static_cast<uint32_t>(static_cast<int32_t>(v));
 }
 
+// ---- the instructions no clean source pins down exactly ----
+// fmac, fsrra, fipr, ftrv and fsca are approximations on the hardware, within
+// error bounds; their exact results aren't documented. These definitions are
+// our own, chosen with tools/dcref, which runs them against a Dreamcast
+// emulator (Flycast) over random operands: fmac, fsrra, fipr and ftrv agree
+// with it on every input without a denormal; fsca doesn't (the emulator has a
+// table of its own; these are the exact values). With FPSCR.DN = 1 a denormal
+// operand is zero and a denormal result is flushed, as for every other FPU
+// instruction (docs/recompiler-core.md); the emulator flushes results only.
+inline float daz(float x) { return (bits(x) & 0x7F800000u) ? x : flt(bits(x) & 0x80000000u); }
+
+// fmac: FR0 * FRm + FRn, rounded once.
+inline float fmac(float a, float b, float c) { return daz(std::fmaf(daz(a), daz(b), daz(c))); }
+// fsrra: 1 / sqrt(FRn), as a division of the rounded square root.
+inline float fsrra(float x) { return 1.0f / std::sqrt(x); }
+// fipr: the dot product of two vectors, summed in double and rounded once.
+inline float fipr(float a0, float a1, float a2, float a3, float b0, float b1, float b2, float b3) {
+    const auto d = [](float x) { return static_cast<double>(daz(x)); };
+    return daz(static_cast<float>(d(a0) * d(b0) + d(a1) * d(b1) + d(a2) * d(b2) + d(a3) * d(b3)));
+}
+// ftrv: XMTRX (the back bank, column-major: xf[0], xf[4], xf[8], xf[12] are
+// its first row) times the vector, each element as fipr computes it.
+inline void ftrv(const float (&xf)[16], float& v0, float& v1, float& v2, float& v3) {
+    const float a = v0, b = v1, c = v2, d = v3;
+    v0 = fipr(xf[0], xf[4], xf[8], xf[12], a, b, c, d);
+    v1 = fipr(xf[1], xf[5], xf[9], xf[13], a, b, c, d);
+    v2 = fipr(xf[2], xf[6], xf[10], xf[14], a, b, c, d);
+    v3 = fipr(xf[3], xf[7], xf[11], xf[15], a, b, c, d);
+}
+// fsca: sine and cosine of 2 pi (FPUL & 0xFFFF) / 65536, from a table of the
+// rounded exact values, built once: the first quarter wave computed, the rest
+// by symmetry (so sin(-x) = -sin(x) and the quarter points are exact).
+inline const float* sine_table() {
+    static const float* table = [] {
+        static float t[65536 + 16384];
+        constexpr double kStep = 6.283185307179586476925286766559 / 65536.0;
+        for (uint32_t k = 0; k <= 16384; ++k) t[k] = static_cast<float>(std::sin(static_cast<double>(k) * kStep));
+        t[0] = 0.0f, t[16384] = 1.0f;
+        for (uint32_t k = 1; k < 16384; ++k) t[32768 - k] = t[k];
+        for (uint32_t k = 0; k < 32768; ++k) t[32768 + k] = flt(bits(t[k]) ^ (k ? 0x80000000u : 0u));
+        for (uint32_t k = 0; k < 16384; ++k) t[65536 + k] = t[k];  // so cos(k) = t[k + 16384] needs no wrap
+        return t;
+    }();
+    return table;
+}
+inline void fsca(uint32_t fpul, float& sin_out, float& cos_out) {
+    const float* t = sine_table();
+    const uint32_t k = fpul & 0xFFFFu;
+    sin_out = t[k], cos_out = t[k + 16384];
+}
+
 // FPSCR's bits the lifted code relies on: FR (21), SZ (20), PR (19), DN (18), RM (1-0).
 inline constexpr uint32_t kFpscrFR = 1u << 21, kFpscrSZ = 1u << 20, kFpscrEnables = 0x00000F80u;
 

@@ -115,7 +115,7 @@ constexpr uint16_t kNop = 0x0009, kRts = 0x000B, kClrt = 0x0008, kSett = 0x0018,
 struct Programs {
     std::vector<uint16_t> image;
     std::map<std::string, uint32_t> entry;
-    uint32_t data = 0;  // a 64-byte data block: the indirect-call table, then scratch
+    uint32_t data = 0;  // a 256-byte data block: the indirect-call table, then scratch
 };
 
 inline Programs build() {
@@ -143,6 +143,11 @@ inline Programs build() {
     a.b12(0xB000, "ftrc"), a.word(kNop);
     a.b12(0xB000, "fpair"), a.word(kNop);
     a.b12(0xB000, "fdouble"), a.word(kNop);
+    a.b12(0xB000, "fmac"), a.word(kNop);
+    a.b12(0xB000, "fsrra"), a.word(kNop);
+    a.b12(0xB000, "fipr"), a.word(kNop);
+    a.b12(0xB000, "ftrv"), a.word(kNop);
+    a.b12(0xB000, "fsca"), a.word(kNop);
     a.word(kRts), a.word(kNop);
 
     // add64: (r5:r4) + (r7:r6) -> (r1:r0)
@@ -245,9 +250,11 @@ inline Programs build() {
     a.movl(1, kBase + 0x4000);
     a.word(n_(0x400B, 1)), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(kNop);
     a.pool();
-    // fpu: fmac, whose exact result no clean source here gives: not lifted
+    // fpu: fmac in double precision, which the SH-4 doesn't define: not lifted
     a.label("fpu");
-    a.word(nm(0xF00E, 1, 2)), a.word(kRts), a.word(kNop);
+    a.movl(1, 0x000C0000u), a.word(n_(0x406A, 1)), a.word(nm(0xF00E, 2, 4));
+    a.movl(1, 0x00040000u), a.word(n_(0x406A, 1)), a.word(kRts), a.word(kNop);
+    a.pool();
     // memory: r4 = a scratch address, r5 a value: stores and loads of every
     // size, sign extension, pre-decrement and post-increment, GBR forms,
     // mac.w, tas.b
@@ -257,6 +264,7 @@ inline Programs build() {
     a.word(nm(0x6000, 0, 4)), a.word(nm(0x6001, 1, 4)), a.word(nm(0x6002, 2, 4));  // r0, r1, r2: mov.b, mov.w, mov.l @r4
     a.word(nm(0x2004, 6, 5)), a.word(nm(0x2004, 6, 5)), a.word(nm(0x2005, 6, 5));  // mov.b, mov.b, mov.w r5,@-r6
     a.word(nm(0x6006, 3, 6));                                                       // mov.l @r6+,r3
+    a.word(nm(0x6003, 14, 4)), a.word(imm(0x7000, 14, 64)), a.word(nm(0x2006, 14, 14));  // r14 = r4 + 64 ; mov.l r14,@-r14
     a.word(nm(0x6003, 12, 6));                                                      // r12 = r6
     a.word(n_(0x401E, 4));                                                          // ldc r4,gbr
     a.word(imm(0xE000, 0, 0)), a.word(0xCF80);                                      // mov #0,r0 ; or.b #0x80,@(r0,gbr)
@@ -319,15 +327,40 @@ inline Programs build() {
     a.movl(8, 0x00040000u), a.word(n_(0x406A, 8));                  // back to the default mode
     a.word(kRts), a.word(kNop);
     a.pool();
+    // The approximate instructions (r4 -> inputs, r5 -> outputs).
+    // fmac: out[0] = in[0] * in[1] + in[2] (fmac fr0,fr1,fr2)
+    a.label("fmac");
+    a.word(nm(0xF009, 0, 4)), a.word(nm(0xF009, 1, 4)), a.word(nm(0xF009, 2, 4));
+    a.word(nm(0xF00E, 2, 1)), a.word(nm(0xF00A, 5, 2)), a.word(kRts), a.word(kNop);
+    // fsrra: out[0] = 1 / sqrt(in[0]) (fsrra fr5)
+    a.label("fsrra");
+    a.word(nm(0xF009, 5, 4)), a.word(n_(0xF07D, 5)), a.word(nm(0xF00A, 5, 5)), a.word(kRts), a.word(kNop);
+    // fipr: out[0] = in[0..3] . in[4..7] (fipr fv0,fv4: the result in fr7)
+    a.label("fipr");
+    for (unsigned k = 0; k < 8; ++k) a.word(nm(0xF009, k, 4));
+    a.word(0xF4ED), a.word(nm(0xF00A, 5, 7)), a.word(kRts), a.word(kNop);
+    // ftrv: the matrix in[0..15] (into the back bank) times in[16..19] (into fv8): out[0..3]
+    a.label("ftrv");
+    a.word(0xFBFD);
+    for (unsigned k = 0; k < 16; ++k) a.word(nm(0xF009, k, 4));
+    a.word(0xFBFD);
+    for (unsigned k = 8; k < 12; ++k) a.word(nm(0xF009, k, 4));
+    a.word(0xF9FD);  // ftrv xmtrx,fv8
+    for (unsigned k = 8; k < 12; ++k) a.word(nm(0xF00A, 5, k)), a.word(imm(0x7000, 5, 4));
+    a.word(kRts), a.word(kNop);
+    // fsca: r4 = the angle; out[0] = sin, out[1] = cos (fsca fpul,dr6)
+    a.label("fsca");
+    a.word(n_(0x405A, 4)), a.word(n_(0xF0FD, 6)), a.word(nm(0xF00A, 5, 6)), a.word(imm(0x7000, 5, 4)), a.word(nm(0xF00A, 5, 7));
+    a.word(kRts), a.word(kNop);
     // data: the indirect-call table (inc, dbl), then scratch
     a.align4();
     a.label("data");
     a.long_of("inc"), a.long_of("dbl");
-    for (int k = 0; k < 28; ++k) a.word(0);
+    for (int k = 0; k < 252; ++k) a.word(0);
     p.image = a.finish();
     p.data = a.at("data");
     for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "badjump",
-                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "inc", "dbl", "tail"})
+                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "inc", "dbl", "tail"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.
     const size_t t = (a.at("sw_table") - kBase) / 2;

@@ -19,7 +19,7 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies-Qili
 | Layout: the game, the middleware, Shinobi and the data regions | ✅ every boundary with its evidence (`docs/code-analysis.md`). The game's code is fully accounted for: 0 unknown bytes. 0.27% of the whole image is still unknown, all in libraries not yet attributed |
 | Hardware-access profile | ✅ 76 functions reach hardware at constant addresses, none in the game itself (`qilin hwaccess`) |
 | FPSCR modes (precision, transfer size, bank, rounding, denormals) at every FPU instruction | ✅ all 35,959 FPU instructions in the game and the middleware proven (`qilin fpmode`) |
-| Lifter, SH-4 → C++ (`qilin lift`) | 🔨 integer code, control flow and the FPU: 2,708 functions lifted, every game function but 66, tested end to end under every CI compiler. Waiting: `fmac`, `fsca`, `fsrra`, `fipr`, `ftrv`, for a clean source of their exact results |
+| Lifter, SH-4 → C++ (`qilin lift`) | ✅ every function of the game (1,259) and all but 21 hardware-facing ones of the middleware: 2,916 lifted, tested end to end under every CI compiler. The FPU's approximate instructions are measured against a Dreamcast emulator (`tools/dcref`) |
 | Middleware attribution (engine, Kamui 2, audio manager, C runtime) | during bring-up: the lifted middleware stops on hardware, which names what to replace |
 | Differential test of every lifted function | to do |
 | Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | to do |
@@ -85,6 +85,7 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 | `recomp/runtime/` | What lifted code needs at run time: the guest context, memory access, the helpers, calls through the function table |
 | `recomp/tests/` | Unit tests and end-to-end lifter tests on synthetic programs, so they need no game files |
 | `tools/check/` | The decoder cross-check against Capstone |
+| `tools/dcref/` | Measures the FPU's approximate instructions against a Dreamcast emulator run as a black box (Linux developer tool; the emulator is fetched, never committed) |
 | `docs/` | Design notes: the roadmap and targets, the disc, the code analysis, the recompiler core, prior art, naming |
 
 ## Licence
