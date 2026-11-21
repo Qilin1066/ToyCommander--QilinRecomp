@@ -1,8 +1,10 @@
 #include "interrupts.hpp"
 
+#include <bit>
 #include <chrono>
 #include <thread>
 
+#include "chain.hpp"
 #include "clock.hpp"
 #include "guest.hpp"
 #include "natives.hpp"
@@ -42,6 +44,24 @@ void raise_blanks() {
     }
 }
 
+// The level-4 interrupt: the system bus's normal events 12-20 enabled in
+// IML4 (0x005F6920; Shinobi's chains set the bits, chain.cpp), which
+// Shinobi's level-4 handler takes: it acknowledges each and runs the
+// handlers chained on its event (0xA00 + 0x20 * (bit - 12)). The Maple
+// driver's DMA-end handlers (event 0xA00) run there, bu's scheduler pass
+// among them. Returns whether one was held back by IMASK.
+bool level4(rt::Context& c) {
+    for (int n = 0; n < 64; ++n) {
+        const uint32_t pending = pvr_register(0x005F6900u) & pvr_register(0x005F6920u) & 0x001FF000u;
+        if (!pending) return false;
+        if (((c.sr >> 4) & 15u) >= 4) return true;
+        const unsigned bit = static_cast<unsigned>(std::countr_zero(pending));
+        set_pvr_register(0x005F6900u, 1u << bit);
+        raise_bus_event(c, 0xA00u + 0x20u * (bit - 12));
+    }
+    return false;
+}
+
 void service(rt::Context& c) {
     raise_blanks();
     video::poll();
@@ -50,13 +70,15 @@ void service(rt::Context& c) {
     for (int n = 0; n < 64 && level6_pending(); ++n) {
         if (((c.sr >> 4) & 15u) >= 6 || handler == 0) {
             rt::g_irq_waiting = true;
-            return;
+            break;
         }
         const rt::Context saved = c;
         c.sr = (c.sr & ~0xF0u) | 0x60u;
         rt::call_guest(c, handler);
         c = saved;
     }
+    // Level 6 first, as the console's priorities have it; then level 4.
+    if (level4(c)) rt::g_irq_waiting = true;
 }
 
 }  // namespace

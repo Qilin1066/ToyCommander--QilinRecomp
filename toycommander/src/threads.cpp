@@ -135,8 +135,11 @@ void begin(Stream& s) {
 }
 
 // Runs guest thread `record` until it yields (or ends), as restoring its
-// saved registers does.
-void run(uint32_t record) {
+// saved registers does. The saved registers don't include SR: a thread runs
+// at the interrupt mask of whoever runs the pass, as on the console. (The
+// Maple driver's DMA-end handler runs a pass at level 4: a thread must not
+// take another interrupt there and run the pass inside itself.)
+void run(uint32_t record, uint32_t caller_sr) {
     auto& slot = g_streams[record];
     if (!slot) slot = std::make_unique<Stream>(), slot->record = record;
     Stream& s = *slot;
@@ -146,6 +149,7 @@ void run(uint32_t record) {
     std::unique_lock<std::mutex> lock(g_lock);
     g_resume.push_back(me);
     g_current = &s;
+    s.c.sr = (s.c.sr & ~0xF0u) | (caller_sr & 0xF0u);
     if (!s.started) begin(s);
     hand_over(lock, &s, me);
     g_resume.pop_back();
@@ -199,7 +203,7 @@ void scheduler_pass(rt::Context& c) {
         }
         case 1:
             if (rt::ld32(rec + 20) <= rt::ld32(sched + kTicks)) {
-                run(rec);
+                run(rec, c.sr);
                 i = 0;
             } else {
                 ++i;

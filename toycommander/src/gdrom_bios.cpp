@@ -24,6 +24,7 @@ enum Command : uint32_t {
     kPlay = 20,     // CD audio: {start, end, repeats, 0}, frame addresses
     kPlay2 = 21,    // CD audio: the same, in minutes:seconds:frames
     kPause = 22,    // CD audio: pause
+    kRelease = 23,  // CD audio: go on from the pause (the engine's 0x8C049B4C, through gdFs's 0x8C0B250E: {0, 0})
     kSubcode = 34,  // {format, bytes, buffer, 0}: the sub-channel's data
     kToc = 19,      // {area (0: the single-density area, 1: the high-density one), buffer}: the area's table of contents
 };
@@ -142,6 +143,11 @@ void gd_send_command(rt::Context& c) {
     case kToc: write_toc(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4)); break;
     case kPlay2: throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
     case kPause: g_cd.playing = false; break;
+    case kRelease:
+        // Only after a play, and with the parameter the game sends (0).
+        if (g_cd.at == 0 || rt::ld32(c.r[5]) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+        g_cd.playing = true;
+        break;
     case kSubcode: r.bytes = write_subcode(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8)); break;
     case kPioRead:
     case kDmaRead:
@@ -150,11 +156,12 @@ void gd_send_command(rt::Context& c) {
         break;
     case kVersion: {
         // gdFs reads the digits at 12, 14 and 15 of "GDC Version x.yz" into
-        // its handle's word 11 as x << 16 | y << 8 | z. Above 0x10001 its
-        // multi-sector reads (0x8C0B21A4, 0x8C0B22B0, ...) take a second path
-        // that asks command 36 for the drive's state first; 1.00 keeps them on
-        // the first path, through the commands this file answers. Both are
-        // drives the library was written for.
+        // its handle's word 11 as x << 16 | y << 8 | z. Above 0x10001 its CD
+        // audio calls (play by track 0x8C0B21A4, by frame 0x8C0B22B0, go on
+        // 0x8C0B250E) take a second path: command 36, the drive's state,
+        // after a play, and a new play rather than command 23 after a pause.
+        // 1.00 keeps them on the first, through the commands this file
+        // answers. Both are drives the library was written for.
         static constexpr char kText[] = "GDC Version 1.00";
         const uint32_t to = rt::ld32(c.r[5]);
         for (uint32_t k = 0; k + 1 < sizeof kText; ++k) rt::st8(to + k, static_cast<uint8_t>(kText[k]));

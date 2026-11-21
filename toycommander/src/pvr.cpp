@@ -163,15 +163,23 @@ void map_pvr() {
 }
 
 const uint8_t* vram() { return g_vram; }
+// The texture hardware's addresses wrap at the end of the 8 MB: a texture
+// declared taller than what is used (a 640-wide stride texture 512 lines
+// high near the end of video memory, at the title) reads on from the start,
+// as on the console.
 void vram64_read(uint32_t offset, uint8_t* out, uint32_t n) {
-    if (offset > sizeof g_vram || n > sizeof g_vram - offset) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
+    if (offset >= sizeof g_vram || n > sizeof g_vram) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
     for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t off = offset + k;
+        const uint32_t off = (offset + k) & (sizeof g_vram - 1);
         out[k] = g_vram[((off & 4u) << 20) | ((off >> 1) & 0x003FFFFCu) | (off & 3u)];
     }
 }
 uint64_t vram64_generation(uint32_t offset, uint32_t n) {
-    if (offset > sizeof g_vram || n > sizeof g_vram - offset) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
+    if (offset >= sizeof g_vram || n > sizeof g_vram) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
+    if (n > sizeof g_vram - offset) {  // wraps (vram64_read)
+        const uint32_t first_part = static_cast<uint32_t>(sizeof g_vram) - offset;
+        return std::max(vram64_generation(offset, first_part), vram64_generation(0, n - first_part));
+    }
     // The range is half as long in each bank.
     const uint32_t first = (offset >> 1) >> kPageShift, last = ((offset + n + 7u) >> 1) >> kPageShift;
     constexpr uint32_t kBankPages = (4u << 20) >> kPageShift;

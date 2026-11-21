@@ -509,8 +509,10 @@ void test_registry() {
 void test_bus() {
     namespace rt = qilin::rt;
     reset_memory();
-    const uint32_t p = g_p.data + 64;  // 32-byte aligned (data is 4-aligned: round up)
-    const uint32_t block = (p + 31) & ~31u;
+    // 64-byte aligned (data is 4-aligned: round up), so that bit 5 picks
+    // store queue 0, the one this test fills and QACR0 directs.
+    const uint32_t p = g_p.data + 64;
+    const uint32_t block = (p + 63) & ~63u;
     rt::st32(block, 0x11223344u);
     eq("the uncached view", rt::ld32(block - 0x8C000000u + 0xAC000000u), 0x11223344u);
     eq("the physical view", rt::ld32(block - 0x8C000000u + 0x0C000000u), 0x11223344u);

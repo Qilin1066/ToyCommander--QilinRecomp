@@ -667,6 +667,35 @@ void test_cfg_pr() {
         CHECK(h.indirect_jumps == std::vector<uint32_t>({kB + 0x0C}));
     }
 
+    // A call by bra with PR loaded by hand (0x8C061AB4), back into a pop of
+    // the pushed entry PR and a return through a copy:
+    //   sts.l pr,@-r15 ; mov.l back,r0 ; lds r0,pr ; bra g ; nop
+    //   back: lds.l @r15+,pr ; sts pr,r2 ; jmp @r2 ; nop
+    {
+        const BootFile b = program({
+            0x4F22,     // 00  sts.l pr,@-r15
+            0xD004,     // 02  mov.l 0x14,r0
+            0x402A,     // 04  lds r0,pr
+            0xA009,     // 06  bra 0x1C
+            0x0009,     // 08   nop
+            0x4F26,     // 0A  back: lds.l @r15+,pr
+            0x022A,     // 0C  sts pr,r2
+            0x422B,     // 0E  jmp @r2
+            0x0009,     // 10   nop
+            0x0009,     // 12
+            lo(kB + 0x0A), hi(kB + 0x0A),  // 14
+            0x0009, 0x0009,  // 18
+            0x000B, 0x0009,  // 1C  g: rts ; nop
+        });
+        const Cfg cb = analyse(b);
+        const Function& h = cb.functions.at(kB);
+        CHECK(h.calls.size() == 1 && h.calls.at(kB + 6) == kB + 0x1C);
+        CHECK(h.call_returns.size() == 1 && h.call_returns.at(kB + 6) == kB + 0x0A);
+        CHECK(h.tail_jumps.empty() && h.indirect_jumps.empty());
+        CHECK(h.jmp_returns == std::vector<uint32_t>({kB + 0x0E}));
+        CHECK(successors(b, h, kB + 8) == std::vector<uint32_t>({kB + 0x0A}));
+    }
+
     // A scratch register survives a call to a callee that doesn't write it.
     const auto with_leaf = [](uint16_t slot) {
         return program({

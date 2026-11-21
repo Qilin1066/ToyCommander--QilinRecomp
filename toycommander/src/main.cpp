@@ -7,17 +7,21 @@
 // build the program was lifted from, maps guest RAM and runs the start-up.
 // Anything the port doesn't handle yet stops it with a report naming what was
 // reached and from where (exit code 3).
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "aica.hpp"
 #include "boot.hpp"
-#include "chain.hpp"
 #include "bootfile.hpp"
+#include "chain.hpp"
 #include "gdrom.hpp"
 #include "gdrom_bios.hpp"
 #include "interrupts.hpp"
@@ -90,6 +94,18 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::seconds(seconds));
 #ifdef QILIN_CHECKED_MEMORY
             const uint32_t pc = rt::g_pc;
+            // Where the time goes: the functions the guest is in, sampled
+            // every 100 microseconds for a second (lifted code's own pc).
+            std::map<uint32_t, unsigned> where;
+            for (int k = 0; k < 10000; ++k) {
+                ++where[rt::function_containing(rt::g_pc)];
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+            std::vector<std::pair<unsigned, uint32_t>> top;
+            for (const auto& [fn, n] : where) top.emplace_back(n, fn);
+            std::ranges::sort(top, std::greater{});
+            std::fprintf(stderr, "qilin_run: the guest's time over a second, by function:\n");
+            for (size_t k = 0; k < top.size() && k < 12; ++k) std::fprintf(stderr, "  %5.1f%%  fn_%08X\n", top[k].first / 100.0, top[k].second);
 #else
             const uint32_t pc = 0;
 #endif
