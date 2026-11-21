@@ -22,7 +22,7 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies--Qil
 | Lifter, SH-4 → C++ (`qilin lift`) | ✅ every function of the game (1,259) and all but 21 hardware-facing ones of the middleware: 2,916 lifted, tested end to end under every CI compiler. The FPU's approximate instructions are measured against a Dreamcast emulator (`tools/dcref`) |
 | Middleware attribution (engine, Kamui 2, audio manager, C runtime) | during bring-up: the lifted middleware stops on hardware, which names what to replace |
 | Differential test of every lifted instruction | ✅ against a reference interpreter of our own, in CI: 242,496 runs, 0 mismatches. Whole call trees to come |
-| Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | 🔨 bring-up: `qilin_run` boots the game's lifted code into `main` and stops at the next library function the port doesn't have yet (`docs/runtime.md`) |
+| Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | 🔨 bring-up: `qilin_run` boots the game's lifted code into `main`, through the start-up logos (drawn by the Vulkan 1.3 renderer in an SDL3 window) to the first movie, and stops at the next thing the port doesn't have yet (`docs/runtime.md`) |
 | Enhancements (resolution, widescreen, high refresh rate) and the settings menu shared with the sister projects | to do, after the game plays at original spec |
 
 The supported release is the USA disc (`MK-57020`, `V1.022`); see `docs/disc-analysis.md`.
@@ -42,7 +42,7 @@ The whole project is **C++23**. You need CMake ≥ 3.25 and one of:
 | Apple Clang | Xcode 16 | |
 | MSVC | Visual Studio 2022 17.10 | |
 
-CMake stops with a clear message if the compiler is older. There are no other dependencies yet.
+CMake stops with a clear message if the compiler is older. SDL3, the Vulkan headers and volk are fetched and pinned at configure time (as in the sister projects); on Linux, SDL3 needs the X11, Wayland and sound development packages CI installs (`.github/workflows/ci.yml`).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

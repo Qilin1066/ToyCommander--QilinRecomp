@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.9.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.9.0 LANGUAGES C CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -152,6 +152,67 @@ target_link_libraries(qilin_difftest PRIVATE qilin_core qilin_warnings)
 qilin_tool(qilin_difftest)
 add_test(NAME qilin_difftest COMMAND qilin_difftest)
 
+# ---- The host platform: window, input and audio (SDL3), Vulkan ----
+# The sister projects' host layer (PunchOutWii--QilinRecomp's host/). Fetched at
+# configure time, pinned, built statically: SDL3, the Vulkan headers and volk
+# (which loads Vulkan at run time, so no SDK is needed to build or run).
+option(QILIN_HOST "Build the host platform layer (window, Vulkan, input, audio)" ON)
+if(QILIN_HOST)
+    include(FetchContent)
+    set(FETCHCONTENT_QUIET ON)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+    set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)  # synthetic input: not needed
+    FetchContent_Declare(SDL3 GIT_REPOSITORY https://github.com/libsdl-org/SDL GIT_TAG release-3.4.20 GIT_SHALLOW ON)
+    FetchContent_Declare(VulkanHeaders GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers
+                         GIT_TAG vulkan-sdk-1.4.363.0 GIT_SHALLOW ON)
+    # volk is one C file: fetched without its own CMake project (SOURCE_SUBDIR points nowhere).
+    FetchContent_Declare(volk GIT_REPOSITORY https://github.com/zeux/volk GIT_TAG vulkan-sdk-1.4.363.0 GIT_SHALLOW ON
+                         SOURCE_SUBDIR no-cmake)
+    FetchContent_MakeAvailable(SDL3 VulkanHeaders volk)
+    add_library(qilin_volk STATIC ${volk_SOURCE_DIR}/volk.c)
+    target_include_directories(qilin_volk PUBLIC ${volk_SOURCE_DIR})
+    target_link_libraries(qilin_volk PUBLIC Vulkan::Headers ${CMAKE_DL_LIBS})
+    target_compile_definitions(qilin_volk PUBLIC VK_NO_PROTOTYPES)
+
+    add_library(qilin_host STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp)
+    target_include_directories(qilin_host PUBLIC host/include)
+    # The game's name in messages, the window's title and the data folder.
+    target_compile_definitions(qilin_host PUBLIC QILIN_APP="toycommander" QILIN_APP_TITLE="Toy Commander")
+    target_link_libraries(qilin_host PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)
+    # Vulkan structures are written {sType} with the rest zeroed: that's the idiom, not a mistake.
+    # (On the sources, so it comes after -Wextra on the command line.)
+    if(NOT MSVC)
+        set_source_files_properties(host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/tests/vktest.cpp
+                                    toycommander/src/renderer.cpp toycommander/tests/render_test.cpp
+                                    PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)
+    endif()
+
+    # The Vulkan layer's own test: a device, an offscreen frame, read back. Skips
+    # (exit 77) where there's no Vulkan 1.3 device, as on CI runners.
+    add_executable(qilin_vktest host/tests/vktest.cpp)
+    target_link_libraries(qilin_vktest PRIVATE qilin_host qilin_warnings)
+    add_test(NAME qilin_vktest COMMAND qilin_vktest)
+    set_tests_properties(qilin_vktest PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The texture decoder and the renderer, without the game (the renderer's part
+    # skips where there's no Vulkan 1.3 device; the test then exits 77).
+    add_executable(toycommander_render_test toycommander/tests/render_test.cpp toycommander/src/texture.cpp toycommander/src/renderer.cpp)
+    target_include_directories(toycommander_render_test PRIVATE toycommander/src recomp/runtime)
+    target_link_libraries(toycommander_render_test PRIVATE qilin_host qilin_warnings)
+    add_test(NAME toycommander_render_test COMMAND toycommander_render_test)
+    set_tests_properties(toycommander_render_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(qilin_frame_times_test host/tests/frame_times_test.cpp)
+    target_include_directories(qilin_frame_times_test PRIVATE host/include)
+    target_link_libraries(qilin_frame_times_test PRIVATE qilin_warnings)
+    add_test(NAME qilin_frame_times_test COMMAND qilin_frame_times_test)
+endif()
+
 # ---- The game: built only from the player's own boot file ----
 # cmake -DQILIN_GAME_BOOT=<extracted disc>/files/1GUTH.BIN: qilin lift turns it
 # into C++ at build time (into the build tree, never the source tree), and
@@ -161,6 +222,9 @@ set(QILIN_GAME_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GU
 option(QILIN_RUN_CHECKED "qilin_run checks every guest memory access (bring-up)" ON)
 set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp)
 if(QILIN_GAME_BOOT)
+    if(NOT QILIN_HOST)
+        message(FATAL_ERROR "qilin_run needs the host layer: QILIN_HOST=ON")
+    endif()
     set(QILIN_LIFT_FILES 24)
     set(gen ${CMAKE_BINARY_DIR}/generated)
     set(gen_sources ${gen}/table.cpp ${gen}/stubs.cpp)
@@ -179,10 +243,10 @@ if(QILIN_GAME_BOOT)
         COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
         DEPENDS qilin ${QILIN_GAME_BOOT}
         COMMENT "Lifting the game's boot file to C++")
-    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp toycommander/src/ta.cpp toycommander/src/interrupts.cpp toycommander/src/threads.cpp toycommander/src/aica.cpp ${QILIN_RT_SOURCES} ${gen_sources})
+    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/texture.cpp toycommander/src/renderer.cpp toycommander/src/video.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp toycommander/src/ta.cpp toycommander/src/interrupts.cpp toycommander/src/threads.cpp toycommander/src/aica.cpp ${QILIN_RT_SOURCES} ${gen_sources})
     target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
     find_package(Threads REQUIRED)
-    target_link_libraries(qilin_run PRIVATE qilin_disc qilin_warnings Threads::Threads)
+    target_link_libraries(qilin_run PRIVATE qilin_disc qilin_host qilin_warnings Threads::Threads)
     if(QILIN_RUN_CHECKED)
         target_compile_definitions(qilin_run PRIVATE QILIN_CHECKED_MEMORY)
     endif()

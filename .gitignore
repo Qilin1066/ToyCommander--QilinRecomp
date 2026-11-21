@@ -32,6 +32,9 @@ cfg.json.gz
 functions.json
 functions.json.gz
 symbols.txt
+# Pictures the port draws of the game (QILIN_SHOT) and RAM dumps.
+*.ppm
+*.ram
 
 # ---- Build output ----
 /build*/

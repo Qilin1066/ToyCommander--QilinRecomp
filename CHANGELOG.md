@@ -42,6 +42,9 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
   - a pointer guess is thrown out when a function with a compiled prologue contains it and nothing else supports it (none in this build);
   - `bra` to itself, the code's fatal-error stop, is lifted as `rt::hang`, a stop of its own kind, not as an empty loop (one, at `0x8C087AD0`). `qilin cfg` counts branches by register, and its JSON lists them.
 - **The GD-ROM's sub-channel command** (34, `gdrom_bios.cpp`): the drive's audio status and the play position as Q-channel data (format 1, 14 bytes), which Toy Racer's menu polls through gdFs. Written from ToyRacer--QilinRecomp's bring-up; the position stands still until the mixer plays CD audio.
+- **The first pictures** (`docs/runtime.md`, "The renderer"): a Vulkan 1.3 renderer of the tile accelerator's scenes (`toycommander/src/renderer.cpp`, the shaders in `toycommander/shaders/`), with the PowerVR2's texture formats decoded from video memory (`texture.cpp`), shown in an SDL3 window at each STARTRENDER (`video.cpp`). The game's start-up logos are drawn. Modifier volumes, fog and the translucent list's sorting are still to come; the renderer names each once when a scene asks for it.
+- **The host layer** (`host/`): the sister projects' window, Vulkan device, display (picture scaling, the CRT look), sound output and data folder, from PunchOutWii--QilinRecomp, with the game's name in place of Punch-Out's. SDL3, the Vulkan headers and volk are fetched and pinned at configure time as there. `tools/build_shaders.py` compiles the shaders to the committed `shaders.inc` files; CI checks they are current.
+- `QILIN_HEADLESS`, `QILIN_SCALE` and `QILIN_SHOT` for the bring-up; `toycommander_render_test`.
 
 ## [0.9.0] - 2026-11-21
 The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.

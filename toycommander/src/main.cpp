@@ -29,6 +29,7 @@
 #include "system.hpp"
 #include "ta.hpp"
 #include "threads.hpp"
+#include "video.hpp"
 
 namespace rt = qilin::rt;
 
@@ -75,6 +76,7 @@ int main(int argc, char** argv) {
     toycommander::ta::map();
     toycommander::map_aica();
     toycommander::map_sh4_peripherals();
+    toycommander::video::start();
     toycommander::start_interrupts();
 
     rt::Context c;

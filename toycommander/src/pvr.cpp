@@ -5,6 +5,7 @@
 // interrupt status, DMA) get it as the bring-up reaches them.
 #include "pvr.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -13,6 +14,7 @@
 #include "interrupts.hpp"
 #include "sh4.hpp"
 #include "ta.hpp"
+#include "video.hpp"
 
 namespace toycommander {
 
@@ -46,12 +48,13 @@ void vram_block(uint32_t a, const uint8_t* data, unsigned n);
 
 // TA_LIST_INIT (0x005F8144): bit 31 starts a new scene's lists.
 // STARTRENDER (0x005F8014): renders the scene the lists built. For now the
-// render is counted and ends at once: the ISP's, the TSP's and the video's
-// ends (normal events 1, 2 and 0) are raised. The Vulkan renderer comes here.
+// renderer (video.cpp) draws the scene and the render ends at once: the
+// ISP's, the TSP's and the video's ends (normal events 1, 2 and 0) are raised.
 constexpr uint32_t kTaListInit = 0x005F8144u, kStartRender = 0x005F8014u;
 uint64_t g_renders = 0;
 void start_render() {
     ++g_renders;
+    video::render();
     raise_event(0), raise_event(1), raise_event(2);
 }
 
@@ -129,9 +132,22 @@ uint32_t vram_read(uint32_t a, unsigned n) {
     std::memcpy(&v, g_vram + vram_offset(a, n), n);
     return v;
 }
-void vram_write(uint32_t a, uint32_t v, unsigned n) { std::memcpy(g_vram + vram_offset(a, n), &v, n); }
+// When each 4 KB page was last written (vram64_generation).
+constexpr uint32_t kPageShift = 12;
+uint64_t g_page_written[sizeof g_vram >> kPageShift];
+uint64_t g_writes = 0;
+void vram_write(uint32_t a, uint32_t v, unsigned n) {
+    const uint32_t at = vram_offset(a, n);
+    std::memcpy(g_vram + at, &v, n);
+    g_page_written[at >> kPageShift] = ++g_writes;
+}
 void vram_block(uint32_t a, const uint8_t* data, unsigned n) {
-    for (unsigned k = 0; k < n; k += 4) std::memcpy(g_vram + vram_offset(a + k, 4), data + k, 4);
+    ++g_writes;
+    for (unsigned k = 0; k < n; k += 4) {
+        const uint32_t at = vram_offset(a + k, 4);
+        std::memcpy(g_vram + at, data + k, 4);
+        g_page_written[at >> kPageShift] = g_writes;
+    }
 }
 
 }  // namespace
@@ -142,8 +158,25 @@ void map_pvr() {
 }
 
 const uint8_t* vram() { return g_vram; }
+void vram64_read(uint32_t offset, uint8_t* out, uint32_t n) {
+    if (offset > sizeof g_vram || n > sizeof g_vram - offset) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
+    for (uint32_t k = 0; k < n; ++k) {
+        const uint32_t off = offset + k;
+        out[k] = g_vram[((off & 4u) << 20) | ((off >> 1) & 0x003FFFFCu) | (off & 3u)];
+    }
+}
+uint64_t vram64_generation(uint32_t offset, uint32_t n) {
+    if (offset > sizeof g_vram || n > sizeof g_vram - offset) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
+    // The range is half as long in each bank.
+    const uint32_t first = (offset >> 1) >> kPageShift, last = ((offset + n + 7u) >> 1) >> kPageShift;
+    constexpr uint32_t kBankPages = (4u << 20) >> kPageShift;
+    uint64_t newest = 0;
+    for (uint32_t p = first; p <= last && p < kBankPages; ++p) newest = std::max({newest, g_page_written[p], g_page_written[kBankPages + p]});
+    return newest;
+}
 
 uint32_t pvr_register(uint32_t a) { return reg(a & 0x1FFFFFFFu); }
+const uint32_t* pvr_palette() { return &reg(0x005F9000u); }
 void set_pvr_register(uint32_t a, uint32_t v) { write(a & 0x1FFFFFFFu, v, 4); }
 void raise_event(unsigned bit) {
     reg(kStatusNormal) |= 1u << bit;

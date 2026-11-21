@@ -7,6 +7,7 @@
 #include "guest.hpp"
 #include "natives.hpp"
 #include "pvr.hpp"
+#include "video.hpp"
 #include "system.hpp"
 
 namespace toycommander {
@@ -41,6 +42,7 @@ void raise_blanks() {
 
 void service(rt::Context& c) {
     raise_blanks();
+    video::poll();
     rt::g_irq_waiting = false;
     const uint32_t handler = interrupt_handler(0x224u);
     for (int n = 0; n < 64 && level6_pending(); ++n) {
