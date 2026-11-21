@@ -15,10 +15,10 @@ Static recompilation of **Toy Commander** (Dreamcast, USA: `MK-57020`, `V1.022`)
 
 ## Layout
 
-- `recomp/src/`: `gdrom` (Redump cue/bin reader, bootstrap, ISO 9660), `bootfile` (loader, known-build SHA-256), `sha256`, `decoder` (SH-4, table-driven, X-macro `QILIN_SH4_OPS`), `cfg` (function discovery, constants, switches, coverage; `cfg_report.cpp` is its text and JSON), `main.cpp` (the `qilin` CLI). `gdrom`, `bootfile` and `sha256` are runtime code too (target `qilin_disc`): no `std::format` there.
+- `recomp/src/`: `gdrom` (Redump cue/bin reader, bootstrap, ISO 9660), `bootfile` (loader, known-build SHA-256), `sha256`, `decoder` (SH-4, table-driven, X-macro `QILIN_SH4_OPS`), `cfg` (function discovery, constants, switches, tail calls, coverage; `cfg_report.cpp` is its text and JSON), `layout` (the supported build's regions, with plans), `hwaccess` (hardware accesses at constant addresses), `main.cpp` (the `qilin` CLI). `gdrom`, `bootfile` and `sha256` are runtime code too (target `qilin_disc`): no `std::format` there.
 - `recomp/tests/tests.cpp`: unit tests (`ctest`), no game files.
 - `tools/check/verify_decoder.py`: the decoder against Capstone, the whole encoding space.
-- `docs/`: design and results. Keep them current. `roadmap-and-design-targets.md` is the roadmap; `disc-analysis.md` the disc and boot file; `recompiler-core.md` the loader, disc reader and decoder, and what comes next; `prior-art.md`; `naming.md`.
+- `docs/`: design and results. Keep them current. `roadmap-and-design-targets.md` is the roadmap; `disc-analysis.md` the disc and boot file; `code-analysis.md` the layout, the libraries and the lifted/replaced boundary; `recompiler-core.md` the loader, disc reader and decoder, and what comes next; `prior-art.md`; `naming.md`.
 
 ## Build and check
 
@@ -30,9 +30,10 @@ python3 tools/check/verify_decoder.py --qilin build/qilin     # pip install caps
 build/qilin disc path/to/game.cue
 build/qilin extract path/to/game.cue --out extracted          # outside the repo, or in an ignored folder
 build/qilin info extracted/files/1GUTH.BIN                    # exit 0: the supported build
-build/qilin cfg extracted/files/1GUTH.BIN                     # 4,234 functions (0.2 s)
-build/qilin coverage extracted/files/1GUTH.BIN                # exits 3 today: 99,450 bytes unknown (data, to be described); it should be 0
+build/qilin cfg extracted/files/1GUTH.BIN                     # 4,307 functions (0.3 s, two passes)
+build/qilin coverage extracted/files/1GUTH.BIN                # exit 0: 0 unknown bytes in lifted regions (the game); 2,020 elsewhere
 build/qilin suspects extracted/files/1GUTH.BIN
+build/qilin hwaccess extracted/files/1GUTH.BIN                # 76 functions, none in the game
 ```
 
 Before a milestone commit, all of these must hold: tests pass, warnings are clean (`QILIN_WERROR`), the decoder check has 0 unexplained differences, and (once they exist) generated code is warning-free under GCC, Clang and MSVC and the differential test has 0 unexplained mismatches.
@@ -40,8 +41,9 @@ Before a milestone commit, all of these must hold: tests pass, warnings are clea
 ## Known facts worth not rediscovering
 
 - The boot file is `1GUTH.BIN` ("Guth" is the working title, Gutherman): SHA-256 `ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd`, 748,444 bytes, loaded at `0x8C010000`, ending at `0x8C0C6B9C`, entered at its first byte. No header, sections or symbols.
-- The entry code sets the cache control register and jumps to `0x8C0B0340`. Layout from function discovery: code and literal pools `0x8C010000`–`0x8C09F5B6`, data to `0x8C0B0340`, then library code (much of it hand-written assembly) with data between, data again from `0x8C0C5690`.
-- Function discovery's results and rules are in `docs/recompiler-core.md`. Things that cost time: literal pools contain dead entries nothing loads, and they decode (float constants look like FPU instructions), so a guessed function must not run on into known code; pointer candidates are tried in address order, so a bogus one just before a real function used to swallow it (fixed by rejecting a guess that runs into another candidate's start); 784 functions are unreferenced by any address in the image (dead code: don't lift them by default).
+- The entry code sets the cache control register and jumps to `0x8C0B0340` (Shinobi's start-up), which calls the game's `main` at `0x8C02796A`. The layout is in `recomp/src/layout.cpp`, its evidence in `docs/code-analysis.md`: game `0x8C010080`–`0x8C0495B8` (lifted, 0 unknown bytes: keep it so); middleware `0x8C0495B8`–`0x8C09F5B6` (engine, audio manager, Kamui 2, `kmdk`, C runtime, interleaved object by object: attribution by range does not work, and spreading labels along call edges was tried and is too noisy); data `0x8C09F5B6`–`0x8C0B0340`; Shinobi `0x8C0B0340`–`0x8C0C5690` with three data blocks inside; Shinobi's data to the end.
+- The game never touches hardware (`qilin hwaccess`) and calls Shinobi directly from only 3 sites: the runtime's work is replacing Shinobi and the middleware's hardware-facing parts.
+- Function discovery's results and rules are in `docs/recompiler-core.md`. Things that cost time: literal pools contain dead entries nothing loads, and they decode (float constants look like FPU instructions), so a guessed function must not run on into known code; pointer candidates are tried in address order, so a bogus one just before a real function used to swallow it (fixed by rejecting a guess that runs into another candidate's start); SHC tail-calls with `bra` (and `bt`/`bf`), which absorbed the callee into the caller until v0.3.0 (now: a branch to a prologue start or a known entry is a tail call, and the analysis iterates to a fixed point); float constants are read through `mova` + `fmov @r0`, not PC-relative loads, so they need the constant-address literal rule; the layout's data regions must still be scanned for function pointers (the pointer tables are there); 784 functions are unreferenced by any address in the image (dead code: don't lift them by default).
 - `0x003B` is not in the decoder's set but the image has four, in `0x003B ; rts ; nop` stubs that real code calls (`0x8C099470`): debugger hooks, to be replaced natively. Stubs with `trapa #2` sit beside them.
 - The call idiom assumption (calls preserve r8–r15) is only the compiler's convention: see the note in `cfg.hpp` before the lifter devirtualises anything.
 - The dump is Redump-style: `.cue` plus 15 `.bin` tracks. Tracks 1–2 single density; track 3 (sector 45000) holds the bootstrap and directories; tracks 4–14 are the music (CD audio); track 15 (index 1 at 377422) holds all 81 files. ISO sector numbers are absolute disc sectors.
@@ -53,14 +55,14 @@ Before a milestone commit, all of these must hold: tests pass, warnings are clea
 - Building where there is no GCC 14 or Clang 19 (a session's Linux container, a Windows PC without LLVM): `pip install ziglang`, then use `python -m ziglang c++` as the compiler (a wrapper script for CMake's `CMAKE_CXX_COMPILER`). GCC 14 and MSVC are then checked only by CI: check CI after pushing. Compiler messages are annotations on the commit (`.github/matchers/compilers.json`).
 - GCC's `-Wshadow` also flags a local reusing a file-scope name (Clang's and MSVC's don't), and MSVC's `[[maybe_unused]]` covers only a declaration's first declarator: both bit the sister projects.
 
-## Status (v0.2.0)
+## Status (v0.3.0)
 
-- The disc reader, boot file loader, SH-4 decoder (Capstone cross-check: 0 unexplained differences) and function discovery exist, with tests. 4,234 functions, 21 switch tables, 86.7% of the image classified. Nothing is lifted and nothing runs yet.
+- The disc reader, boot file loader, SH-4 decoder (Capstone cross-check: 0 unexplained differences), function discovery, the build's layout, coverage per region and the hardware profile exist, with tests. 4,307 functions, 14 switch tables; the game region has 0 unknown bytes. Nothing is lifted and nothing runs yet.
 - CI was green on v0.1.0 on all six jobs; check it after each push.
 
 ## Next steps, in order
 
-1. Finish the analysis, into `docs/code-analysis.md`: describe the data segments so `qilin coverage` reaches 0; name the library boundaries (Shinobi, Kamui 2 and `kmdk`, audio manager, TrueMotion, C runtime, game), starting from the version strings' places, the hand-written assembly above `0x8C0B0340` and call-graph clusters; classify the 146 indirect jumps by library; `qilin hwaccess`.
+1. The middleware's attribution, into `docs/code-analysis.md` (its "What comes next" lists the evidence in order: object boundaries from the data layout, the 278 functions the game calls, behaviour, published names); then its plan per function and its coverage gated like the game's; its 60 indirect jumps classified.
 2. The FPSCR mode pass, then the lifter in slices (integer; calls and the function table; FPU), then the differential test (choose the reference: `docs/recompiler-core.md`).
 3. The runtime, as the sister projects brought theirs up: `qilin_run`, the replacement registry, stop on anything unregistered and name it.
 4. The window, input, sound and the settings menu follow the sister projects exactly (`docs/naming.md`, the menu section of `docs/roadmap-and-design-targets.md`; Punch-Out's `punchout/src/menu.cpp` is the model).

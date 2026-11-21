@@ -394,6 +394,23 @@ uint32_t Insn::pc_relative(uint32_t pc) const {
     throw std::logic_error("pc_relative of an instruction without a PC-relative operand");
 }
 
+uint32_t access_size(const Insn& i) {
+    switch (i.op) {
+    case Op::movb_st: case Op::movb_ld: case Op::movb_st_dec: case Op::movb_ld_inc: case Op::movb_st_disp:
+    case Op::movb_ld_disp: case Op::movb_st_r0: case Op::movb_ld_r0: case Op::movb_st_gbr: case Op::movb_ld_gbr:
+    case Op::tas_b: case Op::and_b: case Op::or_b: case Op::tst_b: case Op::xor_b:
+        return 1;
+    case Op::movw_st: case Op::movw_ld: case Op::movw_st_dec: case Op::movw_ld_inc: case Op::movw_st_disp:
+    case Op::movw_ld_disp: case Op::movw_st_r0: case Op::movw_ld_r0: case Op::movw_st_gbr: case Op::movw_ld_gbr:
+    case Op::movw_pc:
+        return 2;
+    case Op::pref: case Op::ocbi: case Op::ocbp: case Op::ocbwb:
+        return 32;
+    default: break;
+    }
+    return (spec(i.op).flags & (kLoad | kStore)) ? 4 : 0;
+}
+
 const Spec& spec(Op op) { return tables().by_op[static_cast<size_t>(op)]; }
 std::span<const Spec> specs() { return tables().ordered; }
 

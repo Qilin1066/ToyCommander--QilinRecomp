@@ -18,6 +18,8 @@
 #include "cfg.hpp"
 #include "decoder.hpp"
 #include "gdrom.hpp"
+#include "hwaccess.hpp"
+#include "layout.hpp"
 #include "sha256.hpp"
 
 using namespace qilin;
@@ -306,7 +308,7 @@ void test_cfg_calls() {
     CHECK(cfg.at(kB + 0x0C) == Kind::code && cfg.at(kB + 0x18) == Kind::code);
     CHECK(cfg.owner[0x18 / 2] == kB + 0x18 && cfg.rejected.empty());
     uint32_t unknown = 1;
-    CHECK(coverage(cfg, boot, true, unknown).contains("code") && unknown == 0);
+    CHECK(coverage(cfg, boot, {}, true, unknown).contains("code") && unknown == 0);
     CHECK(summary(cfg).contains("functions            3"));
     CHECK(to_json(cfg).contains("\"entry\":\"8C010018\",\"origin\":\"call\""));
     CHECK(suspects(cfg) == "0 suspects\n");
@@ -408,7 +410,7 @@ void test_cfg_guesses() {
     CHECK(cfg.at(kB + 0x04) == Kind::unknown && cfg.at(kB + 0x0E) == Kind::unknown);
     CHECK(cfg.at(kB + 0x16) == Kind::padding && cfg.at(kB + 0x1A) == Kind::padding);
     uint32_t unknown = 0;
-    (void)coverage(cfg, boot, false, unknown);
+    (void)coverage(cfg, boot, {}, false, unknown);
     CHECK(unknown == 12);
 
     // Bytes a branch skips that happen to decode are not a function: they
@@ -466,6 +468,129 @@ void test_cfg_rejects() {
     }));
     CHECK(slot.functions.size() == 1 && slot.functions.at(kB).insns.size() == 6);
     CHECK(slot.functions.at(kB).problems.size() == 1 && suspects(slot).contains("lands in a delay slot"));
+}
+
+void test_cfg_v03() {
+    // Constants through arithmetic: r1 = 0x8C010000 + 0x14 + 0x04, then a call.
+    const BootFile folded = program({
+        0xD103,  // 00  mov.l 0x10,r1
+        0x7114,  // 02  add #20,r1
+        0x7104,  // 04  add #4,r1
+        0x410B,  // 06  jsr @r1
+        0x0009,  // 08   nop
+        0x000B,  // 0A  rts
+        0x0009,  // 0C   nop
+        0x0009,  // 0E
+        lo(kB), hi(kB),  // 10
+        0x000B, 0x0009,  // 14  rts ; nop
+        0x000B, 0x0009,  // 18  f: rts ; nop
+    });
+    const Cfg fc = analyse(folded);
+    CHECK(fc.functions.at(kB).calls.size() == 1 && fc.functions.at(kB).calls.at(kB + 6) == kB + 0x18);
+
+    // A float reached through mova is a literal, not unknown bytes.
+    const BootFile floats = program({
+        0xC701,  // 00  mova 0x08,r0
+        0xF108,  // 02  fmov @r0,fr1
+        0x000B,  // 04  rts
+        0x0009,  // 06   nop
+        0x0000, 0x3F80,  // 08  1.0f
+    });
+    const Cfg flc = analyse(floats);
+    CHECK(flc.at(kB + 8) == Kind::literal && flc.at(kB + 10) == Kind::literal);
+    const auto& lit = flc.functions.at(kB).literals;
+    CHECK(lit.size() == 1 && lit[0] == std::pair(kB + 8, 4u));
+
+    // A bra to another function's prologue is a tail call, and that function
+    // is found even though nothing calls it.
+    const BootFile tail = program({
+        0xA001,  // 00  bra 0x06
+        0x0009,  // 02   nop
+        0x0009,  // 04
+        0x2FE6,  // 06  g: mov.l r14,@-r15
+        0x000B,  // 08  rts
+        0x6EF6,  // 0A   mov.l @r15+,r14
+    });
+    const Cfg tc = analyse(tail);
+    CHECK(tc.functions.size() == 2 && tc.functions.contains(kB + 6));
+    CHECK(tc.functions.at(kB).tail_jumps.size() == 1 && tc.functions.at(kB).tail_jumps.at(kB) == kB + 6);
+    CHECK(tc.functions.at(kB).insns.size() == 2 && tc.functions.at(kB + 6).origin == Origin::tail);
+
+    // A branch to an entry found otherwise (here: a call) is a tail call too,
+    // once the second pass knows the entry.
+    const BootFile shared = program({
+        0xB003,  // 00  bsr 0x0A
+        0x0009,  // 02   nop
+        0xA001,  // 04  bra 0x0A
+        0x0009,  // 06   nop
+        0x0009,  // 08
+        0xE001,  // 0A  h: mov #1,r0
+        0x000B,  // 0C  rts
+        0x0009,  // 0E   nop
+    });
+    const Cfg sc = analyse(shared);
+    CHECK(sc.functions.size() == 2 && sc.functions.at(kB).tail_jumps.size() == 1);
+    CHECK(sc.functions.at(kB).insns.size() == 4);
+
+    // A layout's data region holds no functions, even where its words decode.
+    const BootFile withdata = program({
+        0xD001,  // 00  mov.l 0x08,r0  (a pointer into the data region)
+        0x000B,  // 02  rts
+        0x0009,  // 04   nop
+        0x0009,  // 06
+        lo(kB + 0x0C), hi(kB + 0x0C),  // 08
+        0xE001, 0x000B, 0x0009, 0x0009,  // 0C  decodes, but it's data
+    });
+    const Region regions[] = {{kB, kB + 0x0C, "code", Plan::lift}, {kB + 0x0C, kB + 0x14, "data", Plan::data}};
+    const Cfg dc = analyse(withdata, regions);
+    CHECK(dc.functions.size() == 1 && dc.at(kB + 0x0C) == Kind::data && dc.at(kB + 0x12) == Kind::data);
+    uint32_t unknown = 1;
+    const std::string report = coverage(dc, withdata, regions, false, unknown);
+    CHECK(unknown == 0 && report.contains("0 unknown bytes in lifted regions"));
+    const Cfg undeclared = analyse(withdata);  // without the layout it is code
+    CHECK(undeclared.functions.size() == 2);
+
+    // The supported build has a layout covering its whole image, in order.
+    const auto usa = layout("ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd");
+    CHECK(!usa.empty() && usa.front().begin == kBootFileBase && usa.back().end == 0x8C0C6B9Cu);
+    for (size_t i = 1; i < usa.size(); ++i) CHECK(usa[i].begin == usa[i - 1].end && usa[i].begin < usa[i].end);
+    CHECK(layout("0000").empty());
+}
+
+void test_hwaccess() {
+    CHECK(hw_region(0x8C123456).empty());
+    CHECK(hw_region(0xAC000000) == "RAM (uncached)" && hw_region(0x0C000000) == "RAM (another view)");
+    CHECK(hw_region(0xA05F8000) == "PowerVR2 registers" && hw_region(0x005F8124) == "PowerVR2 registers");
+    CHECK(hw_region(0xA05F6C04) == "Maple registers" && hw_region(0xA05F7018) == "GD-ROM registers");
+    CHECK(hw_region(0xA0702800) == "sound chip registers" && hw_region(0xA0800000) == "sound memory");
+    CHECK(hw_region(0xA5000000) == "video memory (32-bit view)" && hw_region(0xA4000000) == "video memory (64-bit view)");
+    CHECK(hw_region(0x10000000) == "tile accelerator: polygons" && hw_region(0xB0000000) == "tile accelerator: polygons");
+    CHECK(hw_region(0xE0000000) == "store queues" && hw_region(0xFF00001C) == "CPU: cache and exception control (CCN)");
+    CHECK(hw_region(0xFFD80004) == "CPU: timers (TMU)" && hw_region(0xFFD00004) == "CPU: interrupt controller (INTC)");
+    CHECK(hw_region(0xA0000000) == "boot ROM");
+
+    // mov.l pool,r1 ; mov.l r0,@(4,r1) ; mov.l @r2,r3 (r2 unknown) ; pref @r1
+    const BootFile boot = program({
+        0xD103,  // 00  mov.l 0x10,r1
+        0x1101,  // 02  mov.l r0,@(4,r1)
+        0x6322,  // 04  mov.l @r2,r3
+        0x0183,  // 06  pref @r1
+        0x6112,  // 08  mov.l @r1,r1
+        0x000B,  // 0A  rts
+        0x0009,  // 0C   nop
+        0x0009,  // 0E
+        0x8000, 0xA05F,  // 10  0xA05F8000
+    });
+    const Cfg cfg = analyse(boot);
+    const auto found = hardware_accesses(boot, cfg, cfg.functions.at(kB));
+    CHECK(found.size() == 3);
+    if (found.size() == 3) {
+        CHECK(found[0].pc == kB + 2 && found[0].ea == 0xA05F8004u && found[0].size == 4 && found[0].kind == HwAccess::store);
+        CHECK(found[1].pc == kB + 6 && found[1].kind == HwAccess::cache && found[1].size == 32);
+        CHECK(found[2].pc == kB + 8 && found[2].kind == HwAccess::load);
+    }
+    CHECK(sh4::access_size(sh4::decode(0x2120)) == 1 && sh4::access_size(sh4::decode(0x2121)) == 2);
+    CHECK(sh4::access_size(sh4::decode(0x0009)) == 0 && sh4::access_size(sh4::decode(0xF108)) == 4);
 }
 
 // ---------------------------------------------------------------- GD-ROM
@@ -684,6 +809,8 @@ int main() {
     test_cfg_join();
     test_cfg_guesses();
     test_cfg_rejects();
+    test_cfg_v03();
+    test_hwaccess();
     test_gdrom();
     if (failures) {
         std::println(stderr, "{} check(s) failed", failures);

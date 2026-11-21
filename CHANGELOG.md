@@ -4,6 +4,25 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.3.0] - 2026-11-21
+The boot file's layout: where the game, the middleware and Shinobi are, what is data, and what reaches hardware. The game's code is now fully accounted for.
+
+### Added
+- **The layout of the supported build** (`recomp/src/layout.*`): 13 regions covering the whole image, each with a plan (lift, replace, undecided, data). The evidence for every boundary is in the new `docs/code-analysis.md`. The game is `0x8C010080`–`0x8C0495B8`: no code above it calls into it, while it makes 1,641 calls up into 278 middleware functions. Shinobi's start-up calls the game once, at its `main` (`0x8C02796A`). Function discovery takes the layout as input: no function is found in a data region, and a call into one is reported.
+- **Coverage per region** (`qilin coverage`): a table of code, literal, table, padding, data and unknown bytes per region. It exits 3 while a *lifted* region has unknown bytes, as in the sister projects. **The game has 0**; 0.27% of the image is still unknown (2,020 bytes), all in the middleware and Shinobi. `--map` prints every run of every kind with the function that claimed it.
+- **Hardware-access profile** (`qilin hwaccess`, `recomp/src/hwaccess.*`): every load, store and cache operation at a constant address outside cached RAM, per function, named by hardware block (the SH-4's registers, the system bus, Maple, GD-ROM, the PowerVR2, the sound chip, video memory, the tile accelerator, the store queues). 76 functions: 1 in the start-up, 30 in the middleware, 45 in Shinobi, **none in the game**.
+- **`docs/code-analysis.md`:** the regions and their evidence, the middleware's anchors (functions named by their strings: the audio manager in three places, Kamui 2, `kmdk`, the C runtime, the engine), why the middleware has to be attributed per function, the hardware profile, the indirect jumps by region, and the runtime's to-do list.
+- **Tests** for each new rule, the layout, the region map and the profile.
+
+### Changed
+- **Function discovery** finds 4,307 functions (was 4,234), and the coverage of the image rose from 86.7% to 99.73% (counting the layout's data regions):
+  - integer arithmetic on constants keeps them constant (`add`, `sub`, logic, fixed shifts, extensions);
+  - loads from constant addresses near the code (`mova pool,r0 ; fmov @r0,frN`) mark their words as literals: these were most of the small unknown runs, float constants;
+  - a branch to another function is a tail call: to the start of a compiled prologue, or to an entry any pass found. The analysis repeats until the set of entries stops growing (two passes). Before, such branches absorbed the function they reached;
+  - in gaps whose first word isn't code, the starts of compiled prologues are tried as well.
+- `qilin cfg` counts each switch table once: 14 tables with 578 cases. Before, a table reached from several functions through shared code was counted for each (the 21 tables and 718 cases reported for v0.2.0 were counted that way).
+- `register_constants` exposes the CFG's dataflow for other passes; `sh4::access_size` and `sh4::register_address` give an instruction's access size and address.
+
 ## [0.2.0] - 2026-11-21
 Function discovery: the boot file's code found and every byte of it classified.
 

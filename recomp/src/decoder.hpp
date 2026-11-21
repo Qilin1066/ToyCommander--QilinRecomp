@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -190,8 +191,40 @@ std::span<const Spec> specs();
 
 Insn decode(uint16_t word);
 
+// Bytes a load, store or cache operation touches: 1, 2 or 4; 32 (a cache
+// line) for pref, ocbi, ocbp, ocbwb; 4 for an fmov, which moves 8 when
+// FPSCR.SZ is set (the decoder can't know); 0 if the instruction doesn't
+// access memory.
+uint32_t access_size(const Insn& insn);
+
+// The memory address an instruction's register-based operand names, given
+// constant registers (PC-relative and GBR-relative forms aren't included).
+// mac.l and mac.w read through two: this is the first.
+template <typename Regs>
+std::optional<uint32_t> register_address(const Insn& i, const Regs& r);
+
 // Text of a valid instruction at address pc, objdump style:
 // "mov.l 0x8c010020,r1", "mov.l r3,@(8,r15)", "bt/s 0x8c0100a4", "fmov @r4+,fr2".
 std::string disasm(const Insn& insn, uint32_t pc);
+
+template <typename Regs>
+std::optional<uint32_t> register_address(const Insn& i, const Regs& r) {
+    const uint32_t size = access_size(i);
+    for (Opnd o : spec(i.op).operands) {
+        switch (o) {
+        case Opnd::at_N: case Opnd::at_inc_N: return r[i.n()];
+        case Opnd::at_M: case Opnd::at_inc_M: return r[i.m()];
+        case Opnd::at_dec_N: if (r[i.n()]) return *r[i.n()] - size; return std::nullopt;
+        case Opnd::at_disp_M1: if (r[i.m()]) return *r[i.m()] + i.disp4(); return std::nullopt;
+        case Opnd::at_disp_M2: if (r[i.m()]) return *r[i.m()] + i.disp4() * 2; return std::nullopt;
+        case Opnd::at_disp_M4: if (r[i.m()]) return *r[i.m()] + i.disp4() * 4; return std::nullopt;
+        case Opnd::at_disp_N4: if (r[i.n()]) return *r[i.n()] + i.disp4() * 4; return std::nullopt;
+        case Opnd::at_r0_N: if (r[0] && r[i.n()]) return *r[0] + *r[i.n()]; return std::nullopt;
+        case Opnd::at_r0_M: if (r[0] && r[i.m()]) return *r[0] + *r[i.m()]; return std::nullopt;
+        default: break;
+        }
+    }
+    return std::nullopt;
+}
 
 }  // namespace qilin::sh4

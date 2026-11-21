@@ -23,13 +23,17 @@
 // test has shown the assumption holds.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "bootfile.hpp"
 #include "decoder.hpp"
+#include "layout.hpp"
 
 namespace qilin {
 
@@ -43,6 +47,7 @@ enum class Kind : uint8_t {
     literal,     // read by a PC-relative mov.w or mov.l
     jump_table,  // 16-bit offsets of a braf switch
     padding,     // zero or nop words between classified things
+    data,        // in a data region of the build's layout
 };
 
 enum class Origin : uint8_t {
@@ -92,12 +97,24 @@ struct Cfg {
     Kind at(uint32_t a) const { return kind[(a - base) / 2]; }
 };
 
-Cfg analyse(const BootFile& boot);
+// With a layout, words of its data regions are data from the start: no
+// function is found in them, and a call or jump into one is reported.
+Cfg analyse(const BootFile& boot, std::span<const Region> regions = {});
+
+// The general registers' constants on entry to each of a function's
+// instructions (a delay slot sees the registers as its branch leaves them),
+// by the same dataflow function discovery uses. An empty optional is "not a
+// constant". GBR isn't tracked.
+using RegConstants = std::array<std::optional<uint32_t>, 16>;
+std::map<uint32_t, RegConstants> register_constants(const BootFile& boot, const Cfg& cfg, const Function& f);
 
 // Developer tools only (std::format).
 std::string summary(const Cfg& cfg);
 std::string to_json(const Cfg& cfg);
-std::string coverage(const Cfg& cfg, const BootFile& boot, bool list, uint32_t& unknown_bytes);
+// unknown_bytes: in the regions that are lifted (all of the image without a layout).
+std::string coverage(const Cfg& cfg, const BootFile& boot, std::span<const Region> regions, bool list, uint32_t& unknown_bytes);
 std::string suspects(const Cfg& cfg);
+// Every run of words of one kind and one owner: address, bytes, kind, owner.
+std::string kind_map(const Cfg& cfg, const BootFile& boot);
 
 }  // namespace qilin

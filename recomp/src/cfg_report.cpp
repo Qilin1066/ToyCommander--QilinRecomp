@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <map>
 
 #include "cfg.hpp"
 
@@ -9,7 +10,8 @@ namespace qilin {
 
 std::string summary(const Cfg& cfg) {
     std::array<size_t, 5> by_origin{};
-    size_t insns = 0, calls = 0, tails = 0, ind_calls = 0, ind_jumps = 0, switches = 0, cases = 0, problems = 0;
+    size_t insns = 0, calls = 0, tails = 0, ind_calls = 0, ind_jumps = 0, problems = 0;
+    std::map<uint32_t, size_t> switches;  // braf -> cases: shared code reaches a switch from several functions
     for (const auto& [entry, f] : cfg.functions) {
         ++by_origin[static_cast<size_t>(f.origin)];
         insns += f.insns.size();
@@ -17,11 +19,10 @@ std::string summary(const Cfg& cfg) {
         tails += f.tail_jumps.size();
         ind_calls += f.indirect_calls.size();
         ind_jumps += f.indirect_jumps.size();
-        switches += f.switches.size();
-        for (const Switch& sw : f.switches) cases += sw.targets.size();
+        for (const Switch& sw : f.switches) switches[sw.braf] = sw.targets.size();
         problems += !f.problems.empty();
     }
-    std::array<size_t, 5> words{};
+    std::array<size_t, 6> words{};
     for (Kind k : cfg.kind) ++words[static_cast<size_t>(k)];
     size_t rejected_calls = 0;
     for (const Rejected& r : cfg.rejected) rejected_calls += r.origin == Origin::call || r.origin == Origin::tail;
@@ -31,7 +32,10 @@ std::string summary(const Cfg& cfg) {
     s += std::format("instructions         {} (counted once per function that reaches them)\n", insns);
     s += std::format("code bytes           {}\n", words[1] * 2);
     s += std::format("literal bytes        {}\n", words[2] * 2);
-    s += std::format("jump tables          {} ({} cases, {} bytes)\n", switches, cases, words[3] * 2);
+    size_t cases = 0;
+    for (const auto& [braf, n] : switches) cases += n;
+    s += std::format("jump tables          {} ({} cases, {} bytes)\n", switches.size(), cases, words[3] * 2);
+    s += std::format("data bytes           {} (the layout's data regions)\n", words[5] * 2);
     s += std::format("direct calls         {}\n", calls);
     s += std::format("constant tail jumps  {}\n", tails);
     s += std::format("indirect calls       {}\n", ind_calls);
@@ -80,44 +84,64 @@ std::string to_json(const Cfg& cfg) {
     return s + "\n]}\n";
 }
 
-std::string coverage(const Cfg& cfg, const BootFile& boot, bool list, uint32_t& unknown_bytes) {
-    std::array<uint32_t, 5> bytes{};
-    for (Kind k : cfg.kind) bytes[static_cast<size_t>(k)] += 2;
+std::string coverage(const Cfg& cfg, const BootFile& boot, std::span<const Region> regions, bool list, uint32_t& unknown_bytes) {
+    // Without a layout, the whole image is one region that must be accounted for.
+    const Region whole{boot.base(), boot.end(), "the whole image", Plan::lift};
+    if (regions.empty()) regions = std::span(&whole, 1);
     struct Run {
         uint32_t address, size;
         bool zero;
     };
+    std::string s = std::format("{:19}  {:9}  {:>7} {:>7} {:>6} {:>6} {:>7} {:>7}  {}\n", "range", "plan", "code", "literal", "tables",
+                                "pad", "data", "unknown", "region");
+    std::array<uint64_t, 6> total{};
     std::vector<Run> runs;
-    uint32_t zero_bytes = 0;
-    for (uint32_t a = boot.base(); a < boot.end();) {
-        if (cfg.at(a) != Kind::unknown) {
-            a += 2;
-            continue;
+    unknown_bytes = 0;
+    for (const Region& r : regions) {
+        std::array<uint32_t, 6> bytes{};
+        for (uint32_t a = std::max(r.begin, boot.base()); a < r.end && a < boot.end(); a += 2) bytes[static_cast<size_t>(cfg.at(a))] += 2;
+        for (size_t k = 0; k < bytes.size(); ++k) total[k] += bytes[k];
+        s += std::format("{:08X}-{:08X}  {:9}  {:7} {:7} {:6} {:6} {:7} {:7}  {}\n", r.begin, r.end, name(r.plan), bytes[1], bytes[2], bytes[3],
+                         bytes[4], bytes[5], bytes[0], r.name);
+        if (r.plan == Plan::lift) unknown_bytes += bytes[0];
+        for (uint32_t a = r.begin; a < r.end;) {
+            if (cfg.at(a) != Kind::unknown) {
+                a += 2;
+                continue;
+            }
+            uint32_t b = a;
+            bool zero = true;
+            while (b < r.end && cfg.at(b) == Kind::unknown) zero &= boot.u16(b) == 0, b += 2;
+            runs.push_back({a, b - a, zero});
+            a = b;
         }
-        uint32_t b = a;
-        bool zero = true;
-        while (b < boot.end() && cfg.at(b) == Kind::unknown) zero &= boot.u16(b) == 0, b += 2;
-        runs.push_back({a, b - a, zero});
-        if (zero) zero_bytes += b - a;
-        a = b;
     }
-    const uint32_t total = boot.size();
-    const auto line = [&](std::string_view what, uint32_t n) { return std::format("{:22} {:8} bytes  {:6.2f}%\n", what, n, 100.0 * n / total); };
-    std::string s;
-    s += line("code", bytes[1]);
-    s += line("literal pools", bytes[2]);
-    s += line("jump tables", bytes[3]);
-    s += line("padding", bytes[4]);
-    s += line("unknown, all zero", zero_bytes);
-    s += line("unknown", bytes[0] - zero_bytes);
-    s += std::format("{} unknown runs; the longest:\n", runs.size());
+    const uint64_t size = boot.size();
+    s += std::format("{:19}  {:9}  {:7} {:7} {:6} {:6} {:7} {:7}  ({:.2f}% unknown)\n", "total", "", total[1], total[2], total[3], total[4],
+                     total[5], total[0], 100.0 * double(total[0]) / double(size));
+    s += std::format("{} unknown runs; {} unknown bytes in lifted regions\n", runs.size(), unknown_bytes);
     std::vector<Run> longest = runs;
     std::ranges::sort(longest, [](const Run& x, const Run& y) { return x.size != y.size ? x.size > y.size : x.address < y.address; });
     for (size_t i = 0; i < longest.size() && i < 10; ++i)
         s += std::format("  {:08X}  {:6} bytes{}\n", longest[i].address, longest[i].size, longest[i].zero ? "  (zero)" : "");
     if (list)
         for (const Run& r : runs) s += std::format("{:08X} {}{}\n", r.address, r.size, r.zero ? " zero" : "");
-    unknown_bytes = bytes[0];
+    return s;
+}
+
+std::string kind_map(const Cfg& cfg, const BootFile& boot) {
+    static constexpr std::string_view kName[] = {"unknown", "code", "literal", "jump_table", "padding", "data"};
+    std::string s;
+    for (uint32_t a = boot.base(); a < boot.end();) {
+        const size_t i = (a - boot.base()) / 2;
+        const Kind k = cfg.kind[i];
+        const uint32_t owner = cfg.owner[i];
+        uint32_t b = a;
+        while (b < boot.end() && cfg.kind[(b - boot.base()) / 2] == k && cfg.owner[(b - boot.base()) / 2] == owner) b += 2;
+        s += owner ? std::format("{:08X} {:6} {:10} fn_{:08X}\n", a, b - a, kName[static_cast<size_t>(k)], owner)
+                   : std::format("{:08X} {:6} {}\n", a, b - a, kName[static_cast<size_t>(k)]);
+        a = b;
+    }
     return s;
 }
 

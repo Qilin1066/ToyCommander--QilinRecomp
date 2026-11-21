@@ -11,9 +11,14 @@
 //   qilin profile <1GUTH.BIN>                 instruction counts of the linear sweep
 //   qilin cfg     <1GUTH.BIN> [--json out.json]
 //                                             function discovery and control flow, summary
-//   qilin coverage <1GUTH.BIN> [--list]       every byte: code, literal pool, jump table, padding
-//                                             or unknown (exit 3 while any byte is unknown)
+//   qilin coverage <1GUTH.BIN> [--list|--map] every byte: code, literal pool, jump table, padding
+//                                             or unknown, per region of the build's layout (exit 3
+//                                             while a lifted region has unknown bytes);
+//                                             --map: every run with the function that claimed it
 //   qilin suspects <1GUTH.BIN>                functions with problems, for review
+//   qilin hwaccess <1GUTH.BIN> [--json out.json]
+//                                             loads, stores and cache operations at constant
+//                                             addresses outside cached RAM, per function
 //
 // Listings are one line per word: address, word, text ("8c010014 d005 mov.l 0x8c01002c,r0").
 // Exit status is non-zero on any error; nothing fails silently.
@@ -27,6 +32,7 @@
 #include <map>
 #include <optional>
 #include <print>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +41,8 @@
 #include "cfg.hpp"
 #include "decoder.hpp"
 #include "gdrom.hpp"
+#include "hwaccess.hpp"
+#include "layout.hpp"
 
 #ifndef QILIN_VERSION
 #define QILIN_VERSION "unknown"
@@ -59,8 +67,9 @@ int usage() {
                "  qilin disasm  [--pc addr] [-o out.txt]\n"
                "  qilin profile <1GUTH.BIN>\n"
                "  qilin cfg     <1GUTH.BIN> [--json out.json]\n"
-               "  qilin coverage <1GUTH.BIN> [--list]\n"
+               "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
                "  qilin suspects <1GUTH.BIN>\n"
+               "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
 }
@@ -219,9 +228,12 @@ int cmd_profile(const std::string& path) {
     return 0;
 }
 
+// The analysis, with the build's layout when the build is a supported one.
+Cfg analyse_boot(const BootFile& boot) { return analyse(boot, layout(boot.sha256)); }
+
 int cmd_cfg(const std::string& path, const std::optional<std::string>& json) {
     const BootFile boot = load_boot(path);
-    const Cfg cfg = analyse(boot);
+    const Cfg cfg = analyse_boot(boot);
     if (json) {
         Out out(json);
         std::print(out.get(), "{}", to_json(cfg));
@@ -231,22 +243,64 @@ int cmd_cfg(const std::string& path, const std::optional<std::string>& json) {
     return 0;
 }
 
-int cmd_coverage(const std::string& path, bool list) {
+int cmd_coverage(const std::string& path, bool list, bool map) {
     const BootFile boot = load_boot(path);
+    const Cfg cfg = analyse_boot(boot);
     uint32_t unknown = 0;
-    std::print("{}", coverage(analyse(boot), boot, list, unknown));
+    const std::string report = coverage(cfg, boot, layout(boot.sha256), list, unknown);
+    std::print("{}", map ? kind_map(cfg, boot) : report);
     return unknown ? 3 : 0;
 }
 
 int cmd_suspects(const std::string& path) {
-    std::print("{}", suspects(analyse(load_boot(path))));
+    std::print("{}", suspects(analyse_boot(load_boot(path))));
+    return 0;
+}
+
+int cmd_hwaccess(const std::string& path, const std::optional<std::string>& json) {
+    const BootFile boot = load_boot(path);
+    const Cfg cfg = analyse_boot(boot);
+    static constexpr std::string_view kKind[] = {"load", "store", "modify", "cache"};
+    std::map<std::string_view, std::pair<std::set<uint32_t>, uint32_t>> regions;  // functions, accesses
+    std::string text, js = "{\"functions\":[\n";
+    bool first = true;
+    size_t functions = 0;
+    for (const auto& [entry, f] : cfg.functions) {
+        const std::vector<HwAccess> found = hardware_accesses(boot, cfg, f);
+        if (found.empty()) continue;
+        ++functions;
+        text += std::format("fn_{:08X}\n", entry);
+        js += std::format("{}{{\"entry\":\"{:08X}\",\"accesses\":[", first ? "" : ",\n", entry);
+        first = false;
+        for (size_t k = 0; k < found.size(); ++k) {
+            const HwAccess& h = found[k];
+            const std::string_view region = hw_region(h.ea);
+            text += std::format("  {:08X}  {:6} {:2}  {:08X}  {}\n", h.pc, kKind[h.kind], h.size, h.ea, region);
+            js += std::format("{}{{\"pc\":\"{:08X}\",\"kind\":\"{}\",\"size\":{},\"ea\":\"{:08X}\",\"region\":\"{}\"}}",
+                              k ? "," : "", h.pc, kKind[h.kind], h.size, h.ea, region);
+            auto& [fns, n] = regions[region];
+            fns.insert(entry);
+            ++n;
+        }
+        js += "]}";
+    }
+    js += "\n]}\n";
+    if (json) {
+        Out out(json);
+        std::print(out.get(), "{}", js);
+        out.close();
+    } else {
+        std::print("{}", text);
+    }
+    std::println("{} functions reach hardware at constant addresses:", functions);
+    for (const auto& [region, v] : regions) std::println("  {:6} accesses in {:4} functions  {}", v.second, v.first.size(), region);
     return 0;
 }
 
 int run(int argc, char** argv) {
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
-    bool list = false;
+    bool list = false, map = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         const auto value = [&](std::optional<std::string>& into) {
@@ -261,6 +315,7 @@ int run(int argc, char** argv) {
         else if (a == "--out") value(out_dir);
         else if (a == "--pc") value(pc);
         else if (a == "--list") list = true;
+        else if (a == "--map") map = true;
         else if (a.starts_with("-")) throw Failure{std::format("unknown option {}", a)};
         else pos.emplace_back(a);
     }
@@ -279,8 +334,9 @@ int run(int argc, char** argv) {
     if (command == "insns") return cmd_insns(input(), out);
     if (command == "profile") return cmd_profile(input());
     if (command == "cfg") return cmd_cfg(input(), json);
-    if (command == "coverage") return cmd_coverage(input(), list);
+    if (command == "coverage") return cmd_coverage(input(), list, map);
     if (command == "suspects") return cmd_suspects(input());
+    if (command == "hwaccess") return cmd_hwaccess(input(), json);
     if (command == "disasm") {
         if (pos.size() != 1) throw Failure{"disasm takes no file"};
         return cmd_disasm(pc ? parse_address(*pc) : kBootFileBase, out);

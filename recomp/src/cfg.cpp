@@ -5,6 +5,7 @@
 #include <format>
 #include <optional>
 #include <set>
+#include <stdexcept>
 
 namespace qilin {
 
@@ -51,7 +52,7 @@ std::string_view name(Origin o) {
 
 namespace {
 
-using Regs = std::array<std::optional<uint32_t>, 16>;
+using Regs = RegConstants;
 
 // Where paths join, a register keeps its constant only if both agree.
 // Returns whether `into` changed.
@@ -62,6 +63,54 @@ bool meet(Regs& into, const Regs& from) {
     return changed;
 }
 
+// The result of a register-to-register or immediate integer operation whose
+// inputs are constants, written to rN (r0 for the #imm logic forms).
+std::optional<uint32_t> fold(const Insn& i, const Regs& r) {
+    const auto& n = r[i.n()];
+    const auto& m = r[i.m()];
+    const auto both = [&](auto f) -> std::optional<uint32_t> {
+        if (n && m) return f(*n, *m);
+        return std::nullopt;
+    };
+    const auto one = [&](const std::optional<uint32_t>& x, auto f) -> std::optional<uint32_t> {
+        if (x) return f(*x);
+        return std::nullopt;
+    };
+    switch (i.op) {
+    case Op::add_imm: return one(n, [&](uint32_t a) { return a + static_cast<uint32_t>(i.imm_s()); });
+    case Op::add: return both([](uint32_t a, uint32_t b) { return a + b; });
+    case Op::sub: return both([](uint32_t a, uint32_t b) { return a - b; });
+    case Op::and_: return both([](uint32_t a, uint32_t b) { return a & b; });
+    case Op::or_: return both([](uint32_t a, uint32_t b) { return a | b; });
+    case Op::xor_: return both([](uint32_t a, uint32_t b) { return a ^ b; });
+    case Op::neg: return one(m, [](uint32_t b) { return 0u - b; });
+    case Op::not_: return one(m, [](uint32_t b) { return ~b; });
+    case Op::extu_b: return one(m, [](uint32_t b) { return b & 0xFFu; });
+    case Op::extu_w: return one(m, [](uint32_t b) { return b & 0xFFFFu; });
+    case Op::exts_b: return one(m, [](uint32_t b) { return static_cast<uint32_t>(static_cast<int8_t>(b)); });
+    case Op::exts_w: return one(m, [](uint32_t b) { return static_cast<uint32_t>(static_cast<int16_t>(b)); });
+    case Op::swap_b: return one(m, [](uint32_t b) { return (b & 0xFFFF0000u) | (b & 0xFFu) << 8 | (b >> 8 & 0xFFu); });
+    case Op::swap_w: return one(m, [](uint32_t b) { return b << 16 | b >> 16; });
+    case Op::shll: case Op::shal: return one(n, [](uint32_t a) { return a << 1; });
+    case Op::shlr: return one(n, [](uint32_t a) { return a >> 1; });
+    case Op::shar: return one(n, [](uint32_t a) { return static_cast<uint32_t>(static_cast<int32_t>(a) >> 1); });
+    case Op::shll2: return one(n, [](uint32_t a) { return a << 2; });
+    case Op::shlr2: return one(n, [](uint32_t a) { return a >> 2; });
+    case Op::shll8: return one(n, [](uint32_t a) { return a << 8; });
+    case Op::shlr8: return one(n, [](uint32_t a) { return a >> 8; });
+    case Op::shll16: return one(n, [](uint32_t a) { return a << 16; });
+    case Op::shlr16: return one(n, [](uint32_t a) { return a >> 16; });
+    default: return std::nullopt;
+    }
+}
+
+// SHC's prologue saves registers first: mov.l rN,@-r15 for r8-r14, or
+// sts.l pr,@-r15.
+bool is_prologue(uint16_t w) {
+    const unsigned reg = (w >> 4) & 15;
+    return ((w & 0xFF0F) == 0x2F06 && reg >= 8 && reg <= 14) || w == 0x4F22;
+}
+
 struct Reject {
     std::string reason;
 };
@@ -70,11 +119,13 @@ bool is_branch(const Insn& i) { return i.valid() && (sh4::spec(i.op).flags & sh4
 
 class Explorer {
 public:
-    Explorer(const BootFile& boot, const Cfg& cfg, const std::set<uint32_t>& candidates)
-        : boot_(boot), cfg_(cfg), candidates_(candidates) {}
+    Explorer(const BootFile& boot, const Cfg& cfg, const std::set<uint32_t>& candidates, const std::set<uint32_t>& entries)
+        : boot_(boot), cfg_(cfg), candidates_(candidates), entries_(entries) {}
 
     // Everything reachable from `entry` without leaving the function, or the
     // reason it can't be one.
+    const std::map<uint32_t, Regs>& states() const { return state_; }
+
     Function run(uint32_t entry, Origin origin) {
         Function f;
         f.entry = entry;
@@ -143,9 +194,31 @@ private:
         case Op::mov: r[i.n()] = r[i.m()]; return;
         default: break;
         }
+        // Integer arithmetic on constants stays constant (addresses are often
+        // built or adjusted this way). Anything else makes its result unknown.
+        if (const auto v = fold(i, r)) {
+            r[i.n()] = *v;
+            return;
+        }
+        // A load from a constant address near the code is a PC-relative read
+        // of the function's own data by another route (mova then fmov @r0,
+        // or mov.l @(disp,r0)): its words are literals too.
+        if ((sh4::spec(i.op).flags & sh4::kLoad) && !(sh4::spec(i.op).flags & sh4::kStore))
+            if (const auto ea = sh4::register_address(i, r);
+                ea && *ea % 2 == 0 && *ea + 2048 > pc && *ea < pc + 2048 && boot_.mapped(*ea, sh4::access_size(i)))
+                literals_[*ea] = std::max(literals_[*ea], sh4::access_size(i));
         const uint16_t w = gpr_written(i);
         for (unsigned k = 0; k < 16; ++k)
             if (w & (1u << k)) r[k].reset();
+    }
+
+    // A branch to another function is a tail call: to an entry an earlier
+    // pass found, or to the start of a compiled prologue, which compiled code
+    // only ever reaches from outside its function.
+    bool is_tail(const Function& f, uint32_t target) const {
+        if (target == f.entry || !boot_.mapped(target, 2)) return false;
+        if (entries_.contains(target)) return true;
+        return target > boot_.base() && is_prologue(boot_.u16(target)) && !is_prologue(boot_.u16(target - 2));
     }
 
     void branch_to(uint32_t target, const Regs& r) {
@@ -256,14 +329,16 @@ private:
                 continue;
             }
             if (flags & sh4::kConditional) {
-                branch_to(*target, r);
+                if (is_tail(f, *target)) f.tail_jumps[pc] = *target;
+                else branch_to(*target, r);
                 pc = next;
                 continue;
             }
             if (flags & sh4::kReturn) return;
             if (i.op == Op::bra) {
                 if (!boot_.mapped(*target, 2)) throw Reject{std::format("{:08X} branches outside the image", pc)};
-                branch_to(*target, r);
+                if (is_tail(f, *target)) f.tail_jumps[pc] = *target;
+                else branch_to(*target, r);
                 return;
             }
             if (i.op == Op::braf) {
@@ -287,6 +362,7 @@ private:
     const BootFile& boot_;
     const Cfg& cfg_;
     const std::set<uint32_t>& candidates_;  // addresses that may be function entries
+    const std::set<uint32_t>& entries_;     // function entries an earlier pass found
     bool guess_ = false;
     std::map<uint32_t, Regs> state_;  // registers on entry to each instruction reached
     std::vector<std::pair<uint32_t, Regs>> todo_;
@@ -297,10 +373,14 @@ private:
 
 class Analysis {
 public:
-    explicit Analysis(const BootFile& boot) : boot_(boot), explorer_(boot, cfg_, candidates_) {
+    Analysis(const BootFile& boot, std::span<const Region> regions, std::set<uint32_t> entries)
+        : boot_(boot), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_) {
         cfg_.base = boot.base();
         cfg_.kind.assign(boot.size() / 2, Kind::unknown);
         cfg_.owner.assign(boot.size() / 2, 0);
+        for (const Region& r : regions)
+            if (r.plan == Plan::data)
+                for (uint32_t a = std::max(r.begin, boot.base()); a < r.end && a < boot.end(); a += 2) cfg_.kind[index(a)] = Kind::data;
     }
 
     Cfg run() {
@@ -315,7 +395,8 @@ public:
                 for (const auto& [a, n] : f.literals)
                     if (n == 4) candidate(boot_.u32(a));
             for (uint32_t a = boot_.base(); a + 4 <= boot_.end(); a += 4)
-                if (kind(a) == Kind::unknown && kind(a + 2) == Kind::unknown) candidate(boot_.u32(a));
+                if ((kind(a) == Kind::unknown || kind(a) == Kind::data) && (kind(a + 2) == Kind::unknown || kind(a + 2) == Kind::data))
+                    candidate(boot_.u32(a));
             const size_t before = cfg_.functions.size();
             const std::vector<uint32_t> round(candidates_.begin(), candidates_.end());
             for (uint32_t c : round) {
@@ -335,6 +416,16 @@ public:
                 if (b >= boot_.end() || kind(b) != Kind::unknown) continue;
                 const size_t before = cfg_.functions.size();
                 add(b, Origin::orphan);
+                drain();
+                added |= cfg_.functions.size() != before;
+            }
+            // Where the gap's first word wasn't a function, the gap may still
+            // hold one after some data: try where a compiled prologue starts
+            // (the first of a run of register pushes).
+            for (uint32_t a = boot_.base() + 2; a < boot_.end(); a += 2) {
+                if (kind(a) != Kind::unknown || !is_prologue(boot_.u16(a)) || is_prologue(boot_.u16(a - 2))) continue;
+                const size_t before = cfg_.functions.size();
+                add(a, Origin::orphan);
                 drain();
                 added |= cfg_.functions.size() != before;
             }
@@ -398,7 +489,7 @@ private:
     std::optional<std::string> dead_end(const Function& f, std::set<uint32_t>& visiting) {
         const auto check = [&](uint32_t site, uint32_t target) -> std::optional<std::string> {
             if (cfg_.functions.contains(target) || !visiting.insert(target).second) return std::nullopt;
-            if (kind(target) == Kind::literal || kind(target) == Kind::jump_table)
+            if (kind(target) == Kind::literal || kind(target) == Kind::jump_table || kind(target) == Kind::data)
                 return std::format("{:08X} calls {:08X}, which is data", site, target);
             try {
                 const Function callee = explorer_.run(target, Origin::call);
@@ -423,10 +514,12 @@ private:
         for (uint32_t pc : f.insns) {
             const Kind k = kind(pc);
             if (k == Kind::literal || k == Kind::jump_table) return std::format("its code at {:08X} is another function's data", pc);
+            if (k == Kind::data) return std::format("its code at {:08X} is in a data region", pc);
         }
         for (const auto& [a, n] : f.literals)
             for (uint32_t o = 0; o < n; o += 2)
                 if (kind(a + o) == Kind::code) return std::format("its literal at {:08X} is another function's code", a);
+                else if (kind(a + o) == Kind::data && guess) return std::format("its literal at {:08X} is in a data region", a);
         for (const Switch& sw : f.switches)
             for (uint32_t k = 0; k < sw.targets.size(); ++k)
                 if (kind(sw.table + 2 * k) == Kind::code) return std::format("its jump table at {:08X} is another function's code", sw.table);
@@ -451,6 +544,7 @@ private:
     const BootFile& boot_;
     Cfg cfg_;
     std::set<uint32_t> candidates_;
+    std::set<uint32_t> entries_;
     Explorer explorer_;
     std::vector<std::pair<uint32_t, Origin>> work_;
     std::set<uint32_t> guessed_, rejected_;
@@ -458,6 +552,33 @@ private:
 
 }  // namespace
 
-Cfg analyse(const BootFile& boot) { return Analysis(boot).run(); }
+// Tail calls found in one pass (a branch to a function found later) change
+// what the functions before them contain, so the analysis runs again with
+// every entry found so far until the set of entries no longer changes.
+Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
+    std::set<uint32_t> entries;
+    for (int pass = 0;; ++pass) {
+        Cfg cfg = Analysis(boot, regions, entries).run();
+        // Keep every entry seen: one dropped in a later pass would make it oscillate.
+        const size_t before = entries.size();
+        for (const auto& [entry, f] : cfg.functions) entries.insert(entry);
+        if (entries.size() == before) return cfg;
+        if (pass == 8) throw std::logic_error("function discovery doesn't converge");
+    }
+}
+
+std::map<uint32_t, RegConstants> register_constants(const BootFile& boot, const Cfg& cfg, const Function& f) {
+    const std::set<uint32_t> none;
+    std::set<uint32_t> entries;
+    for (const auto& [entry, fn] : cfg.functions) entries.insert(entry);
+    Explorer e(boot, cfg, none, entries);
+    try {
+        // Not as a guess: the function is already known to be good.
+        (void)e.run(f.entry, Origin::call);
+    } catch (const Reject& r) {
+        throw std::logic_error(std::format("register_constants: fn_{:08X} no longer explores: {}", f.entry, r.reason));
+    }
+    return e.states();
+}
 
 }  // namespace qilin

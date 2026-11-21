@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.2.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.3.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -71,6 +71,8 @@ add_library(qilin_core STATIC
     recomp/src/decoder.cpp
     recomp/src/cfg.cpp
     recomp/src/cfg_report.cpp
+    recomp/src/hwaccess.cpp
+    recomp/src/layout.cpp
 )
 target_include_directories(qilin_core PUBLIC recomp/src)
 target_link_libraries(qilin_core PUBLIC qilin_disc PRIVATE qilin_warnings)
