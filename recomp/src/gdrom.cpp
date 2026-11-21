@@ -135,6 +135,31 @@ std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
 
 std::expected<std::vector<uint8_t>, std::string> Disc::read_sector(uint32_t sector) const { return read(sector, kSectorData); }
 
+std::expected<std::vector<int16_t>, std::string> Disc::read_audio(uint32_t sector, uint32_t count) const {
+    std::vector<int16_t> out;
+    out.reserve(size_t{count} * (kRawSector / 2));
+    const Track* track = nullptr;
+    std::ifstream f;
+    uint8_t raw[kRawSector];
+    for (uint32_t n = 0; n < count; ++n, ++sector) {
+        const std::string name = "sector " + std::to_string(sector);
+        if (!track || sector < track->file_start || sector >= track->end()) {
+            track = nullptr;
+            for (const Track& t : tracks_)
+                if (t.high_density == (sector >= kHighDensityStart) && sector >= t.file_start && sector < t.end()) track = &t;
+            if (!track) return fail(name + " is not on the disc");
+            if (!track->audio) return fail(name + " is in data track " + std::to_string(track->number));
+            f = std::ifstream(track->file, std::ios::binary);
+            if (!f) return fail("cannot open " + track->file.string());
+            f.seekg(static_cast<std::streamoff>(uint64_t(sector - track->file_start) * kRawSector));
+        }
+        f.read(reinterpret_cast<char*>(raw), kRawSector);
+        if (!f) return fail("cannot read " + name + " from " + track->file.filename().string());
+        for (uint32_t k = 0; k < kRawSector; k += 2) out.push_back(static_cast<int16_t>(raw[k] | raw[k + 1] << 8));
+    }
+    return out;
+}
+
 std::expected<std::vector<uint8_t>, std::string> Disc::read(uint32_t sector, uint64_t bytes) const {
     std::vector<uint8_t> out;
     out.reserve(bytes);

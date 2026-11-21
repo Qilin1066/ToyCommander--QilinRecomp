@@ -30,6 +30,7 @@
 #include "pvr.hpp"
 #include "rtc.hpp"
 #include "sh4.hpp"
+#include "sound.hpp"
 #include "system.hpp"
 #include "ta.hpp"
 #include "threads.hpp"
@@ -78,9 +79,10 @@ int main(int argc, char** argv) {
     toycommander::insert_disc(*disc);
     toycommander::map_pvr();
     toycommander::ta::map();
-    toycommander::map_aica();
+    toycommander::map_aica(*disc);
     toycommander::map_sh4_peripherals();
     toycommander::video::start();
+    toycommander::sound::start();
     toycommander::start_interrupts();
 
     rt::Context c;

@@ -1076,6 +1076,15 @@ void test_gdrom() {
     CHECK(disc->read_sector(9).has_value());
     CHECK(!disc->read_sector(45001).has_value());   // no sync pattern
     CHECK(disc->read(45016, 3 * 2048).has_value()); // several sectors in one read
+    // CD audio: 588 left/right pairs a sector, little-endian.
+    {
+        const auto pcm = disc->read_audio(45025, 2);
+        CHECK(pcm.has_value() && pcm->size() == 2 * 1176 && (*pcm)[0] == 0x3333 && pcm->back() == 0x3333);
+        CHECK(!disc->read_audio(45000, 1).has_value());  // a data track
+        CHECK(!disc->read_audio(45059, 2).has_value());  // runs off track 4 into track 5's data
+        const auto single = disc->read_audio(10, 12);    // track 2, the single-density area's
+        CHECK(single.has_value() && single->size() == 12 * 1176 && (*single)[5] == 0x5555);
+    }
 
     // A sector of another mode stops the read.
     FakeDisc::put_sector(fake.track[2], 1, std::vector<uint8_t>(2048, 0), 2);

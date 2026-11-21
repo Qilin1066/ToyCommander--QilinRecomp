@@ -5,6 +5,7 @@
 #include "chain.hpp"
 #include "gdrom.hpp"
 #include "guest.hpp"
+#include "sound.hpp"
 #include "system.hpp"
 
 namespace toycommander {
@@ -21,7 +22,7 @@ enum Command : uint32_t {
     kDmaRead = 17,  // the same, through the system bus's GD-ROM DMA, which ends with event 0xA40
     kInit = 24,     // the drive's initialisation: no parameters
     kVersion = 40,  // the drive's version string, to the address in the first parameter
-    kPlay = 20,     // CD audio: {start, end, repeats, 0}, frame addresses
+    kPlay = 20,     // CD audio: {first track, last track, repeats, 0}
     kPlay2 = 21,    // CD audio: the same, in minutes:seconds:frames
     kPause = 22,    // CD audio: pause
     kRelease = 23,  // CD audio: go on from the pause (the engine's 0x8C049B4C, through gdFs's 0x8C0B250E: {0, 0})
@@ -37,13 +38,8 @@ struct Request {
 };
 Request g_last;
 
-// CD audio: what the drive plays (the mixer will read the tracks from the
-// disc reader); paused or stopped otherwise. The drive's state reads 3
-// (playing) while it plays, 1 (paused) otherwise.
-struct CdAudio {
-    bool playing = false;
-    uint32_t start = 0, end = 0, repeats = 0, at = 0;
-} g_cd;
+// CD audio is the sound chip's to play (sound.cpp): its external inputs
+// are the drive's audio. Its state is read from there.
 uint32_t g_next_id = 1;
 
 // The GD-ROM DMA's end (the system bus's event 0xA40), raised by a DMA read
@@ -108,25 +104,28 @@ void write_toc(uint32_t area, uint32_t to) {
 // length, 14; byte 4 the track's control and address nibbles (as in the
 // table of contents: 0x01 for an audio track), 5 its number, 6 the index;
 // 7-9 the frame within the track and 11-13 the frame address on the disc,
-// high byte first. The position is where the play was started: it moves
-// once the mixer plays the track. Toy Racer's audio layer asks every frame
-// (ToyRacer--QilinRecomp wrote this; nothing here has sent it yet). Other
-// formats and lengths stop.
+// high byte first: where the drive is, as it plays (sound.cpp). Toy
+// Racer's audio layer asks every frame (ToyRacer--QilinRecomp wrote this;
+// nothing here has sent it yet). Other formats and lengths stop.
 uint32_t write_subcode(uint32_t format, uint32_t bytes, uint32_t to) {
     if (!g_disc) rt::fatal("gdrom: no disc");
+    const sound::CdState cd = [] {
+        auto held = sound::lock();
+        return sound::cd_state();
+    }();
     if (format != 1 || bytes != 14) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, format << 16 | (bytes & 0xFFFFu)};
     uint8_t q[14] = {};
-    q[1] = g_cd.playing ? 0x11 : g_cd.at != 0 ? 0x12 : 0x15;
+    q[1] = cd.playing ? 0x11 : cd.at != 0 ? 0x12 : 0x15;
     q[3] = 14;
-    if (g_cd.at != 0) {
-        const uint32_t sector = g_cd.at - kFrameOffset;
+    if (cd.at != 0) {
+        const uint32_t sector = cd.at - kFrameOffset;
         for (const auto& t : g_disc->tracks()) {
             if (sector < t.start || sector >= t.end()) continue;
             const uint32_t in_track = sector - t.start;
             q[4] = t.audio ? 0x01 : 0x41, q[5] = static_cast<uint8_t>(t.number), q[6] = 1;
             q[7] = static_cast<uint8_t>(in_track >> 16), q[8] = static_cast<uint8_t>(in_track >> 8), q[9] = static_cast<uint8_t>(in_track);
         }
-        q[11] = static_cast<uint8_t>(g_cd.at >> 16), q[12] = static_cast<uint8_t>(g_cd.at >> 8), q[13] = static_cast<uint8_t>(g_cd.at);
+        q[11] = static_cast<uint8_t>(cd.at >> 16), q[12] = static_cast<uint8_t>(cd.at >> 8), q[13] = static_cast<uint8_t>(cd.at);
     }
     for (uint32_t k = 0; k < 14; ++k) rt::st8(to + k, q[k]);
     return 14;
@@ -137,16 +136,25 @@ void gd_send_command(rt::Context& c) {
     Request r{g_next_id++, 0};
     switch (command) {
     case kInit: break;
-    case kPlay:
-        g_cd = {true, rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8), rt::ld32(c.r[5])};
+    case kPlay: {
+        auto held = sound::lock();
+        sound::cd_play(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8));
         break;
+    }
     case kToc: write_toc(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4)); break;
     case kPlay2: throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
-    case kPause: g_cd.playing = false; break;
+    case kPause: {
+        auto held = sound::lock();
+        sound::cd_pause();
+        break;
+    }
     case kRelease:
         // Only after a play, and with the parameter the game sends (0).
-        if (g_cd.at == 0 || rt::ld32(c.r[5]) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
-        g_cd.playing = true;
+        if (rt::ld32(c.r[5]) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+        {
+            auto held = sound::lock();
+            sound::cd_resume();
+        }
         break;
     case kSubcode: r.bytes = write_subcode(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8)); break;
     case kPioRead:
@@ -199,7 +207,12 @@ void gd_init(rt::Context&) {}
 // gdFs requires; 6, the lid open, is what it would wait on). Returns 0, the
 // state read (gdd takes 1 as "busy, ask again").
 void gd_check_drive(rt::Context& c) {
-    rt::st32(c.r[4], g_cd.playing ? 3 : 1), rt::st32(c.r[4] + 4, 0x80);
+    bool playing;
+    {
+        auto held = sound::lock();
+        playing = sound::cd_state().playing;
+    }
+    rt::st32(c.r[4], playing ? 3 : 1), rt::st32(c.r[4] + 4, 0x80);
     c.r[0] = 0;
 }
 

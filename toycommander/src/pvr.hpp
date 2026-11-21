@@ -25,5 +25,7 @@ void set_pvr_register(uint32_t a, uint32_t v);
 const uint32_t* pvr_palette();
 // Sets a normal event's bit in the interrupt status (0x005F6900).
 void raise_event(unsigned bit);
+// An external event (0x005F6904): bit 1 is the sound chip's interrupt.
+void raise_external_event(unsigned bit);
 
 }  // namespace toycommander

@@ -46,19 +46,28 @@ void raise_blanks() {
 }
 
 // The level-4 interrupt: the system bus's normal events 12-20 enabled in
-// IML4 (0x005F6920; Shinobi's chains set the bits, chain.cpp), which
-// Shinobi's level-4 handler takes: it acknowledges each and runs the
-// handlers chained on its event (0xA00 + 0x20 * (bit - 12)). The Maple
+// IML4 (0x005F6920) and its external events 0-3 enabled in 0x005F6924
+// (Shinobi's chains set the bits, chain.cpp), which Shinobi's level-4
+// handler takes: it acknowledges each and runs the handlers chained on its
+// event (0xA00 + 0x20 * (bit - 12); 0xB00 + 0x20 * bit). The Maple
 // driver's DMA-end handlers (event 0xA00) run there, bu's scheduler pass
-// among them. Returns whether one was held back by IMASK.
+// among them, and the audio manager's handler of the sound chip's interrupt
+// (0xB20). Returns whether one was held back by IMASK.
 bool level4(rt::Context& c) {
     for (int n = 0; n < 64; ++n) {
-        const uint32_t pending = pvr_register(0x005F6900u) & pvr_register(0x005F6920u) & 0x001FF000u;
-        if (!pending) return false;
+        const uint32_t normal = pvr_register(0x005F6900u) & pvr_register(0x005F6920u) & 0x001FF000u;
+        const uint32_t external = pvr_register(0x005F6904u) & pvr_register(0x005F6924u) & 0xFu;
+        if (!normal && !external) return false;
         if (((c.sr >> 4) & 15u) >= 4) return true;
-        const unsigned bit = static_cast<unsigned>(std::countr_zero(pending));
-        set_pvr_register(0x005F6900u, 1u << bit);
-        raise_bus_event(c, 0xA00u + 0x20u * (bit - 12));
+        if (normal) {
+            const unsigned bit = static_cast<unsigned>(std::countr_zero(normal));
+            set_pvr_register(0x005F6900u, 1u << bit);
+            raise_bus_event(c, 0xA00u + 0x20u * (bit - 12));
+        } else {
+            const unsigned bit = static_cast<unsigned>(std::countr_zero(external));
+            set_pvr_register(0x005F6904u, 1u << bit);
+            raise_bus_event(c, 0xB00u + 0x20u * bit);
+        }
     }
     return false;
 }

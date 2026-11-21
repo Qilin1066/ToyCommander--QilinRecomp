@@ -195,5 +195,9 @@ void raise_event(unsigned bit) {
     reg(kStatusNormal) |= 1u << bit;
     interrupt_pending();
 }
+void raise_external_event(unsigned bit) {
+    reg(kStatusExternal) |= 1u << bit;
+    interrupt_pending();
+}
 
 }  // namespace toycommander
