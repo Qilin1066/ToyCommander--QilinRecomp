@@ -12,10 +12,17 @@
 #include <thread>
 #include <vector>
 
+#include <SDL3/SDL.h>
+
+#include "clock.hpp"
 #include "guest.hpp"
+#include "menu.hpp"
+#include "natives.hpp"
 #include "pvr.hpp"
 #include "qilin/host/display.hpp"
+#include "qilin/host/paths.hpp"
 #include "renderer.hpp"
+#include "settings.hpp"
 #include "system.hpp"
 #include "ta.hpp"
 
@@ -27,6 +34,9 @@ namespace {
 
 std::unique_ptr<qilin::host::Display> g_display;
 std::unique_ptr<renderer::Renderer> g_renderer;
+Settings g_settings;
+std::filesystem::path g_data;
+std::unique_ptr<Menu> g_menu;
 std::thread::id g_thread;
 std::string g_shot_folder;
 uint64_t g_shot_every = 60, g_pictures = 0;
@@ -112,15 +122,34 @@ void shot(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
 }  // namespace
 
 void start() {
+    g_data = qilin::host::user_folder();
+    g_settings = load_settings(g_data);
+    set_console(g_settings.language, g_settings.stereo);
     qilin::host::Display::Options o;
     o.width = 1280, o.height = 960;
     const char* headless = std::getenv("QILIN_HEADLESS");
     o.headless = headless && *headless && *headless != '0';
+    o.fullscreen = g_settings.fullscreen;
+    o.monitor = g_settings.monitor;
+    o.picture = picture_of(g_settings);
+    qilin::host::Gpu::prefer(g_settings.gpu);
     g_display = std::make_unique<qilin::host::Display>(o);
     g_thread = std::this_thread::get_id();
+    g_scale = g_settings.scale;
+    if (g_scale == 0) {  // auto: the smallest whole multiple whose 480 picture lines fill the screen's height
+        int h = 0;
+        if (auto* w = static_cast<SDL_Window*>(g_display->sdl_window()))
+            if (const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w)))
+                h = int(float(m->h) * (m->pixel_density > 0 ? m->pixel_density : 1.0f));
+        g_scale = h > 0 ? static_cast<uint32_t>(std::clamp((h + 479) / 480, 1, 8)) : 2u;
+    }
     if (const char* s = std::getenv("QILIN_SCALE")) g_scale = static_cast<uint32_t>(std::atoi(s));
     if (g_scale < 1 || g_scale > 8) rt::fatal("QILIN_SCALE must be 1 to 8");
     g_renderer = std::make_unique<renderer::Renderer>(g_display->gpu(), g_scale);
+    if (!o.headless) {
+        g_menu = std::make_unique<Menu>(*g_display, g_settings, g_data);
+        g_menu->set_running_scale(g_scale);
+    }
     if (const char* s = std::getenv("QILIN_SHOT")) {
         g_shot_folder = s;
         if (const size_t comma = g_shot_folder.find(','); comma != std::string::npos) {
@@ -161,9 +190,38 @@ void render() {
     g_drawn = true;
 }
 
+// The settings menu: once per vertical blank on the window's thread. While
+// it's open the game parks here, its time stopped, and the last picture is
+// shown again under the menu.
+void run_menu() {
+    if (!g_menu || std::this_thread::get_id() != g_thread) return;
+    g_menu->tick();
+    if (!g_menu->wants_pause()) return;
+    pause_guest_time(true);
+    g_menu->set_parked(true);
+    while (g_menu->wants_pause()) {
+        if (!g_display->poll()) {
+            std::fflush(nullptr);
+            std::_Exit(0);
+        }
+        g_menu->tick();
+        if (g_menu->quit_requested()) {
+            rt::log("quit from the settings menu");
+            std::fflush(nullptr);
+            std::_Exit(0);  // guest threads are parked on host threads: no static destructors
+        }
+        if (!g_menu->wants_pause()) break;
+        g_display->present_again();
+        if (!g_settings.vsync) SDL_Delay(8);  // without vsync the menu needn't spin
+    }
+    g_menu->set_parked(false);
+    pause_guest_time(false);
+}
+
 void vblank() {
     if (!g_renderer) return;
     poll();
+    run_menu();
     if (!g_drawn) return;
     // The frame buffer the display reads, if the game has drawn it; else the
     // one drawn last.
@@ -230,34 +288,54 @@ std::vector<Press> scripted_presses() {
 }
 }  // namespace
 
+namespace {
+// The bindings (settings.hpp) with each key's code looked up once, again
+// when the menu changes them.
+struct Input {
+    Binding::Kind kind;
+    uint32_t pad;
+    int key;
+};
+std::vector<Input> g_inputs[kControlCount];
+bool g_inputs_ready = false;
+
+void look_up_controls() {
+    for (unsigned c = 0; c < kControlCount; ++c) {
+        g_inputs[c].clear();
+        for (const Binding& b : g_settings.controls[c])
+            g_inputs[c].push_back({b.kind, b.pad, b.kind == Binding::kKey ? g_display->key_code(b.key.c_str()) : -1});
+    }
+    g_inputs_ready = true;
+}
+}  // namespace
+
 maple::Controls controls(unsigned port) {
     maple::Controls c;
     if (port != 0 || !g_display) return c;
     c.connected = true;  // port A always has a pad: the keyboard if nothing else
+    if (g_menu && g_menu->is_open()) return c;  // the menu has the input
+    if (!g_inputs_ready || (g_menu && g_menu->take_controls_changed())) look_up_controls();
     const qilin::host::Display::PadState p = g_display->pad_state();
-    using namespace qilin::host;
+    const uint32_t all = g_display->buttons();
+    bool on[kControlCount] = {};
+    for (unsigned k = 0; k < kControlCount; ++k)
+        for (const Input& in : g_inputs[k])
+            on[k] = on[k] || (in.kind == Binding::kPad && (p.buttons & in.pad)) || (in.kind == Binding::kKey && in.key >= 0 && g_display->key_down(in.key)) ||
+                    (in.kind == Binding::kMouse && (all & qilin::host::kPadClick));
     static constexpr struct {
-        uint32_t host;
+        Control control;
         uint16_t dc;
-    } kButtons[] = {{kPadA, maple::kA}, {kPadB, maple::kB}, {kPadX, maple::kX}, {kPadY, maple::kY}, {kPadStart, maple::kStart},
-                    {kPadUp, maple::kUp}, {kPadDown, maple::kDown}, {kPadLeft, maple::kLeft}, {kPadRight, maple::kRight}};
+    } kButtons[] = {{kCtlA, maple::kA}, {kCtlB, maple::kB}, {kCtlX, maple::kX}, {kCtlY, maple::kY}, {kCtlStart, maple::kStart},
+                    {kCtlUp, maple::kUp}, {kCtlDown, maple::kDown}, {kCtlLeft, maple::kLeft}, {kCtlRight, maple::kRight}};
     for (const auto& b : kButtons)
-        if (p.buttons & b.host) c.buttons |= b.dc;
+        if (on[b.control]) c.buttons |= b.dc;
+    // The pad's stick and triggers in full; a bound input all the way.
     const auto byte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-    c.lt = byte(p.lt), c.rt = byte(p.rt);
+    c.lt = on[kCtlL] ? 255 : byte(p.lt), c.rt = on[kCtlR] ? 255 : byte(p.rt);
     c.x = static_cast<uint8_t>(std::lround(std::clamp(p.lx, -1.0f, 1.0f) * 127.5f + 127.5f));
     c.y = static_cast<uint8_t>(std::lround(std::clamp(p.ly, -1.0f, 1.0f) * 127.5f + 127.5f));
-    // The keyboard.
-    static const int keys[] = {g_display->key_code("Up"), g_display->key_code("Down"), g_display->key_code("Left"),
-                               g_display->key_code("Right"), g_display->key_code("Return"), g_display->key_code("Z"),
-                               g_display->key_code("X"), g_display->key_code("A"), g_display->key_code("S"),
-                               g_display->key_code("Q"), g_display->key_code("W")};
-    static constexpr uint16_t kKeyButtons[] = {maple::kUp, maple::kDown, maple::kLeft, maple::kRight, maple::kStart, maple::kA, maple::kB,
-                                               maple::kX, maple::kY};
-    for (size_t k = 0; k < std::size(kKeyButtons); ++k)
-        if (g_display->key_down(keys[k])) c.buttons |= kKeyButtons[k];
-    if (g_display->key_down(keys[9])) c.lt = 255;
-    if (g_display->key_down(keys[10])) c.rt = 255;
+    if (on[kCtlStickLeft] != on[kCtlStickRight]) c.x = on[kCtlStickLeft] ? 0 : 255;
+    if (on[kCtlStickUp] != on[kCtlStickDown]) c.y = on[kCtlStickUp] ? 0 : 255;
     static const std::vector<Press> presses = scripted_presses();
     for (const Press& p2 : presses)
         if (g_pictures >= p2.from && g_pictures < p2.from + 10) {

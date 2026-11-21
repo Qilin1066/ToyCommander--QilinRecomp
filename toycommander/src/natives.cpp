@@ -78,9 +78,9 @@ void shinobi_set_work_area(rt::Context& c) {
 }
 
 // The console's settings, which Shinobi reads from its flash memory and an
-// I/O port: a USA console (the disc's area), English, stereo, a VGA cable
-// (640x480 progressive, what a PC shows best). The language will come from
-// the settings file (toycommander.ini, docs/naming.md).
+// I/O port: a USA console (the disc's area), a VGA cable (640x480
+// progressive, what a PC shows best), and the language and sound mode the
+// settings file gives (toycommander.ini: set_console).
 struct Console {
     uint32_t area = '1';       // the factory record's byte 10: '0' Japan, '1' the Americas, '2' Europe
     uint32_t broadcast = '0';  // its byte 12: '0' NTSC, '1' PAL, '2' PAL-M, '3' PAL-N
@@ -88,6 +88,14 @@ struct Console {
     uint32_t sound = 0;        // the user's: 0 stereo, 1 mono
     uint32_t cable = 0;        // the port's bits 9-8: 0 VGA, 2 RGB, 3 composite
 } g_console;
+}  // namespace
+
+void set_console(unsigned language, bool stereo) {
+    g_console.language = language;
+    g_console.sound = stereo ? 0 : 1;
+}
+
+namespace {
 
 // Each query writes its value through r4 and returns 0 (-1 for a null r4).
 void put_setting(rt::Context& c, uint32_t value) {

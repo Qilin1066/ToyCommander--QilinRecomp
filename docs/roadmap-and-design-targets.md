@@ -52,7 +52,7 @@ All enhancements live behind a settings file (`toycommander.ini`) with presets, 
 - *Desktop:* scaled resolution, 16× AF, MSAA, widescreen, high refresh rate.
 
 ### The settings menu
-The same menu as the other recomps (Dear ImGui; Punch-Out's `punchout/src/menu.cpp` is the model, and the four are kept in step):
+✅ (v0.10.0's bring-up: `docs/runtime.md`, step 29.) The same menu as the other recomps (Dear ImGui; Punch-Out's `punchout/src/menu.cpp` is the model, and the four are kept in step):
 - **Opening:** F1 or Esc; on a controller, Back + Start. It pauses the game and saves the settings on close. **Close** and **Quit the game** sit top right.
 - **Controls:** the controllers found, rumble, every button of the Dreamcast controller set by pressing it (kept in `[controls]`), back to the defaults.
 - **Display:** the window (full screen with F11 or Alt+Enter, which display), the picture (whole multiples, fit, or fill the window; plain or CRT television with scanlines and phosphor stripes; smooth), vsync, frame times (F3), refresh rate (full screen at a multiple of 60 Hz, variable refresh), "look at the picture" (the menu hidden while held).

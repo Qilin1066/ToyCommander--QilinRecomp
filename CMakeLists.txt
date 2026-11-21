@@ -179,6 +179,27 @@ if(QILIN_HOST)
     target_link_libraries(qilin_volk PUBLIC Vulkan::Headers ${CMAKE_DL_LIBS})
     target_compile_definitions(qilin_volk PUBLIC VK_NO_PROTOTYPES)
 
+    # Dear ImGui (MIT) for the settings menu, as the other Qilin recomps draw
+    # theirs: the same commit (v1.93.0), its core and its SDL3 and Vulkan
+    # backends, fetched and pinned. Its Vulkan backend loads its functions
+    # through volk (no prototypes).
+    FetchContent_Declare(imgui
+        URL https://github.com/ocornut/imgui/archive/c1aaac65e896a45f81f47a4d68f9959e0f86c859.tar.gz
+        URL_HASH SHA256=b3d8f99838bb3ff05e14185562345f85e00c032da4d8fc277608d7898d847114)
+    FetchContent_MakeAvailable(imgui)
+    add_library(qilin_imgui STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    target_include_directories(qilin_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+    target_compile_definitions(qilin_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES VK_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+    target_link_libraries(qilin_imgui PUBLIC SDL3::SDL3-static Vulkan::Headers)
+    if(MSVC)
+        target_compile_options(qilin_imgui PRIVATE /W0)  # third-party code: its warnings aren't ours
+    else()
+        target_compile_options(qilin_imgui PRIVATE -w)
+    endif()
+
     add_library(qilin_host STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp)
     target_include_directories(qilin_host PUBLIC host/include)
     # The game's name in messages, the window's title and the data folder.
@@ -188,7 +209,7 @@ if(QILIN_HOST)
     # (On the sources, so it comes after -Wextra on the command line.)
     if(NOT MSVC)
         set_source_files_properties(host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/tests/vktest.cpp
-                                    toycommander/src/renderer.cpp toycommander/tests/render_test.cpp
+                                    toycommander/src/renderer.cpp toycommander/src/menu.cpp toycommander/tests/render_test.cpp
                                     PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)
     endif()
 
@@ -206,6 +227,19 @@ if(QILIN_HOST)
     target_link_libraries(toycommander_render_test PRIVATE qilin_host qilin_warnings)
     add_test(NAME toycommander_render_test COMMAND toycommander_render_test)
     set_tests_properties(toycommander_render_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The settings file and the settings menu, built here (so CI compiles them
+    # with every compiler) and linked into qilin_run.
+    add_library(toycommander_menu STATIC toycommander/src/settings.cpp toycommander/src/menu.cpp)
+    target_include_directories(toycommander_menu PUBLIC toycommander/src recomp/runtime)
+    target_link_libraries(toycommander_menu PUBLIC qilin_host qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
+    target_compile_definitions(toycommander_menu PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
+
+    # The settings file's reader and writer (from Punch-Out's).
+    add_executable(toycommander_settings_test toycommander/tests/settings_test.cpp toycommander/src/settings.cpp)
+    target_include_directories(toycommander_settings_test PRIVATE toycommander/src recomp/runtime host/include)
+    target_link_libraries(toycommander_settings_test PRIVATE qilin_warnings)
+    add_test(NAME toycommander_settings_test COMMAND toycommander_settings_test)
 
     add_executable(qilin_frame_times_test host/tests/frame_times_test.cpp)
     target_include_directories(qilin_frame_times_test PRIVATE host/include)
@@ -246,7 +280,8 @@ if(QILIN_GAME_BOOT)
     add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/texture.cpp toycommander/src/renderer.cpp toycommander/src/video.cpp toycommander/src/maple.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp toycommander/src/ta.cpp toycommander/src/interrupts.cpp toycommander/src/threads.cpp toycommander/src/aica.cpp toycommander/src/sound.cpp ${QILIN_RT_SOURCES} ${gen_sources})
     target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
     find_package(Threads REQUIRED)
-    target_link_libraries(qilin_run PRIVATE qilin_disc qilin_host qilin_warnings Threads::Threads)
+    target_link_libraries(qilin_run PRIVATE qilin_disc toycommander_menu qilin_host qilin_imgui SDL3::SDL3-static qilin_warnings Threads::Threads)
+    target_compile_definitions(qilin_run PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
     if(QILIN_RUN_CHECKED)
         target_compile_definitions(qilin_run PRIVATE QILIN_CHECKED_MEMORY)
     endif()

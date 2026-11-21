@@ -1,5 +1,6 @@
-// The guest's time: what the timers, the video timing and the frame pacing
-// read. For now the host's steady clock since start.
+// The guest's time: what the timers, the video timing, the sound and the
+// frame pacing read. The host's steady clock since start, less the time the
+// game spent paused (the settings menu).
 #pragma once
 
 #include <cstdint>
@@ -7,5 +8,7 @@
 namespace toycommander {
 
 uint64_t guest_ns();
+// Stops the guest's time (true) and starts it again (false).
+void pause_guest_time(bool paused);
 
 }  // namespace toycommander
