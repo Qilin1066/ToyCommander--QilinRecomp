@@ -56,8 +56,8 @@ constexpr bool ignore_texture_alpha(uint32_t tsp) { return (tsp >> 19) & 1u; }
 constexpr uint32_t shading(uint32_t tsp) { return (tsp >> 6) & 3u; }
 constexpr uint32_t u_size(uint32_t tsp) { return 8u << ((tsp >> 3) & 7u); }
 constexpr uint32_t v_size(uint32_t tsp) { return 8u << (tsp & 7u); }
-// Filter, clamp and flip: what a sampler is made from.
-constexpr uint32_t sampler_bits(uint32_t tsp) { return (tsp >> 13) & 0x3Fu; }
+// Filter, clamp and flip, then the mip-map D adjust: what a sampler is made from.
+constexpr uint32_t sampler_bits(uint32_t tsp) { return ((tsp >> 13) & 0x3Fu) | ((tsp >> 8) & 0xFu) << 6; }
 
 // The stencil's use, for the cheap shadows of the opaque modifier volumes:
 // bit 1 says the polygon seen at a pixel takes shadows (its PCW's bit 7);
@@ -155,7 +155,7 @@ struct Renderer::Impl {
     std::vector<Draw> draws;
     struct Upload {
         VkImage image;
-        uint32_t width, height;
+        uint32_t width, height, levels;
         VkDeviceSize at;
         bool fresh;
     };
@@ -325,13 +325,20 @@ struct Renderer::Impl {
 
     VkSampler sampler(uint32_t bits) {
         if (const auto it = samplers.find(bits); it != samplers.end()) return it->second;
-        // bits: 0-1 the filter, 2 clamp V, 3 clamp U, 4 flip V, 5 flip U. Clamping wins over flipping.
+        // bits: 0-1 the filter, 2 clamp V, 3 clamp U, 4 flip V, 5 flip U, 6-9
+        // the D adjust. Clamping wins over flipping.
         const auto mode = [&](bool clamp, bool flip) {
             return clamp ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : flip ? VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT : VK_SAMPLER_ADDRESS_MODE_REPEAT;
         };
         VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         sci.magFilter = sci.minFilter = bits & 3u ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        // Mip-maps: the nearest level for point and bilinear filtering, both
+        // levels blended for trilinear (filters 2 and 3, the hardware's two
+        // passes); the D adjust (in quarters, 4 = 1) scales the level of
+        // detail, a bias of its log2. A texture without levels has one.
+        sci.mipmapMode = (bits & 3u) >= 2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.maxLod = VK_LOD_CLAMP_NONE;
+        if (const uint32_t d_adjust = (bits >> 6) & 0xFu) sci.mipLodBias = std::log2(float(d_adjust) / 4.0f);
         sci.addressModeU = mode(bits & 8u, bits & 32u);
         sci.addressModeV = mode(bits & 4u, bits & 16u);
         sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -375,11 +382,14 @@ struct Renderer::Impl {
         return set;
     }
 
+    // An image's every level, one after another from the largest.
     void queue_upload(const Image& image, const uint32_t* rgba, bool fresh) {
-        const size_t at = upload_bytes.size(), n = size_t{image.width} * image.height * 4;
+        size_t n = 0;
+        for (uint32_t l = 0; l < image.levels; ++l) n += size_t{std::max(image.width >> l, 1u)} * std::max(image.height >> l, 1u) * 4;
+        const size_t at = upload_bytes.size();
         upload_bytes.resize(at + n);
         std::memcpy(upload_bytes.data() + at, rgba, n);
-        uploads.push_back({image.image, image.width, image.height, at, fresh});
+        uploads.push_back({image.image, image.width, image.height, image.levels, at, fresh});
         ++stats.uploads;
     }
 
@@ -406,10 +416,16 @@ struct Renderer::Impl {
         t.generation = generation, t.palette_hash = palette_hash;
         raw.resize(t.bytes);
         src.read(texture::address(tcw), raw.data(), t.bytes);
-        pixels.resize(size_t{p.width} * p.height);
-        texture::decode(p, raw.data(), pixels.data());
+        const uint32_t levels = texture::levels(p);
+        size_t texels = 0;
+        for (uint32_t l = 0; l < levels; ++l) texels += size_t{std::max(p.width >> l, 1u)} * std::max(p.height >> l, 1u);
+        pixels.resize(texels);
+        for (uint32_t l = 0, at = 0; l < levels; ++l) {
+            texture::decode_level(p, raw.data(), l, pixels.data() + at);
+            at += std::max(p.width >> l, 1u) * std::max(p.height >> l, 1u);
+        }
         if (fresh) {
-            t.image = Image::create(gpu, p.width, p.height, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            t.image = Image::create(gpu, p.width, p.height, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, levels);
             ++stats.textures;
         }
         queue_upload(t.image, pixels.data(), fresh);
@@ -649,11 +665,16 @@ struct Renderer::Impl {
         for (const Upload& u : uploads) {
             qilin::host::transition(cmd, u.image, u.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkBufferImageCopy region{};
-            region.bufferOffset = u.at;
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.imageExtent = {u.width, u.height, 1};
-            vkCmdCopyBufferToImage(cmd, staging.buffer, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            VkBufferImageCopy regions[16]{};
+            VkDeviceSize at = u.at;
+            for (uint32_t l = 0; l < u.levels; ++l) {
+                const uint32_t w = std::max(u.width >> l, 1u), h = std::max(u.height >> l, 1u);
+                regions[l].bufferOffset = at;
+                regions[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1};
+                regions[l].imageExtent = {w, h, 1};
+                at += VkDeviceSize{w} * h * 4;
+            }
+            vkCmdCopyBufferToImage(cmd, staging.buffer, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, u.levels, regions);
             qilin::host::transition(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         qilin::host::transition(cmd, colour.image, t.ready ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,

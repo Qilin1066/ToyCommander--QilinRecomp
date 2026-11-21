@@ -62,6 +62,33 @@ void decoder() {
         tex::Params p;
         p.tcw = tcw(tex::kArgb4444, true) | 1u << 31;
         expect(tex::bytes(p) == (1 + 4 + 16) * 2 + 6 + 128, "ARGB4444 mip-mapped: offset to the largest level");
+        expect(tex::levels(p) == 4, "ARGB4444 mip-mapped 8x8: four levels");
+        // Each level's first texel marked: 1x1 at byte 6, 2x2 at 8, 4x4 at 16, 8x8 at 48.
+        std::vector<uint8_t> d(tex::bytes(p), 0);
+        const uint32_t at[4] = {48, 16, 8, 6};
+        for (uint32_t l = 0; l < 4; ++l) d[at[l]] = uint8_t(0x0F), d[at[l] + 1] = uint8_t(0xF0 | l);  // A=15, R=l, B=15
+        std::vector<uint32_t> out(64);
+        for (uint32_t l = 0; l < 4; ++l) {
+            tex::decode_level(p, d.data(), l, out.data());
+            expect(out[0] == (0xFFu << 24 | 0xFFu << 16 | (l * 17u)), "ARGB4444 mip-mapped: each level from its own place");
+        }
+    }
+    // 4-bit palette, mip-mapped 4x4: the 1x1 level is nibble 3 (byte 1's high nibble), 2x2 from byte 2.
+    {
+        std::vector<uint32_t> pal(1024, 0);
+        pal[7] = 0xFF0000FFu, pal[9] = 0xFF00FF00u;
+        tex::Params p;
+        p.tcw = tcw(tex::kPalette4, true) | 1u << 31;
+        p.width = p.height = 4;
+        p.palette = pal.data(), p.palette_format = 3;
+        std::vector<uint8_t> d(tex::bytes(p), 0);
+        expect(d.size() == 2 + 2 + 8, "4-bit mip-mapped 4x4: 1x1 and 2x2 in four bytes, then 4x4");
+        d[1] = 0x70, d[2] = 0x09;
+        std::vector<uint32_t> out(16);
+        tex::decode_level(p, d.data(), 2, out.data());
+        expect(out[0] == 0xFFFF0000u, "4-bit mip-mapped: the 1x1 texel in a high nibble");
+        tex::decode_level(p, d.data(), 1, out.data());
+        expect(out[0] == 0xFF00FF00u, "4-bit mip-mapped: the 2x2 level from the next byte");
     }
     // 8-bit palette, through ARGB8888 palette entries.
     {

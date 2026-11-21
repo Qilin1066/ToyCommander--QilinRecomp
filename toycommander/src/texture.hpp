@@ -6,7 +6,7 @@
 // The formats are the hardware's: 16-bit texels (ARGB1555, RGB565, ARGB4444,
 // YUV422), 4- and 8-bit palette indices, in raster or twiddled (Morton) order,
 // vector quantised (a 256-entry codebook of 2x2 blocks), with or without
-// mip-maps (the largest level is decoded). Anything else stops.
+// mip-maps (every level the texture stores). Anything else stops.
 #pragma once
 
 #include <cstdint>
@@ -42,9 +42,15 @@ constexpr uint32_t palette_count(uint32_t tcw) { return format(tcw) == kPalette4
 // the decoded level's end. Stops on a format the decoder doesn't know.
 uint32_t bytes(const Params& p);
 
+// The levels the texture has: 1, or down to 1x1 for a mip-mapped one.
+uint32_t levels(const Params& p);
+
 // Decodes `bytes(p)` bytes at `data` into width x height pixels, each
 // R, G, B, A in memory order.
 void decode(const Params& p, const uint8_t* data, uint32_t* out);
+// The same for a level (0 the largest; level n is max(width >> n, 1)
+// square).
+void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t* out);
 
 // The place of texel (x, y) in a twiddled w x h texture.
 uint32_t twiddle(uint32_t x, uint32_t y, uint32_t w, uint32_t h);

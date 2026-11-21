@@ -47,15 +47,24 @@ uint32_t rd16(const uint8_t* d, uint32_t texel) { return uint32_t(d[texel * 2]) 
 // The texels of the mip levels under a square level of side s: 1 + 4 + ... + (s/2)^2.
 constexpr uint32_t below(uint32_t s) { return (s * s - 1) / 3; }
 
-// Where the decoded level starts, from the texture's address.
-uint32_t level_offset(const Params& p) {
-    const uint32_t fmt = format(p.tcw);
+// Where the level of side s starts, from the texture's address, in texels
+// (bytes for VQ's indices, nibbles for 4-bit palette indices): a mip-mapped
+// texture stores its levels from the smallest, 1x1, which is three texels
+// in (a VQ texture's 1x1 is one index right after the codebook, and its
+// level of side s has an index for each 2x2 block).
+uint32_t level_start(const Params& p, uint32_t s) {
     if (!mipmapped(p.tcw)) return vq(p.tcw) ? 2048u : 0u;
     if (p.width != p.height) unsupported(p);  // mip-maps are square
-    if (vq(p.tcw)) return 2048u + 1u + (p.width >= 2 ? below(p.width / 2) : 0u);
-    if (fmt == kPalette8) return below(p.width) + 3u;
-    if (fmt == kPalette4) return (below(p.width) + 3u) / 2u;
-    return below(p.width) * 2u + 6u;
+    if (vq(p.tcw)) return s == 1 ? 2048u : 2048u + 1u + below(s / 2);
+    return below(s) + 3u;
+}
+
+// The same in bytes, rounded down (a 4-bit 1x1 level starts mid-byte).
+uint32_t level_offset(const Params& p, uint32_t s) {
+    const uint32_t fmt = format(p.tcw), t = level_start(p, s);
+    if (vq(p.tcw) || fmt == kPalette8) return t;
+    if (fmt == kPalette4) return t / 2;
+    return t * 2;
 }
 
 uint32_t clamp8(float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 255.0f)); }
@@ -87,7 +96,7 @@ uint32_t bytes(const Params& p) {
     if (fmt == kBump || fmt == 7u) unsupported(p);
     if (vq(p.tcw)) {
         if (paletted(p.tcw) || fmt == kYuv422 || !twiddled(p.tcw)) unsupported(p);
-        return level_offset(p) + p.width * p.height / 4;
+        return level_offset(p, p.width) + p.width * p.height / 4;
     }
     if (stride_select(p.tcw)) {
         if (mipmapped(p.tcw) || p.stride == 0) unsupported(p);
@@ -95,18 +104,32 @@ uint32_t bytes(const Params& p) {
     }
     if (fmt == kYuv422 && twiddled(p.tcw)) unsupported(p);
     const uint32_t texels = p.width * p.height;
-    return level_offset(p) + (fmt == kPalette8 ? texels : fmt == kPalette4 ? texels / 2 : texels * 2);
+    return level_offset(p, p.width) + (fmt == kPalette8 ? texels : fmt == kPalette4 ? texels / 2 : texels * 2);
 }
 
-void decode(const Params& p, const uint8_t* data, uint32_t* out) {
-    const uint32_t fmt = format(p.tcw), w = p.width, h = p.height;
-    const uint8_t* d = data + level_offset(p);
+uint32_t levels(const Params& p) {
+    if (!mipmapped(p.tcw)) return 1;
+    uint32_t n = 1;
+    while ((1u << (n - 1)) < p.width) ++n;
+    return n;
+}
+
+void decode(const Params& p, const uint8_t* data, uint32_t* out) { decode_level(p, data, 0, out); }
+
+void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t* out) {
+    const uint32_t fmt = format(p.tcw), w = std::max(p.width >> level, 1u), h = std::max(p.height >> level, 1u);
+    if (level >= levels(p)) unsupported(p);
+    const uint8_t* d = data + level_offset(p, w);
     if (vq(p.tcw)) {
         // The codebook: 256 blocks of four 16-bit texels, in twiddled order
         // ((0,0), (0,1), (1,0), (1,1) as x, y).
         uint32_t book[256][4];
         for (uint32_t e = 0; e < 256; ++e)
             for (uint32_t k = 0; k < 4; ++k) book[e][k] = texel16(fmt, rd16(data, e * 4 + k));
+        if (w == 1) {  // a block's first texel
+            out[0] = book[d[0]][0];
+            return;
+        }
         for (uint32_t y = 0; y < h; y += 2)
             for (uint32_t x = 0; x < w; x += 2) {
                 const uint32_t* b = book[d[twiddle(x / 2, y / 2, w / 2, h / 2)]];
@@ -116,11 +139,11 @@ void decode(const Params& p, const uint8_t* data, uint32_t* out) {
     }
     if (fmt == kPalette4 || fmt == kPalette8) {
         if (!p.palette) unsupported(p);
-        const uint32_t base = palette_base(p.tcw);
+        const uint32_t base = palette_base(p.tcw), half = level_start(p, w) & 1u;  // a 4-bit level that starts at a high nibble
         for (uint32_t y = 0; y < h; ++y)
             for (uint32_t x = 0; x < w; ++x) {
                 const uint32_t i = twiddle(x, y, w, h);
-                const uint32_t n = fmt == kPalette8 ? d[i] : (d[i / 2] >> ((i & 1u) * 4)) & 15u;
+                const uint32_t n = fmt == kPalette8 ? d[i] : (d[(i + half) / 2] >> (((i + half) & 1u) * 4)) & 15u;
                 out[y * w + x] = palette_entry(p, base + n);
             }
         return;
