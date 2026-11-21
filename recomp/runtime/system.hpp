@@ -52,6 +52,9 @@ void call_guest(Context& c, uint32_t entry);
 
 // The report: what stopped, where, the caller, the registers.
 void report(std::FILE* out, const Stop& s, const Context* c);
+// The return addresses on the guest stack from r15 up to `stack_top`, as a
+// call chain (memory must be readable there).
+void backtrace(std::FILE* out, const Context& c, uint32_t stack_top, unsigned most = 24);
 [[noreturn]] void fatal(const char* format, ...) QILIN_PRINTF(1, 2);
 void log(const char* format, ...) QILIN_PRINTF(1, 2);
 

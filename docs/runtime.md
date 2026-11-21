@@ -41,10 +41,20 @@ The calls go through the function table, so they reach the registry.
 | `0x8C04EEE0` | `memclr` | The C runtime's clear: zeroes r5 bytes from r4 and returns r4. The guest code clears 32-byte blocks through the store queues (`docs/code-analysis.md`), which leaves fr0 and fr1 zero when it takes that path. The native code is a bounds-checked `memset` and zeroes fr0 and fr1 on the same condition. |
 | `0x8C0B068A` | `shinobi_library_init` | Registers each library handle between the "Lib Handle Start" and "Lib Handle End" markers (one, at `0x8C010040`) in a table only Shinobi reads, with interrupts masked. The port replaces Shinobi: nothing to do; returns 0. |
 | `0x8C0B06E2` | `shinobi_library_exit` | The same walk, removing them: nothing to do; returns 0. |
+| `0x8C0BAB98` | `shinobi_set_work_area` | Keeps a work area's address (r4) in a Shinobi global, the word its literal pool names (`0x8C0BAD80`); written in guest RAM as the guest writes it. 0, or −1 for a null address. |
+| `0x8C0BABEA`, `0x8C0BAC38`, `0x8C0BAC68`, `0x8C0BACF0` | `shinobi_sound_mode`, `_area`, `_language`, `_broadcast` | The console's settings, which Shinobi reads from its flash memory: each writes its value through r4 and returns 0 (−1 for a null r4). The port answers as a USA console (area `'1'`), NTSC (`'0'`), English (1), stereo (0). The language will come from the settings file. |
+| `0x8C0B0758` | `shinobi_cable` | The video cable, from an I/O port's bits 9–8: the port answers VGA (0), 640×480 progressive, what a PC shows best. |
+| `0x8C0B4840` | `shinobi_hardware_init` | Shinobi's hardware set-up (interrupt controller, timers, DMA, through three sub-functions); the caller doesn't use its result. The hardware is the port's: nothing to do. |
+| `0x8C0B3E10` | `shinobi_heap_init` | Shinobi's allocator set-up over r5 bytes from r4: the middleware passes the end of the program's data (`0x8C124340`) and the rest of RAM (to `0x8D000000`). The port's heap (`heap.cpp`) hands out 32-byte-aligned blocks of the same guest RAM, first fit; its bookkeeping is the host's, since only the guest's allocator read the guest's. |
 
 ## The bring-up so far
 Each run stops at the next thing the port doesn't have, as the sister projects found theirs.
 
 1. `0x8C0B068A`, Shinobi's initialisation, called by the start-up: written (above).
 2. `0x8C04E8D6`, the middleware's system initialisation, called by `main`: not lifted because of `stc sr`. That led to the SR model (above), which lifts 19 of the 21 functions that weren't.
-3. **Now:** `0x8C0BAB98`, a Shinobi function the system initialisation calls first, with r4 = `0x8C0F80BC`.
+3. `0x8C0BAB98`, then the five settings queries (`0x8C04E79C` gathers them into a word of flags), then Shinobi's hardware set-up and its allocator: written (above).
+4. **Now:** the first hardware access. The middleware's system initialisation calls `0x8C056BC0`, Kamui 2's initialisation. That reaches `0x8C08790C`, which programs the graphics chip through two small helpers, `0x8C084382` (read a register) and `0x8C084378` (write one), and stops reading its ID register at `0xA05F8000`. The call chain is main → `0x8C04E8D6` → `0x8C056BC0` → `0x8C06BE68` → `0x8C08790C` → `0x8C084382`.
+
+**What comes next: Kamui 2 at its API.** Punch-Out replaced its graphics library (GX) at its API, with a decoder of the GPU's command stream only where lifted code wrote that stream itself. The same here: find the Kamui 2 functions the game and the engine call (the initialisation above, the scene, vertex, texture and display functions), replace them natively, and draw what they are asked for with the Vulkan 1.3 renderer. The hardware-access profile says the game itself writes no hardware; whether the engine or `kmdk` writes the tile accelerator directly is checked as part of it.
+
+The report now ends with the call chain: SHC keeps no frame pointers, but every function that calls saves PR on the stack, so the stack's return addresses (words where the instruction four bytes earlier is a call) are the chain. `QILIN_STACK=1` dumps the whole stack too.

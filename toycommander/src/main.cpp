@@ -8,6 +8,7 @@
 // Anything the port doesn't handle yet stops it with a report naming what was
 // reached and from where (exit code 3).
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -60,6 +61,11 @@ int main(int argc, char** argv) {
         toycommander::boot(c, boot_file->image());
     } catch (const rt::Stop& s) {
         rt::report(stderr, s, &c);
+        if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) {
+            rt::backtrace(stderr, c, 0x8C00F400u);
+            if (std::getenv("QILIN_STACK"))
+                for (uint32_t a = c.r[15]; a < 0x8C00F400u; a += 4) std::fprintf(stderr, "    %08X: %08X\n", a, rt::ld32(a));
+        }
         return 3;
     }
     std::fprintf(stderr, "qilin_run: the game returned from main\n");

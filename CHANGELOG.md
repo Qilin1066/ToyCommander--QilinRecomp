@@ -4,6 +4,12 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [Unreleased]
+
+### Added
+- **The bring-up goes on** (`docs/runtime.md`): natives for Shinobi's work-area pointer, the console's settings (a USA console, NTSC, English, stereo, a VGA cable), its hardware set-up and its allocator, with a heap of the port's own over the same guest RAM. The game now runs through the middleware's system initialisation to Kamui 2's, which is the first code to reach hardware: the graphics chip's registers. Kamui 2 is the next to replace, at its API, as Punch-Out replaced GX.
+- **The stop report ends with the guest call chain**, read from the return addresses saved on the stack; `QILIN_STACK=1` dumps the stack too.
+
 ## [0.9.0] - 2026-11-21
 The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace qilin::rt {
@@ -89,6 +90,34 @@ void report(std::FILE* out, const Stop& s, const Context* c) {
         if (c->pr == kHostReturn) std::fprintf(out, "  pr  %08X (the runtime)", c->pr);
         else std::fprintf(out, "  pr  %08X (in fn_%08X)", c->pr, function_containing(c->pr));
         std::fprintf(out, "  gbr %08X  t %u  fpscr %08X  fpul %08X\n", c->gbr, c->t, c->fpscr, c->fpul);
+    }
+}
+
+namespace {
+// A word that is a return address: the instruction 4 bytes before it is a
+// call (jsr, bsr, bsrf) in a function of the table.
+bool return_address(uint32_t v) {
+    // Inside the program's code: from its first function to its last (plus that one's length, at most).
+    if (v & 1u || g_function_count == 0 || v < g_functions[0].addr + 4 || v > g_functions[g_function_count - 1].addr + 0x1000u) return false;
+    if (function_containing(v - 4) != function_containing(v)) return false;
+    uint16_t w;
+    std::memcpy(&w, g_mem + (v - 4), 2);
+    return (w & 0xF0FFu) == 0x400Bu || (w & 0xF000u) == 0xB000u || (w & 0xF0FFu) == 0x0003u;
+}
+}  // namespace
+
+void backtrace(std::FILE* out, const Context& c, uint32_t stack_top, unsigned most) {
+    // SHC keeps no frame chain; every function that calls saves PR on the
+    // stack, so the return addresses there are the call chain (with the odd
+    // stale one from an earlier call).
+    std::fprintf(out, "  called from (return addresses on the stack, innermost first):\n");
+    unsigned shown = 0;
+    for (uint32_t a = c.r[15] & ~3u; a + 4 <= stack_top && shown < most; a += 4) {
+        uint32_t v;
+        std::memcpy(&v, g_mem + a, 4);
+        if (!return_address(v)) continue;
+        std::fprintf(out, "    %08X: %08X (in fn_%08X)\n", a, v, function_containing(v));
+        ++shown;
     }
 }
 
