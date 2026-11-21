@@ -25,6 +25,7 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
 - **Sound RAM and the sound chip's registers** (`toycommander/src/aica.*`): 2 MB of sound RAM and a register file for the AICA, which the audio manager's set-up writes; the chip's ARM is never started.
 - **The movie decoder's handler table** (`indirect_targets` in `recomp/src/layout.cpp`): the layout can name an indirect call's targets, and the FPSCR pass follows the mode into them (the TrueMotion decoder's 13 block handlers, called with SZ = 1).
 - **CD audio and the table of contents** (`gdrom_bios.cpp`): play and pause, and each area's table of contents from the disc reader's tracks. **The sound driver's start-up handshake** (`aica.cpp`). **The operand cache's address array** accepted as invalidation. The vibration and screen drivers lifted. `QILIN_DUMP` prints guest memory at a stop.
+- **RAM comparison with the console:** `qilin_dcref --game` runs the game in Flycast's libretro core as a black box and writes its RAM every few frames; `QILIN_RAM_DUMP` writes the port's at a stop (`docs/runtime.md`). The port's heap matches the console's block for block.
 - **Discovery: shared tails.** A pointer guess may fall into code other functions branch to (`docs/recompiler-core.md`): 16 more functions, 44 unknown runs instead of 49, 4,322 functions.
 
 ### Changed

@@ -176,6 +176,51 @@ std::vector<uint8_t> run_core(const char* core_path, const std::filesystem::path
     throw std::runtime_error("the probe didn't finish in 3000 frames");
 }
 
+// The game itself, for comparing the port's RAM with the console's at the
+// same point of a run: loads `disc` (the player's own dump) in the core with
+// its BIOS replacement and writes guest RAM (16 MB from 0x8C000000) to
+// `dump`.<frame> every `every` frames up to `frames`. Nothing of the game is
+// kept by this tool: the dumps go where the user says, outside the repo.
+int run_game(const char* core_path, const std::filesystem::path& disc, int frames, int every, const std::filesystem::path& dump) {
+    void* h = dlopen(core_path, RTLD_NOW);
+    if (!h) throw std::runtime_error(dlerror());
+#define SYM(n) const auto n = reinterpret_cast<decltype(&::n)>(dlsym(h, #n))
+    SYM(retro_set_environment);
+    SYM(retro_set_video_refresh);
+    SYM(retro_set_audio_sample);
+    SYM(retro_set_audio_sample_batch);
+    SYM(retro_set_input_poll);
+    SYM(retro_set_input_state);
+    SYM(retro_init);
+    SYM(retro_load_game);
+    SYM(retro_run);
+    SYM(retro_get_memory_data);
+    SYM(retro_get_memory_size);
+#undef SYM
+    g_sys = (std::filesystem::temp_directory_path() / "qilin_dcref_sys").string();
+    std::filesystem::create_directories(g_sys);
+    retro_set_environment(env), retro_set_video_refresh(video), retro_set_audio_sample(audio);
+    retro_set_audio_sample_batch(audio_batch), retro_set_input_poll(poll), retro_set_input_state(input);
+    retro_init();
+    const std::string path = std::filesystem::absolute(disc).string();
+    retro_game_info game{path.c_str(), nullptr, 0, nullptr};
+    if (!retro_load_game(&game)) throw std::runtime_error("the core didn't load the disc");
+    if (!make_gl()) throw std::runtime_error("no OpenGL context (EGL surfaceless)");
+    if (g_hw.context_reset) g_hw.context_reset();
+    const auto* ram = static_cast<const uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+    if (!ram || retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM) < (16u << 20)) throw std::runtime_error("no 16 MB of system RAM from the core");
+    for (int frame = 1; frame <= frames; ++frame) {
+        retro_run();
+        if (frame % every == 0 || frame == frames) {
+            const auto name = dump.string() + "." + std::to_string(frame);
+            std::FILE* f = std::fopen(name.c_str(), "wb");
+            if (!f || std::fwrite(ram, 1, 16u << 20, f) != (16u << 20)) throw std::runtime_error("cannot write " + name);
+            std::fclose(f);
+        }
+    }
+    return 0;
+}
+
 // An ELF executable of one loadable segment at 0x8C010000, entered at its start.
 std::vector<uint8_t> elf(const std::vector<uint8_t>& image) {
     const uint32_t base = qilin::test::kBase, code_off = 0x100;
@@ -233,6 +278,15 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::println(stderr, "usage: qilin_dcref <flycast_libretro.so> [--cases N] [--examples K]");
         return 2;
+    }
+    if (argc >= 4 && !std::strcmp(argv[2], "--game")) {
+        // qilin_dcref <core> --game <disc> <frames> <every> <dump prefix>
+        if (argc != 7) {
+            std::println(stderr, "usage: qilin_dcref <flycast_libretro.so> --game <disc> <frames> <every> <dump prefix>");
+            return 2;
+        }
+        g_verbose = std::getenv("QILIN_DCREF_VERBOSE") != nullptr;
+        return run_game(argv[1], argv[3], std::atoi(argv[4]), std::max(1, std::atoi(argv[5])), argv[6]);
     }
     uint32_t n = 50000;
     int examples = 4;

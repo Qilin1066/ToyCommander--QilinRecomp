@@ -108,6 +108,14 @@ int main(int argc, char** argv) {
         rt::report(stderr, s, &c);
         if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) {
             rt::backtrace(stderr, c, 0x8C00F400u);
+            // QILIN_RAM_DUMP=<file>: all 16 MB of RAM at the stop, to compare
+            // with the console's (tools/dcref's --game mode).
+            if (const char* path = std::getenv("QILIN_RAM_DUMP")) {
+                if (std::FILE* f = std::fopen(path, "wb")) {
+                    std::fwrite(rt::g_mem + qilin::kRamBase, 1, qilin::kRamSize, f);
+                    std::fclose(f);
+                }
+            }
             // QILIN_DUMP=<hex address>,<bytes>: guest memory at the stop.
             if (const char* d = std::getenv("QILIN_DUMP")) {
                 char* end = nullptr;
