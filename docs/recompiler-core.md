@@ -137,11 +137,47 @@ Results are in `code-analysis.md`: every FPU instruction of the game (14,432) an
 ## Hardware-access profile (`hwaccess.*`, v0.3.0)
 `qilin hwaccess` lists, per function, every load, store and cache operation whose address is a constant outside cached RAM, with the hardware block it reaches (`hw_region`: the SH-4's own registers in P4, then the Dreamcast's area 0 registers, sound chip, video memory, tile accelerator and RAM views, from the SH7750 hardware manual's and the Dreamcast's memory maps). Addresses come from the CFG's register constants (`register_constants`, the same dataflow). Accesses through pointers loaded from memory, or relative to GBR, aren't seen. Results are in `code-analysis.md`: 76 functions, none of them in the game.
 
-## Tests (`recomp/tests/tests.cpp`)
+## The lifter (`lifter.*`, `lift_output.*`, v0.5.0): slice 1, integer code
+`qilin lift <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans]` turns each function the CFG found into one C++ function, `void fn_XXXXXXXX(rt::Context&)`. The first slice lifts every function without floating point or privileged instructions: all the integer instructions, delay slots, branches, calls, tail calls, switch tables, the calls by loaded PR and the returns through a saved PR.
+
+**What the output looks like.** Guest registers live in locals, declared only for the registers the function uses (r0–r15, T, PR, GBR, MACH, MACL and SR's S, Q, M). They are loaded from the context on entry, stored back before every call, tail call and return, and reloaded after a call. Labels are emitted only at addresses something branches to. Literal loads become constants read from the boot file at lift time. Memory goes through `rt::ld8`…`st32` on a base pointer (`recomp/runtime/guest.hpp`); in a build with `QILIN_CHECKED_MEMORY` every access is checked against the regions the host mapped, and the instruction's address is recorded first, so a stray access stops naming it.
+
+**Control flow.**
+- A delayed branch reads what it needs (its condition, its target register, PR) before its slot runs, then runs the slot, then branches, as the hardware does. `bt` and `bf`, which have no slot, are a plain `if`.
+- A branch to another function is a tail call: `fn_T(c); return;`.
+- A call (`bsr`, `bsrf`, `jsr`) sets PR and calls `fn_T` directly when the target is a constant that names a function, or `rt::call` through the sorted function table otherwise. Afterwards it checks that the callee returned to the address after the slot (`c.ret`): a guest that changes its return address stops with *bad return* instead of running on in the wrong place.
+- `rts` stores PR in `c.ret` and returns.
+- A switch (`braf` through a table) becomes a C++ `switch` on the table's offsets; an offset not in the table stops with *bad jump*.
+- The hand-written PR idioms (`cfg.hpp`'s `call_returns` and `jmp_returns`) become a call that continues at the loaded return address, and a return.
+- Any other indirect jump is a tail call through the table.
+
+**What stops instead of guessing.** `mac.w` and `mac.l` with S set (no clean source here pins down their saturation), `pref` of a store-queue address (the runtime must take the store queues over), and the run-time checks above. No function contains `trapa`: discovery rejects it, and the image's debugger stubs are replaced natively. A function the lifter can't lift gets a stub that stops as *not lifted*; a function in a replaced region (Shinobi) gets one that stops as *unregistered*, naming its caller, for the runtime's registry to fill. Unreferenced functions are skipped unless `--orphans` is given.
+
+**Output files.** `functions.hpp` (every declaration), `table.cpp` (the function table), `stubs.cpp`, `lifted_NNN.cpp` with 256 functions each (counted over every function found, so lifting more changes only the chunks that hold them), and `lift_report.txt` with the reason for every function not lifted. A file is rewritten only when its content changes, so a rebuild recompiles only what changed.
+
+**Results on the supported build.** Of 4,307 functions, 796 are Shinobi's (stubs) and 574 are unreferenced (skipped). Of the other 2,937, **1,832 are lifted** (730 in the game, 1,102 in the middleware). 1,105 aren't yet:
+- 1,083 use floating point (529 in the game, 554 in the middleware): the FPU slice;
+- 21 have privileged instructions, all in the middleware: they face the hardware and are to be replaced;
+- 1 in the middleware (`0x8C04EEE0`) has a branch into a delay slot, which needs the slot's instruction duplicated.
+
+The output compiles without a warning under Clang with `-Wall -Wextra -Wpedantic -Wshadow -Werror`, for x86-64 and ARM64, with and without checked memory. GCC and MSVC see the generated code through the end-to-end tests in CI.
+
+**End-to-end tests** (`recomp/tests/lift_programs.hpp`, `lift_gen.cpp`, `lift_run.cpp`). A small assembler builds synthetic SH-4 programs into one boot file image:
+- 64-bit addition, subtraction and negation through `addc`, `subc` and `negc`;
+- unsigned and signed 32-bit division by SHC's `div0u`/`div0s` and 32 × `rotcl`/`div1` sequences;
+- `shad`, `shld`, the rotates through T, `cmp/str`, `xtrct`, `swap.b`, and every multiply;
+- a `dt` loop with `bf/s`, and a switch;
+- calls by `bsr` and through the literal pool, a tail call by `bra`, an indirect call through a table in data, a call by loaded PR, a call to an address with no function;
+- a function with floating point (not lifted: it must stop);
+- loads and stores of every size, pre-decrement and post-increment, the GBR forms, `mac.w` and `tas.b`.
+
+At build time `qilin_liftgen` lifts the image with the real analysis and lifter. `qilin_lift_tests` compiles the result with the compiler under test, so CI checks generated code under GCC 14, Clang 19, Apple Clang and MSVC with warnings as errors. It then runs it with checked memory against results computed from the instructions' definitions: 86,286 checks, including thousands of random operands for the divisions, shifts and multiplies, and the stops (a bad jump, a function not lifted, an access outside the mapped regions). Breaking `div1`'s Q update, or one case of a generated switch, makes them fail.
+
+## Unit tests (`recomp/tests/tests.cpp`)
 No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
 
 ## What comes next
 In the order the sister projects took:
 
-1. **The lifter** (`qilin lift`): one C++ function per guest function, registers in locals, in slices as Ghoulies did (integer; calls, tail calls, the calls by loaded PR and the function table; the FPU, from `fpmode`'s modes, with the two banks as arrays and run-time FPSCR where a mode isn't proven). The middleware is lifted too, for bring-up (`code-analysis.md`).
+1. **The lifter's FPU slice:** from `fpmode`'s modes, with the two banks as arrays swapped by `frchg`, denormals flushed as DN = 1 requires, and run-time FPSCR where a mode isn't proven. `fmac`, `fsca`, `fsrra`, `fipr` and `ftrv` need a clean source for their exact results first. Then the branch into a delay slot, by duplicating the slot.
 2. **The differential test.** The sister projects run each lifted function against the original code under Unicorn; Unicorn has no SuperH. The candidates for the reference: QEMU's SH-4 as an external tool, driven through its GDB stub, and an independent model of the instructions written from Hitachi's manual (as Beat the Beat's `paired.py` is for the paired singles). To be decided when the lifter's first slice exists; the requirement stays the same: every function, whole call trees, 0 unexplained mismatches, also under UBSan.

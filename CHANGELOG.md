@@ -4,6 +4,14 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.5.0] - 2026-11-21
+The lifter's first slice: integer code, lifted to C++ and tested end to end under every CI compiler.
+
+### Added
+- **The lifter** (`qilin lift`, `recomp/src/lifter.*`, `lift_output.*`): one C++ function per guest function, with guest registers in locals declared only for the registers used. It lifts every integer instruction, delay slots, conditional and delayed branches, calls (direct when the target is a known function, through the function table otherwise, with the return address checked afterwards), tail calls, switch tables as C++ `switch`es, the calls by loaded PR and the returns through a saved PR. Floating point (the next slice) and privileged instructions aren't lifted yet: such functions get a stub that stops as *not lifted*, and Shinobi's functions get stubs that stop as *unregistered*, naming the caller. On the supported build, **1,832 functions are lifted** (730 in the game, 1,102 in the middleware); 1,083 wait for the FPU slice, 21 have privileged instructions and 1 has a branch into a delay slot. `--range` lifts only part of the image, `--orphans` the unreferenced functions too. Output files are rewritten only when they change.
+- **The runtime's first pieces** (`recomp/runtime/`): the guest context, memory access with an optional checked mode (`QILIN_CHECKED_MEMORY`) that stops on an access outside the mapped regions and names the instruction, the helpers for the instructions with carries, overflow, division steps, shifts, `cmp/str`, `tas.b`, `mac` and `pref`, and indirect calls through the sorted function table. What can't be pinned down from a clean source (`mac` with S set) or needs the runtime (`pref` of a store queue) stops.
+- **End-to-end lifter tests** (`qilin_liftgen`, `qilin_lift_tests`): synthetic SH-4 programs built by a small assembler are lifted at build time by the real analysis and lifter, compiled with the compiler under test, and run with checked memory against results computed from the instructions' definitions: 86,286 checks over 64-bit arithmetic, SHC's signed and unsigned division sequences, shifts, rotates, multiplies, loops, a switch, every kind of call, memory of every size and addressing mode, and the stops. So CI now compiles generated code under GCC 14, Clang 19, Apple Clang and MSVC with warnings as errors.
+
 ## [0.4.0] - 2026-11-21
 The FPU's mode at every FPU instruction, which the lifter needs to emit the right operations, and the control-flow fixes that finding it uncovered.
 

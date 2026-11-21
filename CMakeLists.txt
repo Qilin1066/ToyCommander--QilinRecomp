@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.4.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.5.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -74,6 +74,8 @@ add_library(qilin_core STATIC
     recomp/src/hwaccess.cpp
     recomp/src/layout.cpp
     recomp/src/fpmode.cpp
+    recomp/src/lifter.cpp
+    recomp/src/lift_output.cpp
 )
 target_include_directories(qilin_core PUBLIC recomp/src)
 target_link_libraries(qilin_core PUBLIC qilin_disc PRIVATE qilin_warnings)
@@ -90,3 +92,26 @@ add_executable(qilin_tests recomp/tests/tests.cpp)
 target_link_libraries(qilin_tests PRIVATE qilin_core qilin_warnings)
 qilin_tool(qilin_tests)
 add_test(NAME qilin_tests COMMAND qilin_tests)
+
+# ---- End-to-end lifter tests (no game files needed) ----
+# qilin_liftgen lifts synthetic SH-4 programs with the real analysis and
+# lifter at build time; qilin_lift_tests compiles that output with the
+# compiler under test, with the runtime, and runs it against results computed
+# from the instructions' definitions.
+add_executable(qilin_liftgen recomp/tests/lift_gen.cpp)
+target_include_directories(qilin_liftgen PRIVATE recomp/tests)
+target_link_libraries(qilin_liftgen PRIVATE qilin_core qilin_warnings)
+qilin_tool(qilin_liftgen)
+set(QILIN_LIFT_TEST_GEN ${CMAKE_BINARY_DIR}/lift_test_gen)
+set(QILIN_LIFT_TEST_SOURCES
+    ${QILIN_LIFT_TEST_GEN}/table.cpp ${QILIN_LIFT_TEST_GEN}/stubs.cpp ${QILIN_LIFT_TEST_GEN}/lifted_000.cpp)
+add_custom_command(
+    OUTPUT ${QILIN_LIFT_TEST_SOURCES} ${QILIN_LIFT_TEST_GEN}/functions.hpp
+    COMMAND qilin_liftgen ${QILIN_LIFT_TEST_GEN}
+    DEPENDS qilin_liftgen
+    COMMENT "Lifting the synthetic test programs")
+add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp ${QILIN_LIFT_TEST_SOURCES})
+target_include_directories(qilin_lift_tests PRIVATE recomp/runtime recomp/tests ${QILIN_LIFT_TEST_GEN})
+target_compile_definitions(qilin_lift_tests PRIVATE QILIN_CHECKED_MEMORY)
+target_link_libraries(qilin_lift_tests PRIVATE qilin_warnings)
+add_test(NAME qilin_lift_tests COMMAND qilin_lift_tests)

@@ -20,6 +20,9 @@
 //                                             the FPSCR mode at every FPU instruction, per region;
 //                                             --list: every place it can't be proven;
 //                                             --json: every function's entry and exit modes
+//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans]
+//                                             the lifted C++: functions.hpp, table.cpp, stubs.cpp,
+//                                             lifted_NNN.cpp (256 functions each), lift_report.txt
 //   qilin hwaccess <1GUTH.BIN> [--json out.json]
 //                                             loads, stores and cache operations at constant
 //                                             addresses outside cached RAM, per function
@@ -33,6 +36,7 @@
 #include <expected>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <print>
@@ -48,6 +52,7 @@
 #include "gdrom.hpp"
 #include "hwaccess.hpp"
 #include "layout.hpp"
+#include "lift_output.hpp"
 
 #ifndef QILIN_VERSION
 #define QILIN_VERSION "unknown"
@@ -75,6 +80,7 @@ int usage() {
                "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
                "  qilin suspects <1GUTH.BIN>\n"
                "  qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]\n"
+               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans]\n"
                "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
@@ -263,6 +269,23 @@ int cmd_suspects(const std::string& path) {
     return 0;
 }
 
+int cmd_lift(const std::string& path, const std::string& out_dir, const std::optional<std::string>& range, bool orphans) {
+    const BootFile boot = load_boot(path);
+    const Cfg cfg = analyse_boot(boot);
+    LiftOptions options;
+    options.orphans = orphans;
+    if (range) {
+        const size_t dash = range->find('-');
+        if (dash == std::string::npos) throw Failure{"--range takes lo-hi"};
+        options.range = std::pair(parse_address(range->substr(0, dash)), parse_address(range->substr(dash + 1)));
+    }
+    const LiftSummary sum = write_lifted(boot, cfg, layout(boot.sha256), out_dir, options, QILIN_VERSION);
+    std::print("{}", sum.report.substr(0, sum.report.find('\n') + 1));
+    for (const auto& [why, fns] : sum.failures) std::println("  {:5}  {}", fns.size(), why);
+    std::println("{} files written, {} removed ({})", sum.written, sum.removed, out_dir);
+    return 0;
+}
+
 int cmd_fpmode(const std::string& path, bool list, const std::optional<std::string>& json) {
     const BootFile boot = load_boot(path);
     const Cfg cfg = analyse_boot(boot);
@@ -380,7 +403,8 @@ int cmd_hwaccess(const std::string& path, const std::optional<std::string>& json
 int run(int argc, char** argv) {
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
-    bool list = false, map = false;
+    bool list = false, map = false, orphans = false;
+    std::optional<std::string> range;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         const auto value = [&](std::optional<std::string>& into) {
@@ -396,6 +420,8 @@ int run(int argc, char** argv) {
         else if (a == "--pc") value(pc);
         else if (a == "--list") list = true;
         else if (a == "--map") map = true;
+        else if (a == "--orphans") orphans = true;
+        else if (a == "--range") value(range);
         else if (a.starts_with("-")) throw Failure{std::format("unknown option {}", a)};
         else pos.emplace_back(a);
     }
@@ -418,6 +444,10 @@ int run(int argc, char** argv) {
     if (command == "suspects") return cmd_suspects(input());
     if (command == "hwaccess") return cmd_hwaccess(input(), json);
     if (command == "fpmode") return cmd_fpmode(input(), list, json);
+    if (command == "lift") {
+        if (!out_dir) throw Failure{"lift needs --out <dir>"};
+        return cmd_lift(input(), *out_dir, range, orphans);
+    }
     if (command == "disasm") {
         if (pos.size() != 1) throw Failure{"disasm takes no file"};
         return cmd_disasm(pc ? parse_address(*pc) : kBootFileBase, out);
