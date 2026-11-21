@@ -59,6 +59,10 @@ public:
         float lx = 0, ly = 0, rx = 0, ry = 0, lt = 0, rt = 0;
     };
     PadState pad_state() const;
+    // The pads after the first, for more players (1-3; 0 is the first): every
+    // gamepad connected is opened, in the order they come. Not connected:
+    // all zero.
+    PadState pad_state(unsigned player) const;
     // If the mouse moved over the window since the last poll: where, over the
     // picture last presented, -1 to 1 each way (y up; beyond 1 off the picture).
     bool mouse_moved(float& x, float& y) const;

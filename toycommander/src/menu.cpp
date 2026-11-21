@@ -357,7 +357,7 @@ void Menu::controls_page() {
     if (n == 0) ImGui::TextDisabled("None connected: the keyboard plays the Dreamcast controller.");
     for (int i = 0; i < n; ++i) {
         const char* name = SDL_GetGamepadNameForID(ids[i]);
-        ImGui::BulletText("%s%s", name ? name : "A controller", i == 0 ? " (port A's Dreamcast controller)" : "");
+        ImGui::BulletText("%s%s", name ? name : "A controller", i == 0 ? " (port A's Dreamcast controller)" : " (another player's: ports B to D)");
     }
     SDL_free(ids);
     ImGui::Checkbox("Rumble", &s_.rumble);

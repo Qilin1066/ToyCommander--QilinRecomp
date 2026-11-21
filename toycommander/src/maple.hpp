@@ -4,7 +4,8 @@
 // port answers each frame there and then from the host's input, writes the
 // replies where the table says, and raises the DMA's end (normal event 12).
 //
-// Port A is the host's first pad and the keyboard; the other ports are empty.
+// Port A is the host's first pad and the keyboard, with a memory card;
+// ports B to D the host's other pads, as they are connected (video.cpp).
 #pragma once
 
 #include <cstdint>

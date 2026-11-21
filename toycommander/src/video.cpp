@@ -309,9 +309,35 @@ void look_up_controls() {
 }
 }  // namespace
 
+// Ports B to D: the host's other pads, through the pad inputs the settings
+// bind (the keyboard is port A's).
+maple::Controls other_player(unsigned port) {
+    maple::Controls c;
+    const qilin::host::Display::PadState p = g_display->pad_state(port);
+    if (!p.connected || (g_menu && g_menu->is_open())) return c;
+    c.connected = true;
+    if (!g_inputs_ready) look_up_controls();
+    bool on[kControlCount] = {};
+    for (unsigned k = 0; k < kControlCount; ++k)
+        for (const Input& in : g_inputs[k]) on[k] = on[k] || (in.kind == Binding::kPad && (p.buttons & in.pad));
+    static constexpr struct {
+        Control control;
+        uint16_t dc;
+    } kButtons[] = {{kCtlA, maple::kA}, {kCtlB, maple::kB}, {kCtlX, maple::kX}, {kCtlY, maple::kY}, {kCtlStart, maple::kStart},
+                    {kCtlUp, maple::kUp}, {kCtlDown, maple::kDown}, {kCtlLeft, maple::kLeft}, {kCtlRight, maple::kRight}};
+    for (const auto& b : kButtons)
+        if (on[b.control]) c.buttons |= b.dc;
+    const auto byte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    c.lt = on[kCtlL] ? 255 : byte(p.lt), c.rt = on[kCtlR] ? 255 : byte(p.rt);
+    c.x = static_cast<uint8_t>(std::lround(std::clamp(p.lx, -1.0f, 1.0f) * 127.5f + 127.5f));
+    c.y = static_cast<uint8_t>(std::lround(std::clamp(p.ly, -1.0f, 1.0f) * 127.5f + 127.5f));
+    return c;
+}
+
 maple::Controls controls(unsigned port) {
     maple::Controls c;
-    if (port != 0 || !g_display) return c;
+    if (!g_display || port > 3) return c;
+    if (port != 0) return other_player(port);
     c.connected = true;  // port A always has a pad: the keyboard if nothing else
     if (g_menu && g_menu->is_open()) return c;  // the menu has the input
     if (!g_inputs_ready || (g_menu && g_menu->take_controls_changed())) look_up_controls();

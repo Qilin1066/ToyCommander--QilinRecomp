@@ -129,9 +129,31 @@ struct Display::Impl {
     bool log_input = false;    // QILIN_INPUT_LOG: every change of the buttons
     uint32_t logged = 0;
 
+    // More pads, for games with more players (Toy Commander's ports B to D):
+    // opened as they come, after the first.
+    static constexpr unsigned kMorePads = 3;
+    SDL_Gamepad* more[kMorePads] = {};
+    Display::PadState more_raw[kMorePads];
+
     // Play with this one (the first, or the one just connected if there's none).
     void open_pad(SDL_JoystickID id) {
-        if (pad) return;
+        if (pad && SDL_GetGamepadID(pad) == id) return;
+        if (pad) {
+            for (SDL_Gamepad* m : more)
+                if (m && SDL_GetGamepadID(m) == id) return;
+            for (SDL_Gamepad*& m : more)
+                if (!m) {
+                    m = SDL_OpenGamepad(id);
+                    if (m) say("controllers: \"%s\" is another player's", SDL_GetGamepadName(m) ? SDL_GetGamepadName(m) : "a controller");
+                    return;
+                }
+            return;
+        }
+        for (SDL_Gamepad*& m : more)  // another player's pad becomes the first's
+            if (m && SDL_GetGamepadID(m) == id) {
+                pad = m, m = nullptr, pad_pressed = false;
+                return;
+            }
         pad = SDL_OpenGamepad(id);
         pad_pressed = false;
         if (!pad) {
@@ -523,6 +545,12 @@ bool Display::poll() {
             d.rumbling = false;
             d.open_first_pad();  // another takes over, if there is one
         }
+        if (e.type == SDL_EVENT_GAMEPAD_REMOVED)
+            for (SDL_Gamepad*& m : d.more)
+                if (m && SDL_GetGamepadID(m) == e.gdevice.which) {
+                    SDL_CloseGamepad(m);
+                    m = nullptr;
+                }
         // Full screen, whatever else is going on.
         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
             (e.key.key == SDLK_F11 || (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)))) {
@@ -578,6 +606,32 @@ bool Display::poll() {
         d.stick_x = d.stick_y = 0;
         d.raw = {};
     }
+    for (unsigned k = 0; k < Impl::kMorePads; ++k) {
+        Display::PadState& r = d.more_raw[k];
+        r = {};
+        SDL_Gamepad* p = d.more[k];
+        if (!p) continue;
+        static constexpr struct {
+            SDL_GamepadButton sdl;
+            uint32_t bit;
+        } kButtons[] = {
+            {SDL_GAMEPAD_BUTTON_DPAD_UP, kPadUp},         {SDL_GAMEPAD_BUTTON_DPAD_DOWN, kPadDown},
+            {SDL_GAMEPAD_BUTTON_DPAD_LEFT, kPadLeft},     {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kPadRight},
+            {SDL_GAMEPAD_BUTTON_SOUTH, kPadA},            {SDL_GAMEPAD_BUTTON_EAST, kPadB},
+            {SDL_GAMEPAD_BUTTON_WEST, kPadX},             {SDL_GAMEPAD_BUTTON_NORTH, kPadY},
+            {SDL_GAMEPAD_BUTTON_START, kPadStart},        {SDL_GAMEPAD_BUTTON_BACK, kPadBack},
+            {SDL_GAMEPAD_BUTTON_GUIDE, kPadGuide},        {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, kPadLB},
+            {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kPadRB},  {SDL_GAMEPAD_BUTTON_LEFT_STICK, kPadL3},
+            {SDL_GAMEPAD_BUTTON_RIGHT_STICK, kPadR3},
+        };
+        for (const auto& m : kButtons)
+            if (SDL_GetGamepadButton(p, m.sdl)) r.buttons |= m.bit;
+        const auto unit = [p](SDL_GamepadAxis ax) { return std::clamp(SDL_GetGamepadAxis(p, ax) / 32767.0f, -1.0f, 1.0f); };
+        r.connected = true;
+        r.lx = unit(SDL_GAMEPAD_AXIS_LEFTX), r.ly = unit(SDL_GAMEPAD_AXIS_LEFTY);
+        r.rx = unit(SDL_GAMEPAD_AXIS_RIGHTX), r.ry = unit(SDL_GAMEPAD_AXIS_RIGHTY);
+        r.lt = std::max(0.0f, unit(SDL_GAMEPAD_AXIS_LEFT_TRIGGER)), r.rt = std::max(0.0f, unit(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+    }
     if (d.pad && !d.pad_pressed && (b & ~uint32_t(kPadClick))) {
         d.pad_pressed = true;
         say("controllers: \"%s\" works (buttons 0x%x)", SDL_GetGamepadName(d.pad) ? SDL_GetGamepadName(d.pad) : "the controller", b);
@@ -601,6 +655,10 @@ bool Display::key_down(int code) const {
     return code < n && k[code];
 }
 Display::PadState Display::pad_state() const { return impl_->raw; }
+Display::PadState Display::pad_state(unsigned player) const {
+    if (player == 0) return impl_->raw;
+    return player <= Impl::kMorePads ? impl_->more_raw[player - 1] : PadState{};
+}
 void Display::right_stick(float& x, float& y) const {
     x = impl_->stick_x;
     y = impl_->stick_y;
