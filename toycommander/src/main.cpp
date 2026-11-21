@@ -27,6 +27,7 @@
 #include "sh4.hpp"
 #include "system.hpp"
 #include "ta.hpp"
+#include "threads.hpp"
 
 namespace rt = qilin::rt;
 
@@ -67,6 +68,7 @@ int main(int argc, char** argv) {
     toycommander::provide_gdrom_bios();
     toycommander::provide_chain();
     toycommander::provide_rtc();
+    toycommander::provide_threads();
     toycommander::insert_disc(*disc);
     toycommander::map_pvr();
     toycommander::ta::map();
@@ -96,6 +98,11 @@ int main(int argc, char** argv) {
     try {
         toycommander::boot(c, boot_file->image());
     } catch (const rt::Stop& s) {
+        if (const rt::Context* t = toycommander::thread_stop_context()) {
+            std::fprintf(stderr, "(in a guest thread of bu's thread library)\n");
+            rt::report(stderr, s, t);
+            return 3;
+        }
         rt::report(stderr, s, &c);
         if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) {
             rt::backtrace(stderr, c, 0x8C00F400u);

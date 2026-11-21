@@ -49,7 +49,13 @@ constexpr Region kUsa[] = {
     {0x8C0C3CA4, 0x8C0C3D04, "Shinobi's exception handler's data", Plan::data},
     {0x8C0C3D04, 0x8C0C44B4, "Shinobi", Plan::replace},
     {0x8C0C44B4, 0x8C0C4774, "Shinobi's Maple driver: its system bus set-up", Plan::lift},
-    {0x8C0C4774, 0x8C0C558C, "Shinobi", Plan::replace},
+    // bu's thread library is lifted but for its two switches, which run guest
+    // threads on host threads (toycommander/src/threads.cpp).
+    {0x8C0C4774, 0x8C0C4A3A, "Shinobi: bu's thread library", Plan::lift},
+    {0x8C0C4A3A, 0x8C0C4A78, "Shinobi: bu's thread library: a thread's yield (host threads)", Plan::replace},
+    {0x8C0C4A78, 0x8C0C4A7C, "Shinobi: bu's thread library", Plan::lift},
+    {0x8C0C4A7C, 0x8C0C4B4A, "Shinobi: bu's thread library: the scheduler's pass (host threads)", Plan::replace},
+    {0x8C0C4B4A, 0x8C0C558C, "Shinobi", Plan::replace},
     {0x8C0C558C, 0x8C0C568C, "Shinobi: the G2 bus's register helpers (for the Maple driver)", Plan::lift},
     {0x8C0C568C, 0x8C0C5690, "Shinobi", Plan::replace},
     {0x8C0C5690, 0x8C0C6B9C, "Shinobi's initialised data and version strings", Plan::data},

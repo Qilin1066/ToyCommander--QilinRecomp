@@ -21,6 +21,7 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
 - **`QILIN_TIMEOUT=<seconds>`**: a run still going by then reports where the guest is and its call chain (exit code 4), for waits on hardware the port doesn't provide yet.
 
 - **pd, bu and the Maple driver lifted** (`recomp/src/layout.cpp`): Shinobi's peripheral library, its memory card file system and their Maple bus driver, spread over several regions of Shinobi, are lifted like gdFs, for the port to provide the Maple bus beneath them; the natives that skipped their set-up are gone. bu's coroutines stay replaced (next).
+- **bu's coroutines over host threads** (`toycommander/src/threads.*`): Shinobi's small thread library is lifted but for its two switches, the scheduler's pass and a thread's yield, which run each guest thread on a host thread of its own (16 MB of stack), one at a time, with the guest's own records kept as the guest code keeps them (the pass starts again from the first thread after every yield, as the guest's does). A stop in a guest thread is reported with that thread's registers.
 - **Discovery: shared tails.** A pointer guess may fall into code other functions branch to (`docs/recompiler-core.md`): 16 more functions, 44 unknown runs instead of 49, 4,322 functions.
 
 ### Changed
