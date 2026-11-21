@@ -76,6 +76,9 @@ struct Function {
     std::vector<uint32_t> indirect_calls;     // jsr/bsrf sites with no constant target
     std::vector<uint32_t> indirect_jumps;     // jmp/braf sites with no constant target and no table
     std::vector<Switch> switches;
+    std::map<uint32_t, uint32_t> computed_branches;  // braf site -> target, where the offset is a constant
+    std::map<uint32_t, uint32_t> call_returns;       // jmp site that is a call (PR loaded by hand) -> where it returns
+    std::vector<uint32_t> jmp_returns;               // jmp sites that return (through the saved return address), sorted
     std::vector<std::string> problems;        // for `qilin suspects`
 
     uint32_t end() const { return insns.empty() ? entry : insns.back() + 2; }
@@ -101,11 +104,29 @@ struct Cfg {
 // function is found in them, and a call or jump into one is reported.
 Cfg analyse(const BootFile& boot, std::span<const Region> regions = {});
 
+// The instructions control can reach next from `pc`, within `f`: a delayed
+// branch's successor is its delay slot, and the slot's are the branch's
+// targets. Calls return to the instruction after their slot; tail calls and
+// returns leave the function.
+std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32_t pc);
+
 // The general registers' constants on entry to each of a function's
 // instructions (a delay slot sees the registers as its branch leaves them),
 // by the same dataflow function discovery uses. An empty optional is "not a
 // constant". GBR isn't tracked.
-using RegConstants = std::array<std::optional<uint32_t>, 16>;
+//
+// PR, the return address, is tracked too, because hand-written library code
+// calls by loading PR and jumping (sts pr,r2 ; lds r1,pr ; jmp @r0, which
+// returns to r1) and returns by jumping through the saved value (jmp @r2).
+struct RegConstants {
+    std::array<std::optional<uint32_t>, 16> r{};
+    std::optional<uint32_t> pr;  // a constant loaded into PR with lds
+    uint16_t entry_pr = 0;       // registers holding the return address the function was entered with
+    bool pr_is_entry = true;     // PR still holds that return address
+    std::optional<uint32_t>& operator[](size_t i) { return r[i]; }
+    const std::optional<uint32_t>& operator[](size_t i) const { return r[i]; }
+    bool operator==(const RegConstants&) const = default;
+};
 std::map<uint32_t, RegConstants> register_constants(const BootFile& boot, const Cfg& cfg, const Function& f);
 
 // Developer tools only (std::format).

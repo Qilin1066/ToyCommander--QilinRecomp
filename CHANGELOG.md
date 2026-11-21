@@ -4,6 +4,20 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.4.0] - 2026-11-21
+The FPU's mode at every FPU instruction, which the lifter needs to emit the right operations, and the control-flow fixes that finding it uncovered.
+
+### Added
+- **The FPSCR mode pass** (`qilin fpmode`, `recomp/src/fpmode.*`): precision (PR), transfer size (SZ), bank (FR), rounding (RM) and denormals (DN) at every FPU instruction, as known bits through `fschg`, `frchg`, `lds`, the read-modify-write sequences and saves on the stack. Interprocedural and context-sensitive: each function is analysed once per mode it is entered in, calls go on in their callee's exit mode, and the default mode (`0x00040000`, which Shinobi's start-up loads) is assumed only for address-taken functions and indirect calls. **All 14,432 FPU instructions of the game and all 21,143 of the middleware are proven.** The game runs entirely in the default mode; the middleware uses double precision (36), 64-bit transfers (214) and bank 1 (209). `--list` prints what it reports, `--json` every function's entry and exit modes.
+- **`successors`:** the instructions control reaches next inside a function, through delay slots, calls and tail calls.
+- **Tests** for each of these, and for the control-flow changes below.
+
+### Changed
+- **The bank (FR) doesn't need to be known:** the lifted code will keep the two banks as two arrays and swap them on `frchg`, as the hardware does. The engine really runs in bank 1 for a while after some of the matrix library's calls, and paths rejoin there in different banks; compiled code never notices which bank is current.
+- **Function discovery tracks PR, the return address.** Hand-written code calls by loading PR and jumping (`lds r1,pr ; jmp @r0`) and returns through a saved PR (`jmp @r2`). 2 such calls and 18 such returns were found, all in the matrix library; they were a tail call and indirect jumps, which hid the code that runs after the call. Indirect jumps: 143 → 127.
+- **A call clears only the scratch registers its callee can write**, worked out per callee and transitively (all of them if it calls indirectly), instead of all of r0–r7 by convention.
+- **The middleware's attribution is driven by bring-up** (`docs/code-analysis.md`): grouping functions by shared global variables names libraries (the audio manager's core is one group) but doesn't give a complete map, since the libraries interleave at a finer grain than object files. The middleware is lifted with the game, and where it stops on hardware names what to replace.
+
 ## [0.3.0] - 2026-11-21
 The boot file's layout: where the game, the middleware and Shinobi are, what is data, and what reaches hardware. The game's code is now fully accounted for.
 

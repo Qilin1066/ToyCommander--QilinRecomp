@@ -18,8 +18,9 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies-Qili
 | Function discovery and control flow (recursive descent, constants through literal pools, switch tables, tail calls, function pointers, unreferenced code) | ✅ 4,307 functions, 14 switch tables |
 | Layout: the game, the middleware, Shinobi and the data regions | ✅ every boundary with its evidence (`docs/code-analysis.md`). The game's code is fully accounted for: 0 unknown bytes. 0.27% of the whole image is still unknown, all in libraries not yet attributed |
 | Hardware-access profile | ✅ 76 functions reach hardware at constant addresses, none in the game itself (`qilin hwaccess`) |
-| Middleware attribution (engine, Kamui 2, audio manager, C runtime), FPSCR modes | to do (next) |
-| Lifter, SH-4 → C++ | to do |
+| FPSCR modes (precision, transfer size, bank, rounding, denormals) at every FPU instruction | ✅ all 35,575 FPU instructions in the game and the middleware proven (`qilin fpmode`) |
+| Lifter, SH-4 → C++ | to do (next) |
+| Middleware attribution (engine, Kamui 2, audio manager, C runtime) | during bring-up: the lifted middleware stops on hardware, which names what to replace |
 | Differential test of every lifted function | to do |
 | Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | to do |
 | Enhancements (resolution, widescreen, high refresh rate) and the settings menu shared with the sister projects | to do, after the game plays at original spec |
@@ -63,6 +64,7 @@ build/qilin cfg      extracted/files/1GUTH.BIN --json cfg.json  # function disco
 build/qilin coverage extracted/files/1GUTH.BIN [--list|--map]   # every byte, per region: code, literal, jump table, padding, data or unknown (exit 3 while a lifted region has unknown bytes)
 build/qilin suspects extracted/files/1GUTH.BIN        # functions with problems, for review
 build/qilin hwaccess extracted/files/1GUTH.BIN        # accesses to hardware at constant addresses, per function
+build/qilin fpmode   extracted/files/1GUTH.BIN [--list] # the FPU's mode at every FPU instruction
 ```
 
 The dump is a Redump-style one: a `.cue` beside one `.bin` per track.
@@ -78,7 +80,7 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 
 | Path | What |
 |---|---|
-| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported build's regions), `hwaccess` (the hardware-access profile), `main` (the `qilin` CLI) |
+| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported build's regions), `hwaccess` (the hardware-access profile), `fpmode` (the FPSCR mode pass), `main` (the `qilin` CLI) |
 | `recomp/tests/` | Unit tests on synthetic data, so they need no game files |
 | `tools/check/` | The decoder cross-check against Capstone |
 | `docs/` | Design notes: the roadmap and targets, the disc, the code analysis, the recompiler core, prior art, naming |

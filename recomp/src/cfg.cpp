@@ -60,7 +60,18 @@ bool meet(Regs& into, const Regs& from) {
     bool changed = false;
     for (size_t i = 0; i < 16; ++i)
         if (into[i] && into[i] != from[i]) into[i].reset(), changed = true;
+    if (into.pr && into.pr != from.pr) into.pr.reset(), changed = true;
+    if (const uint16_t e = into.entry_pr & from.entry_pr; e != into.entry_pr) into.entry_pr = e, changed = true;
+    if (into.pr_is_entry && !from.pr_is_entry) into.pr_is_entry = false, changed = true;
     return changed;
+}
+
+// Registers with no constants left, PR as it was.
+Regs cleared(const Regs& r) {
+    Regs out;
+    out.pr = r.pr;
+    out.pr_is_entry = r.pr_is_entry;
+    return out;
 }
 
 // The result of a register-to-register or immediate integer operation whose
@@ -119,8 +130,32 @@ bool is_branch(const Insn& i) { return i.valid() && (sh4::spec(i.op).flags & sh4
 
 class Explorer {
 public:
-    Explorer(const BootFile& boot, const Cfg& cfg, const std::set<uint32_t>& candidates, const std::set<uint32_t>& entries)
-        : boot_(boot), cfg_(cfg), candidates_(candidates), entries_(entries) {}
+    Explorer(const BootFile& boot, const Cfg& cfg, const std::set<uint32_t>& candidates, const std::set<uint32_t>& entries,
+             std::map<uint32_t, uint16_t>& scratch_cache)
+        : boot_(boot), cfg_(cfg), candidates_(candidates), entries_(entries), scratch_cache_(scratch_cache) {}
+
+    // The scratch registers (r0-r7, as a mask) a call to `target` can change:
+    // every one its code or anything it calls writes. Anything unknown (it
+    // doesn't explore, it calls or jumps indirectly) counts as all of them.
+    // r8-r15 are assumed kept, the compiler's convention (see cfg.hpp).
+    uint16_t scratch_written(uint32_t target, int depth = 0) {
+        if (const auto it = scratch_cache_.find(target); it != scratch_cache_.end()) return it->second;
+        if (depth > 12) return 0xFF;
+        scratch_cache_[target] = 0xFF;  // while it is being worked out (recursion): all
+        uint16_t mask = 0;
+        Function g;
+        try {
+            Explorer sub(boot_, cfg_, candidates_, entries_, scratch_cache_);
+            g = sub.run(target, Origin::call);
+        } catch (const Reject&) {
+            return scratch_cache_[target] = 0xFF;
+        }
+        if (!g.indirect_calls.empty() || !g.indirect_jumps.empty()) return scratch_cache_[target] = 0xFF;
+        for (uint32_t pc : g.insns) mask |= gpr_written(sh4::decode(boot_.u16(pc))) & 0xFFu;
+        for (const auto& [site, callee] : g.calls) mask |= scratch_written(callee, depth + 1);
+        for (const auto& [site, callee] : g.tail_jumps) mask |= scratch_written(callee, depth + 1);
+        return scratch_cache_[target] = static_cast<uint16_t>(mask & 0xFFu);
+    }
 
     // Everything reachable from `entry` without leaving the function, or the
     // reason it can't be one.
@@ -153,6 +188,7 @@ public:
         for (uint32_t pc : unstable_) {
             const bool call = f.calls.erase(pc) != 0;
             f.tail_jumps.erase(pc);
+            f.computed_branches.erase(pc);
             auto& list = call ? f.indirect_calls : f.indirect_jumps;
             if (std::ranges::find(list, pc) == list.end()) list.push_back(pc);
             f.problems.push_back(std::format("{:08X}: the target register's constant differs between paths", pc));
@@ -181,19 +217,42 @@ private:
 
     void transfer(const Insn& i, uint32_t pc, Regs& r) {
         switch (i.op) {
-        case Op::mov_imm: r[i.n()] = static_cast<uint32_t>(i.imm_s()); return;
+        case Op::mov_imm:
+            r[i.n()] = static_cast<uint32_t>(i.imm_s());
+            r.entry_pr &= static_cast<uint16_t>(~(1u << i.n()));
+            return;
         case Op::movw_pc:
         case Op::movl_pc: {
             const uint32_t a = i.pc_relative(pc), n = i.op == Op::movl_pc ? 4 : 2;
             if (!boot_.mapped(a, n)) throw Reject{std::format("{:08X} reads a literal outside the image", pc)};
             literals_[a] = n;
             r[i.n()] = n == 4 ? boot_.u32(a) : static_cast<uint32_t>(static_cast<int16_t>(boot_.u16(a)));
+            r.entry_pr &= static_cast<uint16_t>(~(1u << i.n()));
             return;
         }
-        case Op::mova: r[0] = i.pc_relative(pc); return;
-        case Op::mov: r[i.n()] = r[i.m()]; return;
+        case Op::mova: r[0] = i.pc_relative(pc); r.entry_pr &= ~1u; return;
+        case Op::mov:
+            r[i.n()] = r[i.m()];
+            r.entry_pr = static_cast<uint16_t>((r.entry_pr & ~(1u << i.n())) | (((r.entry_pr >> i.m()) & 1u) << i.n()));
+            return;
+        case Op::sts_pr:
+            r[i.n()] = r.pr_is_entry ? std::nullopt : r.pr;
+            r.entry_pr = static_cast<uint16_t>((r.entry_pr & ~(1u << i.n())) | (r.pr_is_entry ? 1u << i.n() : 0u));
+            return;
+        case Op::lds_pr:
+            r.pr = r[i.n()];
+            r.pr_is_entry = (r.entry_pr >> i.n()) & 1u;
+            return;
+        case Op::ldsl_pr:
+            // The epilogue's restore: what was saved isn't tracked.
+            r.pr.reset();
+            r.pr_is_entry = false;
+            r[i.n()].reset();
+            r.entry_pr &= static_cast<uint16_t>(~(1u << i.n()));
+            return;
         default: break;
         }
+        r.entry_pr &= static_cast<uint16_t>(~gpr_written(i));
         // Integer arithmetic on constants stays constant (addresses are often
         // built or adjusted this way). Anything else makes its result unknown.
         if (const auto v = fold(i, r)) {
@@ -298,6 +357,7 @@ private:
             } else if (i.op == Op::jmp || i.op == Op::jsr) {
                 target = r[i.n()];
             }
+            const bool through_return_address = i.op == Op::jmp && ((r.entry_pr >> i.n()) & 1u);
             if (flags & sh4::kDelayed) {
                 const Insn slot = fetch(pc + 2);
                 if (is_branch(slot)) throw Reject{std::format("{:08X}: a branch in a delay slot", pc + 2)};
@@ -324,7 +384,14 @@ private:
                     // A constant outside the image is a call into the boot ROM or to another address space.
                     if (std::ranges::find(f.indirect_calls, pc) == f.indirect_calls.end()) f.indirect_calls.push_back(pc);
                 }
-                for (unsigned k = 0; k < 8; ++k) r[k].reset();  // the callee's scratch registers
+                // The scratch registers the callee can change.
+                const auto callee = f.calls.find(pc);
+                const uint16_t clobbered = callee != f.calls.end() ? scratch_written(callee->second) : 0xFF;
+                for (unsigned k = 0; k < 8; ++k)
+                    if (clobbered & (1u << k)) r[k].reset();
+                r.entry_pr &= static_cast<uint16_t>(~clobbered);
+                r.pr.reset();
+                r.pr_is_entry = false;  // PR now holds this call's return address
                 pc = next;
                 continue;
             }
@@ -343,12 +410,40 @@ private:
             }
             if (i.op == Op::braf) {
                 if (target) {
+                    if (auto it = f.computed_branches.find(pc); it != f.computed_branches.end() && it->second != *target)
+                        unstable_.insert(pc);
+                    f.computed_branches[pc] = *target;
                     branch_to(*target, r);
                     return;
                 }
                 if (auto sw = find_switch(pc)) {
-                    for (uint32_t t : sw->targets) branch_to(t, Regs{});
+                    for (uint32_t t : sw->targets) branch_to(t, cleared(r));
                     switches_[pc] = std::move(*sw);
+                    return;
+                }
+            }
+            if (i.op == Op::jmp) {
+                // Through the return address the function was entered with: a return.
+                if (through_return_address) {
+                    f.jmp_returns.insert(std::ranges::upper_bound(f.jmp_returns, pc), pc);
+                    return;
+                }
+                // With PR loaded by hand: a call that returns where PR points.
+                if (r.pr && !r.pr_is_entry && boot_.mapped(*r.pr, 2) && *r.pr % 2 == 0) {
+                    const uint32_t back = *r.pr;
+                    if (!resolved(f.calls)) {
+                        if (std::ranges::find(f.indirect_calls, pc) == f.indirect_calls.end()) f.indirect_calls.push_back(pc);
+                    }
+                    f.call_returns[pc] = back;
+                    Regs after = cleared(r);
+                    const auto callee = f.calls.find(pc);
+                    const uint16_t clobbered = callee != f.calls.end() ? scratch_written(callee->second) : 0xFF;
+                    for (unsigned k = 0; k < 16; ++k)
+                        if (k >= 8 || !(clobbered & (1u << k))) after[k] = r[k];
+                    after.entry_pr = static_cast<uint16_t>(r.entry_pr & ~clobbered);
+                    after.pr.reset();
+                    after.pr_is_entry = false;
+                    branch_to(back, after);
                     return;
                 }
             }
@@ -363,6 +458,7 @@ private:
     const Cfg& cfg_;
     const std::set<uint32_t>& candidates_;  // addresses that may be function entries
     const std::set<uint32_t>& entries_;     // function entries an earlier pass found
+    std::map<uint32_t, uint16_t>& scratch_cache_;  // function -> scratch registers a call to it can change
     bool guess_ = false;
     std::map<uint32_t, Regs> state_;  // registers on entry to each instruction reached
     std::vector<std::pair<uint32_t, Regs>> todo_;
@@ -374,7 +470,7 @@ private:
 class Analysis {
 public:
     Analysis(const BootFile& boot, std::span<const Region> regions, std::set<uint32_t> entries)
-        : boot_(boot), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_) {
+        : boot_(boot), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_, scratch_) {
         cfg_.base = boot.base();
         cfg_.kind.assign(boot.size() / 2, Kind::unknown);
         cfg_.owner.assign(boot.size() / 2, 0);
@@ -545,6 +641,7 @@ private:
     Cfg cfg_;
     std::set<uint32_t> candidates_;
     std::set<uint32_t> entries_;
+    std::map<uint32_t, uint16_t> scratch_;
     Explorer explorer_;
     std::vector<std::pair<uint32_t, Origin>> work_;
     std::set<uint32_t> guessed_, rejected_;
@@ -567,11 +664,66 @@ Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
     }
 }
 
+std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32_t pc) {
+    std::vector<uint32_t> out;
+    const auto in = [&](uint32_t a) { return std::ranges::binary_search(f.insns, a); };
+    const auto add = [&](uint32_t a) {
+        if (in(a) && std::ranges::find(out, a) == out.end()) out.push_back(a);
+    };
+    // A delay slot goes where its branch goes.
+    uint32_t at = pc;
+    bool slot = false;
+    if (pc > boot.base() && in(pc - 2)) {
+        const Insn b = sh4::decode(boot.u16(pc - 2));
+        if (b.valid() && (sh4::spec(b.op).flags & sh4::kDelayed)) at = pc - 2, slot = true;
+    }
+    const Insn i = sh4::decode(boot.u16(at));
+    const uint32_t flags = sh4::spec(i.op).flags;
+    if (!(flags & sh4::kBranch)) {
+        add(pc + 2);
+        return out;
+    }
+    if ((flags & sh4::kDelayed) && !slot) {
+        add(pc + 2);  // the slot first
+        return out;
+    }
+    const uint32_t next = at + ((flags & sh4::kDelayed) ? 4 : 2);
+    if (flags & sh4::kCall) {
+        add(next);
+        return out;
+    }
+    if (flags & sh4::kReturn) return out;
+    const bool tail = f.tail_jumps.contains(at);
+    switch (i.op) {
+    case Op::bt: case Op::bf: case Op::bt_s: case Op::bf_s:
+        if (!tail) add(i.branch_target(at));
+        add(next);
+        break;
+    case Op::bra:
+        if (!tail) add(i.branch_target(at));
+        break;
+    case Op::braf:
+        if (auto it = f.computed_branches.find(at); it != f.computed_branches.end()) add(it->second);
+        for (const Switch& sw : f.switches)
+            if (sw.braf == at)
+                for (uint32_t t : sw.targets) add(t);
+        break;
+    case Op::jmp:
+        // A call made by loading PR by hand continues where PR points; any
+        // other jmp (a tail call, an indirect jump, a return) leaves.
+        if (auto it = f.call_returns.find(at); it != f.call_returns.end()) add(it->second);
+        break;
+    default: break;  // trapa never reaches here
+    }
+    return out;
+}
+
 std::map<uint32_t, RegConstants> register_constants(const BootFile& boot, const Cfg& cfg, const Function& f) {
     const std::set<uint32_t> none;
     std::set<uint32_t> entries;
     for (const auto& [entry, fn] : cfg.functions) entries.insert(entry);
-    Explorer e(boot, cfg, none, entries);
+    std::map<uint32_t, uint16_t> scratch;
+    Explorer e(boot, cfg, none, entries, scratch);
     try {
         // Not as a guess: the function is already known to be good.
         (void)e.run(f.entry, Origin::call);

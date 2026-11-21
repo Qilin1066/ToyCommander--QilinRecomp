@@ -17,6 +17,7 @@
 #include "bootfile.hpp"
 #include "cfg.hpp"
 #include "decoder.hpp"
+#include "fpmode.hpp"
 #include "gdrom.hpp"
 #include "hwaccess.hpp"
 #include "layout.hpp"
@@ -593,6 +594,161 @@ void test_hwaccess() {
     CHECK(sh4::access_size(sh4::decode(0x0009)) == 0 && sh4::access_size(sh4::decode(0xF108)) == 4);
 }
 
+void test_cfg_pr() {
+    // A call made by loading PR by hand, and a return through the saved PR:
+    //   sts pr,r2 ; mov.l g,r0 ; mov.l back,r1 ; lds r1,pr ; jmp @r0 ; nop
+    //   back: jmp @r2 ; nop
+    const BootFile boot = program({
+        0x022A,  // 00  sts pr,r2
+        0xD003,  // 02  mov.l 0x10,r0
+        0xD103,  // 04  mov.l 0x14,r1
+        0x412A,  // 06  lds r1,pr
+        0x402B,  // 08  jmp @r0
+        0x0009,  // 0A   nop
+        0x422B,  // 0C  back: jmp @r2
+        0x0009,  // 0E   nop
+        lo(kB + 0x18), hi(kB + 0x18),  // 10
+        lo(kB + 0x0C), hi(kB + 0x0C),  // 14
+        0x000B, 0x0009,  // 18  g: rts ; nop
+    });
+    const Cfg cfg = analyse(boot);
+    const Function& f = cfg.functions.at(kB);
+    CHECK(f.call_returns.size() == 1 && f.call_returns.at(kB + 8) == kB + 0x0C);
+    CHECK(f.calls.size() == 1 && f.calls.at(kB + 8) == kB + 0x18);
+    CHECK(f.jmp_returns == std::vector<uint32_t>({kB + 0x0C}));
+    CHECK(f.indirect_jumps.empty() && f.tail_jumps.empty());
+    CHECK(successors(boot, f, kB + 8) == std::vector<uint32_t>({kB + 0x0A}));
+    CHECK(successors(boot, f, kB + 0x0A) == std::vector<uint32_t>({kB + 0x0C}));
+    CHECK(successors(boot, f, kB + 0x0E).empty());
+
+    // A scratch register survives a call to a callee that doesn't write it.
+    const auto with_leaf = [](uint16_t slot) {
+        return program({
+            0xD203,  // 00  mov.l 0x10,r2
+            0xB007,  // 02  bsr 0x14
+            0x0009,  // 04   nop
+            0x420B,  // 06  jsr @r2
+            0x0009,  // 08   nop
+            0x000B,  // 0A  rts
+            0x0009,  // 0C   nop
+            0x0009,  // 0E
+            lo(kB + 0x18), hi(kB + 0x18),  // 10
+            0x000B, slot,                  // 14  leaf: rts ; (slot)
+            0xE001, 0x000B, 0x0009,        // 18  g: mov #1,r0 ; rts ; nop
+        });
+    };
+    const BootFile keeps = with_leaf(0x0009);  // nop
+    const Cfg kc = analyse(keeps);
+    CHECK(kc.functions.at(kB).calls.contains(kB + 6) && kc.functions.at(kB).calls.at(kB + 6) == kB + 0x18);
+    const BootFile clobbers = with_leaf(0xE200);  // mov #0,r2
+    const Cfg cc = analyse(clobbers);
+    CHECK(!cc.functions.at(kB).calls.contains(kB + 6));
+    CHECK(cc.functions.at(kB).indirect_calls == std::vector<uint32_t>({kB + 6}));
+}
+
+void test_fpmode() {
+    using namespace fpscr;
+    const auto sz = [](const KnownBits& b) { return b.known(kSZ) ? int((b.value & kSZ) != 0) : -1; };
+    const auto pr = [](const KnownBits& b) { return b.known(kPR) ? int((b.value & kPR) != 0) : -1; };
+
+    // fschg around a 64-bit move; arithmetic after, in the default mode.
+    {
+        const BootFile boot = program({0xF3FD, 0xF21C, 0xF3FD, 0xF210, 0x000B, 0x0009});
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& m = modes.at(kB);
+        CHECK(m.fpu == 4 && m.unproven == 0 && m.problems.empty());
+        CHECK(sz(m.at.at(kB + 2)) == 1 && sz(m.at.at(kB + 6)) == 0 && pr(m.at.at(kB + 6)) == 0);
+        CHECK(m.at.at(kB + 6).known(kRM | kDN) && (m.at.at(kB + 6).value & (kRM | kDN)) == kDN);
+        CHECK(m.exit && m.exit->known(kTracked) && (m.exit->value & kTracked) == kDefault);
+    }
+    // Read-modify-write: set PR, add in double precision, clear PR.
+    {
+        const BootFile boot = program({
+            0x016A,  // 00  sts fpscr,r1
+            0xD205,  // 02  mov.l 0x18,r2
+            0x212B,  // 04  or r2,r1
+            0x416A,  // 06  lds r1,fpscr
+            0xF210,  // 08  fadd fr1,fr2  (double)
+            0x016A,  // 0A  sts fpscr,r1
+            0xD203,  // 0C  mov.l 0x1C,r2
+            0x2129,  // 0E  and r2,r1
+            0x416A,  // 10  lds r1,fpscr
+            0x000B,  // 12  rts
+            0x0009,  // 14   nop
+            0x0009,  // 16
+            lo(kPR), hi(kPR),    // 18
+            lo(~kPR), hi(~kPR),  // 1C
+        });
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& m = modes.at(kB);
+        CHECK(pr(m.at.at(kB + 8)) == 1 && m.unproven == 0 && m.problems.empty());
+        CHECK(m.exit && pr(*m.exit) == 0);
+    }
+    // Saved and restored through the stack: the restore brings the mode back.
+    {
+        const BootFile boot = program({
+            0x4F62,  // 00  sts.l fpscr,@-r15
+            0xF3FD,  // 02  fschg
+            0x4F66,  // 04  lds.l @r15+,fpscr
+            0xF21C,  // 06  fmov fr1,fr2  (32-bit again)
+            0x000B, 0x0009,
+        });
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& m = modes.at(kB);
+        CHECK(sz(m.at.at(kB + 6)) == 0 && m.problems.empty());
+    }
+    // A callee is analysed in the mode its caller calls it in.
+    {
+        const BootFile boot = program({
+            0xF3FD,  // 00  fschg
+            0xB004,  // 02  bsr 0x0E
+            0x0009,  // 04   nop
+            0xF3FD,  // 06  fschg
+            0x000B,  // 08  rts
+            0x0009,  // 0A   nop
+            0x0009,  // 0C
+            0xF21C,  // 0E  callee: fmov fr1,fr2
+            0x000B,  // 10  rts
+            0x0009,  // 12   nop
+        });
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& callee = modes.at(kB + 0x0E);
+        CHECK(callee.contexts == 1 && sz(callee.entry) == 1 && sz(callee.at.at(kB + 0x0E)) == 1);
+        CHECK(callee.problems.empty() && modes.at(kB).problems.empty());
+        CHECK(modes.at(kB).exit && sz(*modes.at(kB).exit) == 0);
+    }
+    // Paths that join in different modes: reported, and what follows is unproven.
+    {
+        const BootFile boot = program({0x8901, 0xF3FD, 0x0009, 0xF21C, 0x000B, 0x0009});
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& m = modes.at(kB);
+        CHECK(m.joins == 1 && m.unproven == 1 && sz(m.at.at(kB + 6)) == -1);
+        CHECK(std::ranges::any_of(m.problems, [](const std::string& p) { return p.contains("paths join"); }));
+    }
+    // An indirect call in another mode: reported.
+    {
+        const BootFile boot = program({0xF3FD, 0x410B, 0x0009, 0xF3FD, 0x000B, 0x0009});
+        const auto modes = fp_modes(boot, analyse(boot));
+        CHECK(std::ranges::any_of(modes.at(kB).problems, [](const std::string& p) { return p.contains("indirect call"); }));
+    }
+    // A bank switch (frchg) doesn't need to be known: no problem, and the bank is tracked.
+    {
+        const BootFile boot = program({0xFBFD, 0xF210, 0xFBFD, 0x000B, 0x0009});
+        const auto modes = fp_modes(boot, analyse(boot));
+        const FpModes& m = modes.at(kB);
+        CHECK(m.unproven == 0 && m.problems.empty());
+        CHECK(m.at.at(kB + 2).known(kFR) && (m.at.at(kB + 2).value & kFR));
+    }
+    // Known bits: compose and meet.
+    {
+        const KnownBits entry_sz{0, 0, kSZ, 0}, flipped{0, 0, kSZ, kSZ};
+        const KnownBits on{kSZ, kSZ, 0, 0}, off{kSZ, 0, 0, 0};
+        CHECK(compose(entry_sz, on) == on && compose(flipped, on) == off);
+        CHECK(meet(on, on) == on && meet(on, off).mask == 0);
+        CHECK(meet(entry_sz, entry_sz) == entry_sz && meet(entry_sz, flipped).smask == 0);
+    }
+}
+
 // ---------------------------------------------------------------- GD-ROM
 
 // A synthetic GD-ROM dump in a scratch folder: tracks 1 (data) and 2 (audio)
@@ -811,6 +967,8 @@ int main() {
     test_cfg_rejects();
     test_cfg_v03();
     test_hwaccess();
+    test_cfg_pr();
+    test_fpmode();
     test_gdrom();
     if (failures) {
         std::println(stderr, "{} check(s) failed", failures);

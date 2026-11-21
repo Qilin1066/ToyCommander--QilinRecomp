@@ -1,6 +1,6 @@
 # Code analysis: the boot file's regions, its libraries and the lifted/replaced boundary
 
-What is where in `1GUTH.BIN`, how each boundary was established, and what follows for the lifter and the runtime. Everything here was measured with `qilin` on the supported build (USA, `MK-57020`, `V1.022`; v0.3.0). The layout is recorded in `recomp/src/layout.cpp`; function discovery takes it as input and fails loudly where it disagrees (no function can be found in a data region, and a call into one is reported).
+What is where in `1GUTH.BIN`, how each boundary was established, and what follows for the lifter and the runtime. Everything here was measured with `qilin` on the supported build (USA, `MK-57020`, `V1.022`; v0.3.0, extended in v0.4.0). The layout is recorded in `recomp/src/layout.cpp`; function discovery takes it as input and fails loudly where it disagrees (no function can be found in a data region, and a call into one is reported).
 
 ## The regions
 
@@ -49,13 +49,13 @@ Everything here is called by the game and calls nothing in it. It is not laid ou
 
 The audio manager alone appears in three places with Kamui 2, the C runtime and engine code between them. Hitachi's linker places object files in the order it resolves them, so libraries interleave object by object, and attribution has to be per function (in practice per object file), not by range.
 
-**What was tried:** labelling from the anchors and spreading labels along call edges, weighted against shared callees. The result is not usable: the engine calls Kamui 2, the audio manager and the C runtime throughout, so labels bleed across objects, and the runs it produces don't line up with the anchors. It is not used.
+**What was tried** (v0.3.0, v0.4.0):
+- *Labelling from the anchors and spreading labels along call edges*, weighted against shared callees. Not usable: the engine calls Kamui 2, the audio manager and the C runtime throughout, so labels bleed across objects.
+- *The order of the constants.* The constant section (strings and tables, `0x8C09F5B6` to about `0x8C0A3A00`) follows the code's link order: of the 205 functions that reference a string, 194 of 204 consecutive pairs reference strings in rising order, and the 10 exceptions are within one object (shared strings). So it confirms an order, but too few functions reference strings to place every boundary.
+- *Padding.* The 2-byte zero fill between functions is SHC aligning literal pools, inside objects as much as between them: it marks nothing.
+- *Shared global variables*, the strongest signal. Of the 1,467 variables the code references through literal pools (initialised data, and the zero-initialised area above the image), 715 are used only by the middleware, 460 only by the game and 230 only by Shinobi; just 61 are shared by the game and the middleware, and 1 by the middleware and Shinobi. Grouping middleware functions that share a variable gives 114 groups: the audio manager's core is one of 39 functions (`acDigi*`, `acSystem*`, `acG2*`, across its three places in the code), and Kamui 2's anchor sits in a group of 56 spread over `0x8C04C050`–`0x8C0970AC`, the whole middleware. So the libraries interleave at a finer grain than whole object files, and these groups name libraries but don't give a complete per-function map.
 
-**What comes next**, in order of the evidence's strength:
-1. Object boundaries from the data: each object's strings and constants are laid out in the same order as its code, so consecutive functions whose references fall in the same stretch of the data segment belong to the same object.
-2. The API the game calls: the 278 middleware functions the game calls directly, each with its callees, strings and hardware profile. Kamui 2's and the audio manager's entry points are among them.
-3. Behaviour: what reaches the PowerVR2, the sound chip and the DMA controller (below), and through which globals.
-4. Names from Sega's published function names for Kamui 2, Shinobi and the audio manager, matched by behaviour. Function-ID databases built from Sega's libraries are not used unless their licence allows it (`prior-art.md`).
+**Decision (v0.4.0): the attribution is driven by bring-up**, not completed statically first. The middleware is lifted with the game, in a build whose checked memory stops on any access to hardware it doesn't handle, naming the instruction and the function (`roadmap-and-design-targets.md`). Each stop names a function that must be replaced, or one whose hardware access the runtime takes over; its callers show where the library's API is. That is the bring-up loop the sister projects used, and it finds exactly the functions the game reaches, in the order it reaches them. The static evidence above (anchors, variable groups, the hardware profile) is used to name what each stop belongs to and to choose the level of the API to replace. What is never done: emulating the PowerVR2 or the sound chip under an unreplaced library.
 
 1,968 bytes of the middleware are still unknown: tables of jump stubs (`0x8C081C40`, `0x8C0938E4`), byte tables (`0x8C09D194`), 0x0900 filler words inside one function at `0x8C081400`, and the debugger stubs at `0x8C099470` (`disc-analysis.md`). They are resolved with the attribution, and the middleware's coverage becomes a gate for whatever of it is lifted.
 
@@ -74,17 +74,35 @@ So little reaches hardware at a constant address: Kamui 2 in particular keeps it
 What it shows already: **the game itself never touches hardware.** Replacing the middleware's hardware-facing parts and Shinobi is enough for the game's own code to run lifted, unchanged.
 
 ## Indirect jumps
-143 jumps have no constant target and no switch table (`qilin suspects`):
+127 jumps have no constant target and no switch table (`qilin suspects`; 143 before v0.4.0):
 
 | Where | Count | What |
 |---|---|---|
 | game | 3 | indirect tail calls: two are the script interpreter dispatching an opcode through a table of handlers (`0x8C01C114`, `0x8C01CA58`), one calls a function pointer held in an object at offset 84 (`0x8C0446E0`) |
-| middleware | 60 | to classify with the attribution |
+| middleware | 44 | to classify during bring-up |
 | Shinobi | 80 | replaced: not lifted |
 
 The game's three need no more analysis: as in the sister projects, an indirect tail call goes through the generated function table and traps on an address it doesn't have. The interpreter's handler tables are in the data segment; their entries are among the functions found from pointers.
 
+Since v0.4.0 the CFG tracks PR, and 18 of what were indirect jumps are returns (`jmp @r2` through the saved return address) and 2 are calls made by loading PR by hand (`lds r1,pr ; jmp @r0`, returning where r1 points), in the hand-written matrix library. That leaves 127: 3 in the game (above), 44 in the middleware, 80 in Shinobi.
+
 Other findings that bear on the lifter: two functions with a call whose target register differs between paths (`0x8C075B54`, `0x8C075ED0`) and two in Shinobi (`0x8C0B08D8`, `0x8C0B80FE`), left as indirect calls; two hand-written copy routines that branch into a delay slot (`0x8C04EDF4`, `0x8C04EEE0`), which will be replaced natively, not lifted.
+
+## The FPU's modes (v0.4.0)
+`qilin fpmode` works out FPSCR's mode bits at every FPU instruction (`recompiler-core.md`). On the supported build:
+
+| Region | Functions with FPU code | FPU instructions | Unproven | Double precision | 64-bit transfers | In bank 1 |
+|---|---|---|---|---|---|---|
+| game | 542 | 14,432 | **0** | 0 | 0 | 0 |
+| middleware | 689 | 21,143 | **0** | 36 | 214 | 209 |
+
+The conventions it found:
+- **The default mode is `0x00040000`:** round to nearest, **denormals flushed to zero (DN = 1)**, single precision, 32-bit transfers, bank 0. Shinobi's start-up loads it (`mov #4,r0 ; shll16 r0 ; lds r0,fpscr`), and so does its exception handler. The lifted code must flush denormals to zero like the hardware does, in every arithmetic operation.
+- **The game runs entirely in the default mode,** at every one of its FPU instructions.
+- **The hand-written matrix library** (around `0x8C0613D4`–`0x8C061EEC`) switches banks. It loads matrices into the back bank for `ftrv`, and some of its entry points return in the other bank: `0x8C06166C`, entered in bank 0, returns in bank 1 (it enters its own callee with the bank flipped, by an `frchg` in a call's delay slot). The engine then runs in bank 1 for a while, which compiled code doesn't notice: it only ever names "the current fr0–fr15". So the bank isn't something the lifter needs to know: it keeps the two banks as two arrays and `frchg` swaps them.
+- **Double precision** is used by the C runtime's conversion helpers (`0x8C09C768` and those it calls), which set PR themselves with `sts fpscr ; or ; lds` and return with it set. Three of them have paths that rejoin with PR differing (`0x8C09411A`, `0x8C09C902`, `0x8C09CA38`); no FPU instruction that depends on PR follows before PR is set again, so nothing is unproven, but the lifter has to treat FPSCR there as a run-time value.
+- **64-bit transfers** (`fschg` around `fmov` pairs) are used throughout the middleware for fast copies.
+- **Open:** two callers (`0x8C09DE06`, `0x8C09E0FE`) turn on 64-bit transfers and call a dispatcher (`0x8C09F2AC`) that calls through a table indexed by data (`jsr @r6` at `0x8C09F2F6`). The handlers it reaches run with SZ = 1, but are analysed in the default mode, since they're only known as address-taken functions. Until the table is found, the lifter must read SZ at run time in the `fmov`s of functions that can be reached through it.
 
 ## The runtime's to-do list (v0.3.0)
 1. **Shinobi:** replaced whole, at its API: start-up, interrupts, timers, cache, store queues, memory allocation, the GD-ROM file system (over the disc image), Maple (controllers, memory cards, the Jump Pack), the system configuration, the real-time clock.

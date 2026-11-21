@@ -16,6 +16,10 @@
 //                                             while a lifted region has unknown bytes);
 //                                             --map: every run with the function that claimed it
 //   qilin suspects <1GUTH.BIN>                functions with problems, for review
+//   qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]
+//                                             the FPSCR mode at every FPU instruction, per region;
+//                                             --list: every place it can't be proven;
+//                                             --json: every function's entry and exit modes
 //   qilin hwaccess <1GUTH.BIN> [--json out.json]
 //                                             loads, stores and cache operations at constant
 //                                             addresses outside cached RAM, per function
@@ -40,6 +44,7 @@
 #include "bootfile.hpp"
 #include "cfg.hpp"
 #include "decoder.hpp"
+#include "fpmode.hpp"
 #include "gdrom.hpp"
 #include "hwaccess.hpp"
 #include "layout.hpp"
@@ -69,6 +74,7 @@ int usage() {
                "  qilin cfg     <1GUTH.BIN> [--json out.json]\n"
                "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
                "  qilin suspects <1GUTH.BIN>\n"
+               "  qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]\n"
                "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
@@ -257,6 +263,80 @@ int cmd_suspects(const std::string& path) {
     return 0;
 }
 
+int cmd_fpmode(const std::string& path, bool list, const std::optional<std::string>& json) {
+    const BootFile boot = load_boot(path);
+    const Cfg cfg = analyse_boot(boot);
+    const auto regions = layout(boot.sha256);
+    const auto region_of = [&](uint32_t a) -> std::string_view {
+        for (const Region& r : regions)
+            if (a >= r.begin && a < r.end) return r.name;
+        return "the whole image";
+    };
+    struct Totals {
+        uint32_t functions = 0, fpu = 0, unproven = 0, dependent = 0, joins = 0, problems = 0, pr = 0, sz = 0, fr = 0, rz = 0, nodn = 0, other_entry = 0;
+    };
+    std::map<std::string_view, Totals> totals;
+    std::string text;
+    const std::map<uint32_t, FpModes> modes = fp_modes(boot, cfg, regions);
+    for (const auto& [entry, m] : modes) {
+        if (!m.fpu && m.problems.empty()) continue;
+        Totals& t = totals[region_of(entry)];
+        ++t.functions;
+        t.fpu += m.fpu;
+        t.unproven += m.unproven;
+        t.dependent += m.entry_dependent;
+        t.joins += m.joins != 0;
+        t.problems += !m.problems.empty();
+        // Entered other than in the default mode, in a bit that matters (the bank doesn't).
+        constexpr uint32_t kMatters = fpscr::kPR | fpscr::kSZ | fpscr::kRM | fpscr::kDN;
+        t.other_entry += !(m.entry.known(kMatters) && (m.entry.value & kMatters) == (fpscr::kDefault & kMatters));
+        for (const auto& [pc, b] : m.at) {
+            const auto on = [&](uint32_t bit) { return b.known(bit) && (b.value & bit); };
+            t.pr += on(fpscr::kPR);
+            t.sz += on(fpscr::kSZ);
+            t.fr += on(fpscr::kFR);
+            t.rz += b.known(fpscr::kRM) && (b.value & fpscr::kRM) == 1;
+            t.nodn += b.known(fpscr::kDN) && !(b.value & fpscr::kDN);
+        }
+        if (list && !m.problems.empty()) {
+            text += std::format("fn_{:08X}\n", entry);
+            for (const std::string& p : m.problems) text += std::format("  {}\n", p);
+        }
+    }
+    if (json) {
+        Out out(json);
+        const auto bits = [](const KnownBits& b) {
+            return std::format("{{\"mask\":\"{:08X}\",\"value\":\"{:08X}\",\"smask\":\"{:08X}\",\"sinv\":\"{:08X}\"}}", b.mask, b.value, b.smask,
+                               b.sinv);
+        };
+        std::print(out.get(), "{{\"functions\":[\n");
+        bool first = true;
+        for (const auto& [entry, m] : modes) {
+            std::string ctx;
+            for (const auto& [en, ex] : m.per_context)
+                ctx += std::format("{}[{},{}]", ctx.empty() ? "" : ",", bits(en), ex ? bits(*ex) : "null");
+            std::string calls;
+            for (const auto& [callee, mode] : m.calls) calls += std::format("{}[\"{:08X}\",{}]", calls.empty() ? "" : ",", callee, bits(mode));
+            std::print(out.get(), "{}{{\"entry\":\"{:08X}\",\"address_taken\":{},\"entry_mode\":{},\"exit_mode\":{},\"summary_exit\":{},\"fpu\":{},\"unproven\":{},\"contexts\":[{}],\"calls\":[{}],\"problems\":{}}}",
+                       first ? "" : ",\n", entry, m.address_taken, bits(m.entry), m.exit ? bits(*m.exit) : "null", m.summary_exit ? bits(*m.summary_exit) : "null", m.fpu, m.unproven, ctx, calls,
+                       m.problems.size());
+            first = false;
+        }
+        std::print(out.get(), "\n]}}\n");
+        out.close();
+    }
+    std::print("{}", text);
+    std::println("{:>9} {:>8} {:>9} {:>9} {:>9} {:>9}   {:>6} {:>6} {:>6} {:>6} {:>6}   region", "functions", "fpu", "unproven", "entry-dep",
+                 "problems", "not-dflt", "PR=1", "SZ=1", "FR=1", "RM=1", "DN=0");
+    for (const auto& [region, t] : totals)
+        std::println("{:9} {:8} {:9} {:9} {:9} {:9}   {:6} {:6} {:6} {:6} {:6}   {}", t.functions, t.fpu, t.unproven, t.dependent, t.problems,
+                     t.other_entry, t.pr, t.sz, t.fr, t.rz, t.nodn, region);
+    std::println("functions, fpu: those with FPU instructions or problems; unproven: FPU instructions whose mode bits aren't known;");
+    std::println("entry-dep: FPU instructions whose mode follows an entry bit the callers disagree on (lifted once per mode);");
+    std::println("not-dflt: functions entered in a mode other than the default; PR=1 ... DN=0: FPU instructions run in that mode");
+    return 0;
+}
+
 int cmd_hwaccess(const std::string& path, const std::optional<std::string>& json) {
     const BootFile boot = load_boot(path);
     const Cfg cfg = analyse_boot(boot);
@@ -337,6 +417,7 @@ int run(int argc, char** argv) {
     if (command == "coverage") return cmd_coverage(input(), list, map);
     if (command == "suspects") return cmd_suspects(input());
     if (command == "hwaccess") return cmd_hwaccess(input(), json);
+    if (command == "fpmode") return cmd_fpmode(input(), list, json);
     if (command == "disasm") {
         if (pos.size() != 1) throw Failure{"disasm takes no file"};
         return cmd_disasm(pc ? parse_address(*pc) : kBootFileBase, out);

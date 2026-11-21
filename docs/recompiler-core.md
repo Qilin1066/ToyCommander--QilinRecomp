@@ -1,6 +1,6 @@
 # The recompiler core
 
-`qilin`, in `recomp/src/`. v0.1.0 has the loader, the disc reader and the decoder; v0.2.0 adds function discovery; v0.3.0 the build's layout, coverage per region and the hardware-access profile. The rest are listed at the end.
+`qilin`, in `recomp/src/`. v0.1.0 has the loader, the disc reader and the decoder; v0.2.0 adds function discovery; v0.3.0 the build's layout, coverage per region and the hardware-access profile; v0.4.0 the FPSCR mode pass, with PR and scratch registers tracked through calls. The rest are listed at the end.
 
 ## The boot file loader (`bootfile.*`)
 A Dreamcast boot file is a flat image of memory from `0x8C010000` (`disc-analysis.md`). The loader checks it's non-empty, a whole number of 16-bit words, and fits in the 16 MB of RAM, and gives bounds-checked little-endian reads; errors are `std::expected` messages. The supported build is recognised by the file's SHA-256 (our own, `sha256.*`).
@@ -61,21 +61,27 @@ A `call` or `tail` target that fails is not a guess but a finding, and is listed
 
 **The layout** (v0.3.0). With the build's layout (`recomp/src/layout.cpp`, evidence in `code-analysis.md`), words in its data regions are `data` from the start: no function can be found in them (a guess there is rejected, a call or jump into one is reported), while their words are still read as possible function pointers.
 
+**PR, the return address** (v0.4.0). Hand-written library code calls by loading PR and jumping (`sts pr,r2 ; mov.l back,r1 ; lds r1,pr ; jmp @r0`: a call that returns to `back`) and returns by jumping through the saved value (`jmp @r2`). The register state tracks PR: a constant loaded with `lds rN,pr`, which registers hold the return address the function was entered with (`sts pr,rN`), and whether PR still does. A `jmp` through the entry return address is a return; a `jmp` while PR holds a constant is a call that continues where PR points (`Function::call_returns`). On the supported build: 18 returns and 2 such calls, all in the matrix library; before, they were indirect jumps and a tail call, which hid the code that runs after the call.
+
+**Scratch registers across a call** (v0.4.0). A call used to clear every constant in r0–r7, the registers a callee may change by convention. Now it clears only those the callee can write: every scratch register written by its code or by anything it calls, transitively, and all of them if it calls or jumps indirectly. This is a proof per callee, not a convention, and hand-written code that keeps a value in r2 across its own helpers is followed. (r8–r15 are still assumed kept, the compiler's convention.)
+
+**Successors** (v0.4.0). `successors(boot, f, pc)` gives the instructions control can reach next inside a function: a delayed branch's successor is its delay slot, and the slot's are the branch's targets; a call returns after its slot; tail calls, returns and indirect jumps leave. The FPSCR pass is built on it, and so will the lifter be.
+
 **Switches.** SHC compiles a dense `switch` to a bounds check and `shll r0 ; mov r0,rX ; mova table,r0 ; mov.w @(r0,rX),r0 ; braf r0`. The table's size is the constant the `cmp/hs` a few instructions back compares with; without that bound there is no table to trust, and the `braf` is reported as an indirect jump. Table words are classified as jump table, targets become branch targets of the function.
 
 **Delay slots** belong to their branch. A branch target that is also some branch's delay slot is kept and reported.
 
 **Every word is classified:** code, literal (read by a PC-relative `mov.w`/`mov.l`, or through `mova`), jump table, padding (zero or `nop` words between classified things, at most 16 bytes, or to the end of the image), data (a data region of the layout), or unknown. `qilin coverage` prints a table per region of the layout, and exits 3 while a **lifted** region has an unknown byte (without a layout, the whole image counts as lifted). `--list` adds every unknown run; `--map` prints every run of every kind with the function that claimed it.
 
-### Results on the supported build (v0.3.0)
+### Results on the supported build (v0.3.0; v0.4.0)
 `qilin cfg`, 0.3 s (two passes):
 
 | | |
 |---|---|
 | Functions | 4,307: 1 entry, 2,316 call targets, 305 tail-call targets, 902 from pointers, 783 orphans. By region: 1,319 in the game, 2,192 in the middleware, 795 in Shinobi |
-| Direct calls resolved | 11,404; constant tail calls 711 (branches to other functions are now counted here) |
-| Indirect calls (through a pointer loaded at run time) | 533 |
-| Indirect jumps with no constant target and no table | 143: 3 in the game, 60 in the middleware, 80 in Shinobi (`code-analysis.md`) |
+| Direct calls resolved | 11,410; constant tail calls 709; calls by loaded PR 2; returns by `jmp` 18 (v0.4.0) |
+| Indirect calls (through a pointer loaded at run time) | 529 |
+| Indirect jumps with no constant target and no table | 127: 3 in the game, 44 in the middleware, 80 in Shinobi (`code-analysis.md`) |
 | Switch tables | 14, with 578 cases |
 | Rejected candidates | 86, 1 of them a call target (below) |
 
@@ -99,18 +105,43 @@ Findings (`qilin suspects`):
 - **`0x8C099470` is called but isn't an SH-4 instruction in the decoder's set:** its first word is `0x003B`, followed by `rts ; nop`. Three more such words exist in the image, and beside it sits a stub that is `trapa #2 ; rts`. These are the development system's debugger hooks; they will be replaced natively (as no-ops or logging), not lifted. Whether `0x003B` should decode (as the SH-4's debugger break) is left open until a document can be cited for it.
 - **Two functions with a branch into a delay slot** (`0x8C04EDF4`, `0x8C04EEE0`): hand-written copy routines (they use `pref` to the store queues and `fschg`) that also jump into themselves by a computed offset. Replaced natively.
 - **Four functions with a call whose target register differs between paths** (`0x8C075B54`, `0x8C075ED0`; in Shinobi `0x8C0B08D8`, `0x8C0B80FE`): left unresolved, as indirect calls.
-- **The 143 indirect jumps:** by region in `code-analysis.md`. The game's 3 are indirect tail calls through function pointers, which go through the function table.
+- **The 127 indirect jumps:** by region in `code-analysis.md`. The game's 3 are indirect tail calls through function pointers, which go through the function table.
+
+## The FPSCR mode pass (`fpmode.*`, v0.4.0)
+What an FPU instruction does depends on FPSCR: PR (single or double precision), SZ (32- or 64-bit `fmov`), FR (which bank fr0–fr15 name), RM (round to nearest or towards zero) and DN (denormals flushed). `qilin fpmode` works out those bits at every FPU instruction.
+
+**Known bits.** Each tracked bit, in FPSCR and in every general register, is known (0 or 1) or unknown. That is followed through `fschg` and `frchg`, through `lds rN,fpscr`, through the read-modify-write the code uses (`sts fpscr,rN`, `and`/`or`/`xor`/`not` with masks, `lds rN,fpscr`), and through saves and restores on the stack (`sts.l fpscr,@-rN` … `lds.l @rN+,fpscr`, assuming as compiled code does that the saved word isn't overwritten in between).
+
+**Contexts.** The pass is interprocedural and context-sensitive: each function is analysed once per mode it is entered in. Functions whose address is taken (a pointer to them exists outside code; a literal-pool word that its own function only calls through doesn't count) and functions no analysed code calls are entered in the default mode. The others are entered in the modes their callers call them in. A call goes on in the callee's exit mode for that entry; a call to a function with no analysis (in a replaced region, or reached indirectly) keeps the mode. Recursion is handled by assuming a callee keeps the mode until its result is known, and iterating until no context or exit changes. Functions in regions the layout replaces aren't analysed: they are native at run time and don't change the mode.
+
+**What instructions need.** Arithmetic needs PR, RM and DN; `fmov` and `fschg` need SZ. FR isn't needed: the lifted code keeps the current and the back bank as two arrays and `frchg` swaps them, as the hardware does, so instructions always name the current bank (`code-analysis.md` has why that matters here). FR is tracked all the same, for the reports.
+
+**What is reported:**
+- an FPU instruction whose needed bits aren't known (*unproven*);
+- one whose bits are known in each of its function's contexts but differ between them (*entry-dependent*: lifted once per mode);
+- a join where paths arrive with PR, SZ, RM or DN different;
+- an indirect call or jump in a mode other than the default;
+- an address-taken function called, tail-called or returning in another mode.
+
+`--list` prints every problem; `--json` every function's contexts with their entry and exit modes.
+
+**How it got there**, because each step was a real finding:
+1. A per-function pass assuming the default mode at every call and return reported 34 functions that break the convention: the matrix library and the double-precision helpers.
+2. Taking callers' modes and callees' exits interprocedurally made almost everything unknown. Shinobi's context-switching code (and `longjmp`, which it calls) returns in a mode loaded from memory, and that spread to every caller of Shinobi. Fixed by leaving replaced regions out.
+3. Summaries relative to the entry ("the bit as on entry", or its inverse) lost precision where a known value met an "as on entry" one that was in fact equal. Replaced by concrete contexts.
+4. What was still lost came from two control-flow errors in hand-written code: the call made by loading PR and the return through a saved PR, and a return address kept in a scratch register across a helper. Fixed in the CFG (above).
+5. What then remained was real: the engine runs in bank 1 after some matrix calls, and paths rejoin there in different banks. That is why FR is handled by swapping banks rather than by knowing it.
+
+Results are in `code-analysis.md`: every FPU instruction of the game (14,432) and of the middleware (21,143) is proven, with 1 entry-dependent.
 
 ## Hardware-access profile (`hwaccess.*`, v0.3.0)
 `qilin hwaccess` lists, per function, every load, store and cache operation whose address is a constant outside cached RAM, with the hardware block it reaches (`hw_region`: the SH-4's own registers in P4, then the Dreamcast's area 0 registers, sound chip, video memory, tile accelerator and RAM views, from the SH7750 hardware manual's and the Dreamcast's memory maps). Addresses come from the CFG's register constants (`register_constants`, the same dataflow). Accesses through pointers loaded from memory, or relative to GBR, aren't seen. Results are in `code-analysis.md`: 76 functions, none of them in the game.
 
 ## Tests (`recomp/tests/tests.cpp`)
-No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
+No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
 
 ## What comes next
 In the order the sister projects took:
 
-1. **The middleware's attribution** (`code-analysis.md`): per object file and function, which library; what is lifted and what replaced; its coverage then gated like the game's.
-2. **The FPSCR mode pass:** PR, SZ and FR at every FPU instruction, per function, with the convention at calls established from the libraries' code.
-3. **The lifter** (`qilin lift`): one C++ function per guest function, registers in locals, in slices as Ghoulies did (integer; calls, tail calls and the function table; the FPU).
-4. **The differential test.** The sister projects run each lifted function against the original code under Unicorn; Unicorn has no SuperH. The candidates for the reference: QEMU's SH-4 as an external tool, driven through its GDB stub, and an independent model of the instructions written from Hitachi's manual (as Beat the Beat's `paired.py` is for the paired singles). To be decided when the lifter's first slice exists; the requirement stays the same: every function, whole call trees, 0 unexplained mismatches, also under UBSan.
+1. **The lifter** (`qilin lift`): one C++ function per guest function, registers in locals, in slices as Ghoulies did (integer; calls, tail calls, the calls by loaded PR and the function table; the FPU, from `fpmode`'s modes, with the two banks as arrays and run-time FPSCR where a mode isn't proven). The middleware is lifted too, for bring-up (`code-analysis.md`).
+2. **The differential test.** The sister projects run each lifted function against the original code under Unicorn; Unicorn has no SuperH. The candidates for the reference: QEMU's SH-4 as an external tool, driven through its GDB stub, and an independent model of the instructions written from Hitachi's manual (as Beat the Beat's `paired.py` is for the paired singles). To be decided when the lifter's first slice exists; the requirement stays the same: every function, whole call trees, 0 unexplained mismatches, also under UBSan.
