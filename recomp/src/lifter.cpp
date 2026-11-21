@@ -170,6 +170,15 @@ private:
         if ((spec.flags & (sh4::kLoad | sh4::kStore | sh4::kCache)) && !(spec.flags & sh4::kPcRelative)) s += mem(pc);
         const std::string imm_s = hex(static_cast<uint32_t>(i.imm_s()));
         const std::string imm_u = hex(i.imm_u());
+        // One register as both operands: what the expression would compute is
+        // known, and writing it out would compare or assign a variable with itself.
+        if (n == m) switch (i.op) {
+            case Op::mov: case Op::and_: case Op::or_: line(std::format("(void){};  // {}: no change", R(n), text)); return s;
+            case Op::xor_: line(std::format("{} = 0u;", R(n))); return s;
+            case Op::cmp_eq: case Op::cmp_hs: case Op::cmp_ge: line(std::format("{} = 1u;  // {}", T(), text)); return s;
+            case Op::cmp_hi: case Op::cmp_gt: line(std::format("{} = 0u;  // {}", T(), text)); return s;
+            default: break;
+            }
         switch (i.op) {
         // ---- data transfer ----
         case Op::mov_imm: line(std::format("{} = {};", R(n), imm_s)); break;
@@ -388,7 +397,7 @@ private:
                 const auto [dh, dl] = pair64(n);
                 const auto [sh, sl] = pair64(m);
                 line(std::format("{{ const float hi = {}, lo = {}; {} = hi; {} = lo; }}", sh, sl, dh, dl));
-            } else {
+            } else if (n != m) {
                 line(std::format("{} = {};", F(n), F(m)));
             }
             break;

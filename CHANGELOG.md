@@ -4,6 +4,18 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.8.0] - 2026-11-21
+The differential test: every instruction the lifter lifts, against a reference interpreter of our own.
+
+### Added
+- **The differential test** (`qilin_difftest`, `recomp/tests/difftest/`), as the sister projects have it. Random valid encodings of all 109 non-privileged instruction forms run on their own, in a delay slot, with 64-bit transfers and in double precision, plus twelve branch programs. The real analysis and lifter lift them at build time, and they run 48 times each from random states, lifted and on a reference interpreter written separately from the instruction definitions (memory byte by byte, the FPU in double with the denormal flush by hand). Registers, flags, MAC, FPUL, FPSCR, both FPU banks, return addresses, stops and a 16 KB memory window must agree: **242,496 runs, 0 mismatches**, in CI on every configuration. Planted bugs (`subc`'s operands swapped, `fcmp/gt` reversed, `bt/s` reading T after its slot) fail at once.
+
+### Changed
+- **Everything unarguably legal**, as the owner asked: CLAUDE.md now says so, and keeps the rule against other people's GPL code and tables (an emulator's included) although this project is GPL-3.0, and against any Dreamcast BIOS.
+
+### Fixed
+- The lifter emitted self-assignments and self-comparisons (`r13 = r13;`, `t = r15 > r15;`) for encodings with one register as both operands, which warnings-as-errors rejects. They now become their known results. The game has none, so its lifted code is unchanged.
+
 ## [0.7.0] - 2026-11-21
 Every function of the game is lifted. The FPU's approximate instructions are measured against a Dreamcast emulator, as the owner asked with no console at hand.
 

@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.7.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.8.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -120,6 +120,37 @@ if(NOT MSVC)
 endif()
 target_link_libraries(qilin_lift_tests PRIVATE qilin_warnings)
 add_test(NAME qilin_lift_tests COMMAND qilin_lift_tests)
+
+# ---- The differential test (no game files needed) ----
+# qilin_difftest_gen lifts random encodings of every instruction the lifter
+# lifts, and programs for every kind of branch, with the real analysis and
+# lifter; qilin_difftest runs them, compiled by the compiler under test,
+# against a reference interpreter written separately from the lifter.
+add_executable(qilin_difftest_gen recomp/tests/difftest/gen.cpp)
+target_include_directories(qilin_difftest_gen PRIVATE recomp/tests recomp/tests/difftest)
+target_link_libraries(qilin_difftest_gen PRIVATE qilin_core qilin_warnings)
+qilin_tool(qilin_difftest_gen)
+set(QILIN_DIFFTEST_GEN ${CMAKE_BINARY_DIR}/difftest_gen)
+set(QILIN_DIFFTEST_SOURCES ${QILIN_DIFFTEST_GEN}/table.cpp ${QILIN_DIFFTEST_GEN}/cases.cpp)
+foreach(i RANGE 7)
+    list(APPEND QILIN_DIFFTEST_SOURCES ${QILIN_DIFFTEST_GEN}/lifted_${i}.cpp)
+endforeach()
+add_custom_command(
+    OUTPUT ${QILIN_DIFFTEST_SOURCES} ${QILIN_DIFFTEST_GEN}/functions.hpp
+    COMMAND qilin_difftest_gen ${QILIN_DIFFTEST_GEN}
+    DEPENDS qilin_difftest_gen
+    COMMENT "Lifting the differential test's cases")
+add_executable(qilin_difftest recomp/tests/difftest/run.cpp recomp/tests/difftest/ref.cpp recomp/runtime/dispatch.cpp ${QILIN_DIFFTEST_SOURCES})
+target_include_directories(qilin_difftest PRIVATE recomp/runtime recomp/tests recomp/tests/difftest ${QILIN_DIFFTEST_GEN})
+target_compile_definitions(qilin_difftest PRIVATE QILIN_CHECKED_MEMORY)
+if(NOT MSVC)
+    target_compile_options(qilin_difftest PRIVATE -ffp-contract=off)
+else()
+    target_compile_options(qilin_difftest PRIVATE /bigobj)
+endif()
+target_link_libraries(qilin_difftest PRIVATE qilin_core qilin_warnings)
+qilin_tool(qilin_difftest)
+add_test(NAME qilin_difftest COMMAND qilin_difftest)
 
 # ---- qilin_dcref: the FPU's approximate instructions against a Dreamcast emulator ----
 # A developer tool, not built by default and not in CI: it runs Flycast's

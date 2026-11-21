@@ -241,11 +241,57 @@ Transposing the matrix, or rounding `fmac` twice, makes them fail.
 
 **Results on the supported build:** **2,916 functions are lifted, every one of the game's 1,259 and 1,657 of the middleware.** The branch into a delay slot (`0x8C04EEE0`) is now lifted too, by copying the slot's instruction under its own label after the function's body, followed by a jump to the instruction after it. That function is the C runtime's `memset`. It clears memory through the SH-4's store queues (`fmov` to `0xE0000040` downwards, then `pref` of a store-queue address) and finishes with a computed jump into an unrolled run of `mov.b` stores, so the lifted code stops there, naming the store-queue access, until the runtime gives it a native replacement. What isn't lifted: Shinobi (796 stubs), the 574 unreferenced functions, and the 21 middleware functions with privileged instructions, which are hardware-facing and are to be replaced.
 
+## The differential test (`recomp/tests/difftest/`, v0.8.0)
+As in the sister projects (Punch-Out's `recomp/tests/difftest/` is the model): every instruction the lifter lifts runs from random states, lifted and on a reference interpreter written separately, and everything must agree. It runs in CI on every configuration and needs no game files.
+
+**The cases** (`gen.cpp`, `qilin_difftest_gen`, at build time). Each of the 109 non-privileged, non-branch instruction forms gets 16 random valid encodings; the decoder decides validity. Each encoding is placed in small functions:
+- on its own, before `rts`;
+- in `rts`'s delay slot (except PC-relative forms and those that touch PR, which the lifter refuses there);
+- between two `fschg`, where FPSCR.SZ matters (64-bit transfers);
+- between loads of FPSCR that set and clear PR, where precision matters.
+
+Twelve programs cover the branches:
+- `bt` and `bf` over an add;
+- `bt/s` and `bf/s` with a slot that sets or clears T, so the branch must have read T first;
+- `bra` with a slot;
+- `bsr` to a callee of its own, with PR saved on the stack;
+- `jsr` through the literal pool with T set in the slot;
+- a `dt` loop;
+- `jsr`, `jmp`, `braf` and `bsrf` to addresses with no function.
+
+The cases go into one synthetic boot file, 64 bytes each, with words that decode as nothing in between. A PC-relative load reads its own case's filler, never another case's code, which analysis would rightly take for data. A table of their addresses lets the real analysis find them as functions (as pointers in data), and the real FPSCR pass and lifter lift them. An encoding the lifter refuses is left out and counted: 221 of them, every one a form the SH-4 leaves undefined (double precision on an odd register, `fldi0`/`fldi1`/`fmac`/`fipr`/`fsrra`/`fsca`/`ftrv` in double precision, `fcnvds`/`fcnvsd` in single) or one with the same register as address and data, which the lifter stops on by design. That leaves 5,052 cases and 5,055 functions, written as C++ for the compiler under test.
+
+**The reference** (`ref.cpp`). It shares only the decoder's identification of the opcode with the lifter:
+- it works from the raw word's fields, with memory read and written byte by byte;
+- `div1` is written from its definition as a 33-bit result, `shad`/`shld` from theirs;
+- the FPU computes in double precision with the DN = 1 flush done by hand, so it doesn't depend on the host's floating-point mode, which the lifted side sets with `rt::host_fp_setup()`;
+- branches run with their delay slots, calls and returns through a call stack, and indirect branches to addresses with no function stop as *bad jump*.
+
+For the five approximate instructions it uses the port's own definitions (measured against the emulator, above), so what it checks there is the wiring.
+
+**The run** (`run.cpp`, `qilin_difftest`). Each case runs 48 times from random states:
+- registers mix random values with the edges (0, 1, 31, 32, INT_MIN, INT_MAX, −1 …);
+- the FPU registers mix ordinary magnitudes, infinities, both kinds of NaN, denormals, the single-precision limits and raw bit patterns;
+- S is set in a quarter of the runs (so `mac` must stop);
+- memory operands are steered into a 16 KB window, aligned to their access, and the window is filled at random.
+
+The lifted code runs with checked memory. These must all agree:
+- r0–r15, PR, GBR, MACH, MACL, T, S, Q, M, FPUL, FPSCR, and both banks bit for bit (NaNs from arithmetic as a class, since their bits are the host's);
+- where the code returned to;
+- every stop (kind, instruction, value);
+- the whole window.
+
+**Results: 242,496 runs, 0 mismatches**, 4,035 of them ending at a stop both sides make (bad jumps, `mac` with S set, `ftrc` out of range, FPSCR loads with exception enables), in about 35 s. Planted bugs fail at once: `subc` with its operands swapped (1,440 mismatches), `fcmp/gt` reversed (1,343), `bt/s` reading T after its slot (41).
+
+**What it found:**
+- The reference was wrong once, and the lifter right: a call sets PR even when no function is at its target.
+- The lifter emitted `r13 = r13;`, `t = r15 > r15;` and the like for encodings with one register as both operands, which warnings-as-errors rejects. The game never uses them; such forms now become their known results.
+
 ## Unit tests (`recomp/tests/tests.cpp`)
 No game files: SHA-256 vectors; boot files (good, empty, odd, a byte too large for RAM); 60 instruction words pinned to their text, 36 words that must not decode, every form's canonical word and its word with all field bits set, the count of valid words and of delayed branches; function discovery on synthetic programs (calls through the pool and `bsr`, a switch with and without its bound, constants that agree and differ at a join, pointers to code and to data, data that would run on into code, orphans, a branch in a delay slot, a branch into one, running off the image; v0.3.0: constants through arithmetic, a float reached through `mova`, tail calls by `bra` to a prologue and to an entry found by a call, a layout's data region and coverage gated by it; v0.4.0: a call by loaded PR and a return through the saved PR, a scratch register kept across a callee that doesn't write it and lost across one that does, successors through delay slots) and the registers each instruction writes; the hardware region map and the profile of a small program, and access sizes; the supported build's layout covering its image in order; the FPSCR pass (`fschg` pairs, the read-modify-write into double precision, a save and restore on the stack, a callee analysed in its caller's mode, a join in different modes, an indirect call in another mode, a bank switch, a function called only from replaced code (v0.6.0), and composing and meeting known bits); a synthetic five-track GD-ROM written to a scratch folder (pregaps, a file in the last track, a file running into an audio track, a sector of the wrong mode) and 12 malformed cue sheets, a missing cue and a truncated track file.
 
 ## What comes next
 In the order the sister projects took:
 
-1. **The differential test.** The sister projects run each lifted instruction from random states against a reference interpreter of their own, written from the manual separately from the lifter (Punch-Out's `recomp/tests/difftest/`), then whole call trees. The same here, with the end-to-end tests' assembler for the cases. Flycast (`tools/dcref`) is the black-box check on the reference where the manual leaves room, as it was for the approximate instructions. The requirement stays the same: every instruction the lifter lifts, 0 unexplained mismatches, also under UBSan.
+1. **Whole call trees** in the differential test, under UBSan too, once the runtime can run the game's functions.
 2. **The runtime** (roadmap step 3): `qilin_run`, guest RAM at its aliases, the registry of native replacements (the store-queue `memset` among the first), stopping on anything unregistered and naming it.
