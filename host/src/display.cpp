@@ -134,6 +134,7 @@ struct Display::Impl {
     static constexpr unsigned kMorePads = 3;
     SDL_Gamepad* more[kMorePads] = {};
     Display::PadState more_raw[kMorePads];
+    uint16_t rumble_level[1 + kMorePads] = {};  // each pad's, as last set
 
     // Play with this one (the first, or the one just connected if there's none).
     void open_pad(SDL_JoystickID id) {
@@ -151,6 +152,7 @@ struct Display::Impl {
         }
         for (SDL_Gamepad*& m : more)  // another player's pad becomes the first's
             if (m && SDL_GetGamepadID(m) == id) {
+                rumble_level[0] = rumble_level[1 + (&m - more)], rumble_level[1 + (&m - more)] = 0;
                 pad = m, m = nullptr, pad_pressed = false;
                 return;
             }
@@ -543,6 +545,7 @@ bool Display::poll() {
             SDL_CloseGamepad(d.pad);
             d.pad = nullptr;
             d.rumbling = false;
+            d.rumble_level[0] = 0;
             d.open_first_pad();  // another takes over, if there is one
         }
         if (e.type == SDL_EVENT_GAMEPAD_REMOVED)
@@ -550,6 +553,7 @@ bool Display::poll() {
                 if (m && SDL_GetGamepadID(m) == e.gdevice.which) {
                     SDL_CloseGamepad(m);
                     m = nullptr;
+                    d.rumble_level[1 + (&m - d.more)] = 0;
                 }
         // Full screen, whatever else is going on.
         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
@@ -676,6 +680,16 @@ void Display::rumble(bool on) {
     if (!d.pad || on == d.rumbling) return;
     d.rumbling = on;
     SDL_RumbleGamepad(d.pad, on ? 0xFFFF : 0, on ? 0xFFFF : 0, on ? 60000 : 0);
+}
+void Display::rumble(unsigned player, float strength) {
+    Impl& d = *impl_;
+    if (player > Impl::kMorePads) return;
+    SDL_Gamepad* p = player == 0 ? d.pad : d.more[player - 1];
+    const uint16_t level = static_cast<uint16_t>(std::clamp(strength, 0.0f, 1.0f) * 65535.0f + 0.5f);
+    if (!p || level == d.rumble_level[player]) return;
+    d.rumble_level[player] = level;
+    if (player == 0) d.rumbling = level != 0;
+    SDL_RumbleGamepad(p, level, level, level ? 60000 : 0);
 }
 
 void Display::Impl::show(VkImage src, VkImageView view, uint32_t sw, uint32_t sh, float aspect, uint32_t lines) {

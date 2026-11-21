@@ -16,6 +16,8 @@
 // the d-pad, both triggers and the stick; its name is the standard pad's.
 #include "maple.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +25,7 @@
 #include <filesystem>
 #include <vector>
 
+#include "clock.hpp"
 #include "guest.hpp"
 #include "pvr.hpp"
 #include "qilin/host/paths.hpp"
@@ -234,24 +237,89 @@ void memory_card(uint32_t header, uint32_t data_at, uint32_t to) {
     }
 }
 
+// ---- the Jump Pack: a sub-unit in every controller's second slot (0x02)
+// with one function, vibration. Its device information's word for it, read
+// by Shinobi's vibration library (0x8C0C17C4-0x8C0C1C0C) as bytes, is the
+// number of vibration sources and how many run at once: one each.
+//
+// What the game sends, read from that library and traced in a mission: a
+// set condition (14) with one word per source, its bytes the source (bits
+// 7-4 of the first, here 1), then the power (bits 6-4 one way, 2-0 the
+// other, 0-7; bits 7 and 3 the library's flags), the frequency and the
+// ramp. The engine (0x8C066E84) sends its vibration again every frame for
+// as long as it should last and never sends a stop, so a pack here stops
+// by itself when the commands stop: 100 ms after the last.
+constexpr uint32_t kVibration = 0x00010000u;
+constexpr uint64_t kVibrationHold = 100'000'000u;  // ns
+
+struct Pack {
+    std::atomic<uint8_t> power{0};  // 0-7
+    std::atomic<uint64_t> until{0};  // guest ns
+};
+Pack g_packs[4];
+
+void jump_pack(uint32_t port, uint32_t header, uint32_t data_at, uint32_t to) {
+    const uint32_t command = header & 0xFFu, recipient = (header >> 8) & 0xFFu, sender = (header >> 16) & 0xFFu, words = header >> 24;
+    const uint32_t me = recipient;
+    switch (command) {
+    case kDeviceInfo: {
+        uint8_t info[112] = {};
+        const uint32_t ids[4] = {kVibration, 0x00000101u, 0, 0};  // one source, one at a time
+        std::memcpy(info, ids, 16);
+        info[16] = 0xFF, info[17] = 0;
+        const char name[] = "Puru Puru Pack";
+        std::memset(info + 18, ' ', 30 + 60);
+        std::memcpy(info + 18, name, sizeof name - 1);
+        const uint16_t standby = 200, max = 1600;
+        std::memcpy(info + 108, &standby, 2), std::memcpy(info + 110, &max, 2);
+        uint32_t data[28];
+        std::memcpy(data, info, sizeof info);
+        reply(to, kInfoReply, sender, me, data, 28);
+        return;
+    }
+    case kReset:
+    case kShutdown:
+        g_packs[port].power.store(0);
+        reply(to, kOk, sender, me, nullptr, 0);
+        return;
+    case kSetCondition: {
+        if (words != 2 || rt::ld32(data_at) != kVibration) throw rt::Stop{rt::Stop::Unsupported, 0, header};
+        const uint32_t w = rt::ld32(data_at + 4);
+        const uint32_t source = (w >> 4) & 0xFu, power = std::max((w >> 12) & 7u, (w >> 8) & 7u);
+        if (source != 1) throw rt::Stop{rt::Stop::Unsupported, 0, w};
+        if (g_trace) std::fprintf(stderr, "maple: port %u vibration %08X: power %u\n", port, w, power);
+        g_packs[port].power.store(static_cast<uint8_t>(power));
+        g_packs[port].until.store(guest_ns() + kVibrationHold);
+        reply(to, kOk, sender, me, nullptr, 0);
+        return;
+    }
+    default: throw rt::Stop{rt::Stop::Unsupported, 0, header};
+    }
+}
+
 void frame(uint32_t port, uint32_t header, uint32_t data_at, uint32_t to) {
     const uint32_t command = header & 0xFFu, recipient = (header >> 8) & 0xFFu, sender = (header >> 16) & 0xFFu;
     const Controls in = video::controls(port);
     if (g_trace)
         std::fprintf(stderr, "maple: port %u command %u to %02X from %02X, %u words, reply at %08X, buttons %04X\n", port, command, recipient, sender,
                      header >> 24, to, in.buttons);
-    // The main unit (0x20 | the port's bits) on a port with a pad, and a
-    // memory card in its first slot (sub-unit 0x01) on port A.
+    // The main unit (0x20 | the port's bits) on a port with a pad, a memory
+    // card in its first slot (sub-unit 0x01) on port A and a Jump Pack in
+    // every pad's second (0x02).
     const bool card = port == 0 && in.connected;
     if (in.connected && card && (recipient & 0x3Fu) == 0x01u) {
         memory_card(header, data_at, to);
+        return;
+    }
+    if (in.connected && (recipient & 0x3Fu) == 0x02u) {  // a Jump Pack in the second slot
+        jump_pack(port, header, data_at, to);
         return;
     }
     if (!in.connected || (recipient & 0x3Fu) != 0x20u) {
         rt::st32(to, 0xFFFFFFFFu);
         return;
     }
-    const uint32_t me = recipient | (card ? 0x01u : 0u);  // the reply's sender: the main unit, with its sub-units' bits
+    const uint32_t me = recipient | (card ? 0x01u : 0u) | 0x02u;  // the reply's sender: the main unit, with its sub-units' bits
     switch (command) {
     case kDeviceInfo: device_info(to, sender, me); return;
     case kGetCondition: {
@@ -300,6 +368,12 @@ void run() {
 }  // namespace
 
 void start() { run(); }
+
+float vibration(unsigned port) {
+    const Pack& p = g_packs[port & 3u];
+    const uint8_t power = p.power.load();
+    return power && guest_ns() < p.until.load() ? float(power) / 7.0f : 0.0f;
+}
 
 void vblank() {
     if (pvr_register(kMdtsel) & 1u) run();

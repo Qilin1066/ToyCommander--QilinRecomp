@@ -68,6 +68,8 @@ public:
     bool mouse_moved(float& x, float& y) const;
     // Rumble on the first pad, on or off.
     void rumble(bool on);
+    // Rumble on a player's pad (0 the first), 0 (off) to 1 (full).
+    void rumble(unsigned player, float strength);
     // Show a frame of RGBA8 pixels, at `aspect` (displayed width / height);
     // `lines`: the console picture's height in its own pixels (whole
     // multiples and the CRT's raster go by it). Black around it.

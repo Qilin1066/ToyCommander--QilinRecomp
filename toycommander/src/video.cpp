@@ -224,6 +224,7 @@ void vblank() {
     if (!g_renderer) return;
     poll();
     run_menu();
+    for (unsigned port = 0; port < 4; ++port) g_display->rumble(port, g_settings.rumble ? maple::vibration(port) : 0.0f);
     if (!g_drawn) return;
     // The frame buffer the display reads, if the game has drawn it; else the
     // one drawn last.
