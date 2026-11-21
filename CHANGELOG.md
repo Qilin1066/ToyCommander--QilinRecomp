@@ -36,6 +36,7 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
   - a `jmp` to a constant address that the function's other paths reach too is a far branch inside the function, lifted as a `goto`, not a tail call. `0x8C090B1C` has 6; two of its labels had been taken for functions, so the build has 4,305 functions and 2,932 lifted. Nothing else in the lifted code changes, and `qilin_run` stops where it did;
   - a pointer guess is thrown out when a function with a compiled prologue contains it and nothing else supports it (none in this build);
   - `bra` to itself, the code's fatal-error stop, is lifted as `rt::hang`, a stop of its own kind, not as an empty loop (one, at `0x8C087AD0`). `qilin cfg` counts branches by register, and its JSON lists them.
+- **The GD-ROM's sub-channel command** (34, `gdrom_bios.cpp`): the drive's audio status and the play position as Q-channel data (format 1, 14 bytes), which Toy Racer's menu polls through gdFs. Written from ToyRacer--QilinRecomp's bring-up; the position stands still until the mixer plays CD audio.
 
 ## [0.9.0] - 2026-11-21
 The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.
