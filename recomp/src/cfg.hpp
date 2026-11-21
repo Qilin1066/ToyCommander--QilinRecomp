@@ -26,6 +26,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <optional>
 #include <span>
 #include <string>
@@ -103,6 +104,11 @@ struct Cfg {
     std::vector<uint32_t> owner;  // per word: entry of the first function that claimed it, or 0
     std::vector<Rejected> rejected;  // candidates that didn't decode (calls and tails are findings)
     uint32_t base = 0;
+    // Literal-pool words the code itself rewrites: their address is a
+    // constant some function loads (the movie decoder patches the offsets in
+    // its dispatcher's pool, 0x8C09F320-0x8C09F326, when it starts). PC-relative
+    // loads of these read memory at run time instead of the image's value.
+    std::set<uint32_t> patched_literals;
 
     Kind at(uint32_t a) const { return kind[(a - base) / 2]; }
 };

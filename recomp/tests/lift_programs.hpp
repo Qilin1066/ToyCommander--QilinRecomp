@@ -36,6 +36,8 @@ public:
     void movl(unsigned n, uint32_t value) { pool_.push_back({w_.size(), value, {}}), word(static_cast<uint16_t>(0xD000 | n << 8)); }
     void movl_label(unsigned n, const std::string& to) { pool_.push_back({w_.size(), 0, to}), word(static_cast<uint16_t>(0xD000 | n << 8)); }
     void mova(const std::string& to) { mova_.push_back({w_.size(), to}), word(0xC700); }
+    // mov.l @(disp,PC),Rn of the word at a label (a literal placed by hand).
+    void movl_at(unsigned n, const std::string& to) { mova_.push_back({w_.size(), to}), word(static_cast<uint16_t>(0xD000 | n << 8)); }
     // The pending literals, 4-byte aligned, after the code before them.
     void pool() {
         if (w_.size() % 2) word(0x0009);
@@ -138,6 +140,7 @@ inline Programs build() {
     a.b12(0xB000, "prcall"), a.word(kNop);
     a.b12(0xB000, "farjmp"), a.word(kNop);
     a.b12(0xB000, "hang"), a.word(kNop);
+    a.b12(0xB000, "patch"), a.word(kNop);
     a.b12(0xB000, "badjump"), a.word(kNop);
     a.b12(0xB000, "fpu"), a.word(kNop);
     a.b12(0xB000, "memory"), a.word(kNop);
@@ -266,6 +269,16 @@ inline Programs build() {
     // hang: a branch to itself, the game's stop on a fatal error
     a.label("hang");
     a.b12(0xA000, "hang"), a.word(kNop);
+    // patch: rewrites its own literal (as the movie decoder patches its
+    // dispatcher's offsets) and then loads it: r0 = 7, not the image's value.
+    a.label("patch");
+    a.movl_label(1, "patch_word");
+    a.word(imm(0xE000, 2, 7)), a.word(nm(0x2002, 1, 2));  // mov #7,r2 ; mov.l r2,@r1
+    a.movl_at(0, "patch_word");
+    a.word(kRts), a.word(kNop);
+    a.pool();
+    a.label("patch_word");
+    a.word(0x1111), a.word(0x1111);
     // badjump: a call to an address with no function
     a.label("badjump");
     a.word(0x4F22);
@@ -386,7 +399,7 @@ inline Programs build() {
     for (int k = 0; k < 252; ++k) a.word(0);
     p.image = a.finish();
     p.data = a.at("data");
-    for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "farjmp", "hang", "badjump",
+    for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "farjmp", "hang", "patch", "badjump",
                              "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.

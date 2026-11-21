@@ -763,6 +763,22 @@ private:
 // every entry found so far until the set of entries no longer changes.
 // A pass that shows a pointer guess to be wrong (find_evictions) is run again
 // without it.
+// A literal word is patched when some function loads its address as a
+// constant (a 4-byte literal whose value is the address of a literal word, or
+// of either half of one): code that keeps such an address writes there.
+void find_patched_literals(const BootFile& boot, Cfg& cfg) {
+    std::map<uint32_t, uint32_t> literal_words;  // address -> size
+    for (const auto& [e, f] : cfg.functions)
+        for (const auto& [a, n] : f.literals) literal_words.emplace(a, n);
+    for (const auto& [e, f] : cfg.functions)
+        for (const auto& [a, n] : f.literals) {
+            if (n != 4) continue;
+            const uint32_t v = boot.u32(a) & 0x1FFFFFFFu;
+            for (const auto& [w, size] : literal_words)
+                if ((w & 0x1FFFFFFFu) <= v && v < (w & 0x1FFFFFFFu) + size) cfg.patched_literals.insert(w);
+        }
+}
+
 Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
     std::set<uint32_t> entries;
     std::map<uint32_t, uint32_t> banned;
@@ -776,7 +792,10 @@ Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
         // Keep every entry seen: one dropped in a later pass would make it oscillate.
         const size_t before = entries.size();
         for (const auto& [entry, f] : cfg.functions) entries.insert(entry);
-        if (entries.size() == before) return cfg;
+        if (entries.size() == before) {
+            find_patched_literals(boot, cfg);
+            return cfg;
+        }
         if (pass == 8) throw std::logic_error("function discovery doesn't converge");
     }
 }

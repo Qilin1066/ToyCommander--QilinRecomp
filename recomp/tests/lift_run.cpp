@@ -222,6 +222,12 @@ void test_interrupt_poll() {
     qilin::rt::g_irq_service = nullptr;
 }
 
+// A literal the code rewrites is read from memory, not folded from the image.
+void test_patched_literal() {
+    Context c = fresh();
+    if (run(c, "patch")) eq("a patched literal", c.r[0], 7u);
+}
+
 void test_stops() {
     // badjump: its jsr is the instruction after sts.l and mov.l.
     expect_stop("badjump", Stop::BadJump, g_p.entry.at("badjump") + 4, T::kBase + 0x4000);
@@ -579,6 +585,7 @@ int main() {
     test_mul(rng);
     test_control();
     test_interrupt_poll();
+    test_patched_literal();
     test_stops();
     test_memory();
     test_farith(rng);

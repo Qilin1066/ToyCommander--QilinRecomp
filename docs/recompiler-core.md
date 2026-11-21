@@ -177,6 +177,11 @@ The output compiles without a warning under Clang with `-Wall -Wextra -Wpedantic
 
 At build time `qilin_liftgen` lifts the image with the real analysis and lifter. `qilin_lift_tests` compiles the result with the compiler under test, so CI checks generated code under GCC 14, Clang 19, Apple Clang and MSVC with warnings as errors. It then runs it with checked memory against results computed from the instructions' definitions: 86,286 checks, including thousands of random operands for the divisions, shifts and multiplies, and the stops (a bad jump, a function not lifted, an access outside the mapped regions). Breaking `div1`'s Q update, or one case of a generated switch, makes them fail.
 
+## Literals the code rewrites, and transfers of both sizes (v0.10.0)
+SHC's literal pools are constants, and the lifter folds them into the code. The movie decoder's set-up breaks that: it rewrites three offsets in its dispatcher's pool at run time (found by comparing the console's RAM with the boot file). Discovery now marks a literal word as patched when some function loads its address as a constant (a 4-byte literal whose value falls inside the word), and the lifter emits a memory read for PC-relative loads of those. On this build: 23 words, among them the decoder's three; the rest are pointers to pool words that nothing may write, which cost a load each and are still exact. An end-to-end test runs a function that rewrites its own literal.
+
+An FPU transfer (`fmov`) means different things with SZ = 0 and SZ = 1 (one register or a pair; FRn odd is an XD pair). When a function is analysed in contexts that disagree on SZ at an instruction, each context's mode is proven but the instruction's isn't: it is then lifted both ways, choosing by `c.fpscr`'s SZ at run time, which lifted code keeps exact (`fschg`, `lds ...,fpscr`). On this build: 14, all in the movie decoder's block handlers.
+
 ## The lifter's FPU slice (v0.6.0)
 Floating point is lifted in the mode `fpmode` proves at each instruction. An instruction whose mode isn't proven, or that would round towards zero or run with denormals kept (DN = 0), stops the lift of its function with the reason; none of the game's or the middleware's does.
 

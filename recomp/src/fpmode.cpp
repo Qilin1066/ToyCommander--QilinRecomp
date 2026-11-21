@@ -371,8 +371,16 @@ std::map<uint32_t, FpModes> fp_modes(const BootFile& boot, const Cfg& cfg, std::
         for (const auto& [site, target] : f.calls) called.insert(target);
         for (const auto& [site, target] : f.tail_jumps) called.insert(target);
     }
+    // A function the layout names as an indirect call's target is entered
+    // the way that call enters it, not in the default mode its taken address
+    // would otherwise suggest (the movie decoder's handlers run only with
+    // SZ = 1; analysing them in the default mode too left instructions whose
+    // mode no context agrees on).
+    std::set<uint32_t> known_targets;
     for (const auto& [e, f] : cfg.functions)
-        if (!replaced(e) && (taken.contains(e) || !called.contains(e))) contexts.try_emplace({e, kDefaultMode});
+        for (const auto& [site, targets] : f.indirect_targets) known_targets.insert(targets.begin(), targets.end());
+    for (const auto& [e, f] : cfg.functions)
+        if (!replaced(e) && !known_targets.contains(e) && (taken.contains(e) || !called.contains(e))) contexts.try_emplace({e, kDefaultMode});
     std::vector<std::string> global_problems;
     for (int round = 0;; ++round) {
         bool changed = false;

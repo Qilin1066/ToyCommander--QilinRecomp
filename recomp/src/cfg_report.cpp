@@ -48,6 +48,9 @@ std::string summary(const Cfg& cfg) {
     s += std::format("indirect jumps       {}\n", ind_jumps);
     s += std::format("functions with problems  {}\n", problems);
     s += std::format("rejected candidates  {} ({} of them call or jump targets)\n", cfg.rejected.size(), rejected_calls);
+    s += std::format("patched literals     {}", cfg.patched_literals.size());
+    for (uint32_t a : cfg.patched_literals) s += std::format(" {:08X}", a);
+    s += "\n";
     return s;
 }
 

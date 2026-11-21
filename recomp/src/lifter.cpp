@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <map>
 #include <set>
 #include <vector>
@@ -196,8 +197,14 @@ private:
         switch (i.op) {
         // ---- data transfer ----
         case Op::mov_imm: line(std::format("{} = {};", R(n), imm_s)); break;
-        case Op::movw_pc: line(std::format("{} = {};", R(n), hex(static_cast<uint32_t>(static_cast<int16_t>(boot_.u16(i.pc_relative(pc))))))); break;
-        case Op::movl_pc: line(std::format("{} = {};", R(n), hex(boot_.u32(i.pc_relative(pc))))); break;
+        case Op::movw_pc:
+            if (cfg_.patched_literals.contains(i.pc_relative(pc))) line(std::format("{} = rt::ld16s({});  // a literal the code rewrites", R(n), hex(i.pc_relative(pc))));
+            else line(std::format("{} = {};", R(n), hex(static_cast<uint32_t>(static_cast<int16_t>(boot_.u16(i.pc_relative(pc)))))));
+            break;
+        case Op::movl_pc:
+            if (cfg_.patched_literals.contains(i.pc_relative(pc))) line(std::format("{} = rt::ld32({});  // a literal the code rewrites", R(n), hex(i.pc_relative(pc))));
+            else line(std::format("{} = {};", R(n), hex(boot_.u32(i.pc_relative(pc)))));
+            break;
         case Op::mova: line(std::format("{} = {};", R(0), hex(i.pc_relative(pc)))); break;
         case Op::mov: line(std::format("{} = {};", R(n), R(m))); break;
         case Op::movb_st: line(std::format("rt::st8({}, {});", R(n), R(m))); break;
@@ -372,7 +379,11 @@ private:
         return std::format("rt::dbl({}, {})", F(n), F(n + 1));
     }
 
-    std::string fpu(uint32_t pc, const Insn& i) {
+    // An FPU instruction. `force_sz`: the transfer size to lift it for, when
+    // its functions' contexts disagree on SZ (each was proven, but the
+    // instruction is reached in both): the instruction is then lifted for
+    // both and picks at run time by FPSCR.SZ, which lifted code keeps exact.
+    std::string fpu(uint32_t pc, const Insn& i, std::optional<bool> force_sz = {}) {
         const sh4::Spec& spec = sh4::spec(i.op);
         const std::string text = sh4::disasm(i, pc);
         const unsigned n = i.n(), m = i.m();
@@ -383,13 +394,17 @@ private:
             const KnownBits& k = modes_->at.at(pc);
             if ((spec.flags & sh4::kFpPr) && !k.known(fpscr::kPR | fpscr::kRM | fpscr::kDN))
                 throw Fail{pc, std::format("FPU mode not proven: {}", text)};
-            if ((spec.flags & sh4::kFpSz) && !k.known(fpscr::kSZ)) throw Fail{pc, std::format("FPU mode not proven: {}", text)};
+            if ((spec.flags & sh4::kFpSz) && !k.known(fpscr::kSZ) && !force_sz) {
+                if (!modes_->entry_dependent || modes_->unproven) throw Fail{pc, std::format("FPU mode not proven: {}", text)};
+                std::string both = "    if (c.fpscr & rt::kFpscrSZ) {\n" + fpu(pc, i, true) + "    } else {\n" + fpu(pc, i, false) + "    }\n";
+                return both;
+            }
             if (spec.flags & sh4::kFpPr) {
                 if (k.value & fpscr::kRM) throw Fail{pc, std::format("rounding towards zero: {}", text)};
                 if (!(k.value & fpscr::kDN)) throw Fail{pc, std::format("denormals not flushed (DN = 0): {}", text)};
                 pr = k.value & fpscr::kPR;
             }
-            sz = k.value & fpscr::kSZ;
+            sz = force_sz ? *force_sz : (k.value & fpscr::kSZ) != 0;
         }
         std::string s;
         const auto line = [&](std::string code) { s += "    " + code + "\n"; };

@@ -81,10 +81,15 @@ std::span<const Region> layout(std::string_view sha256_hex) {
 
 namespace {
 // The movie decoder's block handlers (docs/code-analysis.md): its two block
-// loops turn on 64-bit transfers and call through this table, so the
-// handlers run with SZ = 1.
+// loops turn on 64-bit transfers and call through tables the decoder fills
+// from these, so the handlers run with SZ = 1 (and copy pixels with 8-byte
+// fmov through the XD registers).
 constexpr IndirectTargets kUsaIndirect[] = {
-    {0x8C09F2AC, 0x8C09F2F6, 0x8C0A3CDC, 16, "the TrueMotion decoder's block handlers, called with SZ = 1"},
+    {0x8C09F2AC, 0x8C09F2F6, 0x8C0A3CCC, 20, "the TrueMotion decoder's block handlers, called with SZ = 1"},
+    // Its set-up (0x8C09B080, 0x8C09BFB6) also puts these in the tables the
+    // dispatcher calls through: two pools of literals.
+    {0x8C09F2AC, 0x8C09F2F6, 0x8C09B148, 4, "more of the decoder's block handlers (a literal pool)"},
+    {0x8C09F2AC, 0x8C09F2F6, 0x8C09BFE0, 1, "one more of the decoder's block handlers (a literal)"},
 };
 }  // namespace
 
