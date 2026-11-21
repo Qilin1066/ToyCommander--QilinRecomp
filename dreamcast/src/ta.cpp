@@ -6,7 +6,7 @@
 #include "guest.hpp"
 #include "pvr.hpp"
 
-namespace toycommander::ta {
+namespace dreamcast::ta {
 
 namespace rt = qilin::rt;
 
@@ -288,4 +288,4 @@ void feed(const uint8_t* data, unsigned n) { block_write(0x10000000u, data, n); 
 
 const Scene& scene() { return g.scene; }
 
-}  // namespace toycommander::ta
+}  // namespace dreamcast::ta

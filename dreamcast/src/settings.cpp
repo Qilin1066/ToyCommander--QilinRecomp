@@ -9,7 +9,7 @@
 #include "qilin/host/pad.hpp"
 #include "system.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 namespace host = qilin::host;
 
 namespace {
@@ -298,7 +298,7 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
 std::string settings_text(const Settings& s) {
     const auto b = [](bool v) { return v ? "true" : "false"; };
     std::string t =
-        "# Toy Commander QilinRecomp settings. The settings menu (F1 or Esc in the game) changes these and saves\n"
+        "# " QILIN_APP_TITLE " QilinRecomp settings. The settings menu (F1 or Esc in the game) changes these and saves\n"
         "# them here; any text editor works too. Delete the file to get the defaults back.\n"
         "# Each line is name = value; # starts a comment.\n"
         "\n"
@@ -363,7 +363,7 @@ std::string settings_text(const Settings& s) {
     return t;
 }
 
-std::filesystem::path settings_file(const std::filesystem::path& folder) { return folder / "toycommander.ini"; }
+std::filesystem::path settings_file(const std::filesystem::path& folder) { return folder / (QILIN_APP ".ini"); }
 
 bool save_settings(const std::filesystem::path& folder, const Settings& s) {
     const std::filesystem::path file = settings_file(folder), tmp = file.string() + ".tmp";
@@ -396,4 +396,4 @@ Settings load_settings(const std::filesystem::path& folder) {
     return s;
 }
 
-}  // namespace toycommander
+}  // namespace dreamcast

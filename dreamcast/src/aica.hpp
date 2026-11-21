@@ -13,11 +13,11 @@ namespace qilin::gdrom {
 class Disc;
 }
 
-namespace toycommander {
+namespace dreamcast {
 
 // The disc: CD audio's samples (sound.cpp).
 void map_aica(const qilin::gdrom::Disc& disc);
 // Sound RAM, 2 MB.
 uint8_t* sound_ram();
 
-}  // namespace toycommander
+}  // namespace dreamcast

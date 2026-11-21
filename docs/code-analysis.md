@@ -66,7 +66,7 @@ Every byte of the boot file is now accounted for: `qilin coverage` reports **0 u
 - **Data inside code regions** (`data_blocks`): the TrueMotion decoder's mask tables between its block handlers (read with indexed loads), the movie dispatcher's offsets that the decoder patches, an 8-byte constant at `0x8C099560`, Shinobi's 8-character build tag and a literal nothing loads.
 - **The debugger stubs** at `0x8C099470` (`0x003B ; rts`, a break) and `0x8C09947C` (`trapa #2 ; rts`): their code doesn't decode as an ordinary function, so the layout gives their sizes, and they are natives (below).
 
-With orphans lifted too, **every function discovery finds (4,338) is lifted (4,075) or replaced natively (263)**: none is left as "not lifted" or "unreferenced".
+With orphans lifted too, **every function discovery finds (4,338) is lifted (4,090) or replaced natively (248)**: none is left as "not lifted" or "unreferenced".
 
 
 ## Hardware access

@@ -6,9 +6,9 @@
 
 #include "maple.hpp"
 
-namespace toycommander::video {
+namespace dreamcast::video {
 
-// Reads the settings (toycommander.ini in the data folder), opens the window
+// Reads the settings (<game>.ini in the data folder), opens the window
 // and creates the renderer and the settings menu. QILIN_HEADLESS=1: no window
 // and no menu (for machines without a display, and tests). QILIN_SCALE=<n>:
 // host pixels per game pixel (the settings' internal_scale otherwise). QILIN_SHOT=<folder>[,<every>]: writes every n-th
@@ -35,4 +35,4 @@ maple::Controls controls(unsigned port);
 // does nothing). Ends the program when the player closes the window.
 void poll();
 
-}  // namespace toycommander::video
+}  // namespace dreamcast::video

@@ -23,7 +23,7 @@ namespace qilin::gdrom {
 class Disc;
 }
 
-namespace toycommander::sound {
+namespace dreamcast::sound {
 
 constexpr unsigned kRate = 44100;  // the chip's output rate
 
@@ -57,4 +57,4 @@ void set_tick(void (*tick)());
 // The mixer thread and the host's output; after attach.
 void start();
 
-}  // namespace toycommander::sound
+}  // namespace dreamcast::sound

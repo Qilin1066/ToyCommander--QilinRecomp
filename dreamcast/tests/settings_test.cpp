@@ -1,4 +1,4 @@
-// The settings file (toycommander/src/settings.cpp): what it writes reads
+// The settings file (dreamcast/src/settings.cpp): what it writes reads
 // back the same, edits are read, and mistakes are reported with their line.
 // (From Punch-Out's.)
 #include <cstdarg>
@@ -33,7 +33,7 @@ void log(const char* format, ...) {
 
 namespace {
 
-namespace tc = toycommander;
+namespace tc = dreamcast;
 
 int g_failures = 0;
 
@@ -131,11 +131,11 @@ int main() {
     check(error_of("[controls]\na = pad:A\na = pad:B\n").rfind("line 3: 'a' is set twice", 0) == 0, "a control set twice");
     check(error_of("[controls]\r\na = pad:A\r\n").empty(), "Windows line endings");
     {
-        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "toycommander_settings_test";
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / QILIN_APP "_settings_test";
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         const tc::Settings s = tc::load_settings(dir);
-        check(same(s, d) && std::filesystem::exists(dir / "toycommander.ini"), "a missing file is written with the defaults");
+        check(same(s, d) && std::filesystem::exists(dir / (QILIN_APP ".ini")), "a missing file is written with the defaults");
         tc::Settings changed = s;
         changed.look = host::Look::crt;
         check(tc::save_settings(dir, changed) && tc::load_settings(dir).look == host::Look::crt, "saving, then loading, keeps a change");

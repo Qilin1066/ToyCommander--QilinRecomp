@@ -4,11 +4,11 @@
 // vertical blank, 60 times a second of guest time.
 #pragma once
 
-namespace toycommander {
+namespace dreamcast {
 
 // Installs the service and starts the video clock.
 void start_interrupts();
 // An event was raised: have the next poll look.
 void interrupt_pending();
 
-}  // namespace toycommander
+}  // namespace dreamcast

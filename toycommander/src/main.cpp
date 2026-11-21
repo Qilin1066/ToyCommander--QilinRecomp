@@ -77,13 +77,13 @@ int main(int argc, char** argv) {
     toycommander::provide_rtc();
     toycommander::provide_threads();
     toycommander::insert_disc(*disc);
-    toycommander::map_pvr();
-    toycommander::ta::map();
-    toycommander::map_aica(*disc);
-    toycommander::map_sh4_peripherals();
-    toycommander::video::start();
-    toycommander::sound::start();
-    toycommander::start_interrupts();
+    dreamcast::map_pvr();
+    dreamcast::ta::map();
+    dreamcast::map_aica(*disc);
+    dreamcast::map_sh4_peripherals();
+    dreamcast::video::start();
+    dreamcast::sound::start();
+    dreamcast::start_interrupts();
 
     rt::Context c;
     // QILIN_TIMEOUT=<seconds>: a run that hasn't stopped by then is stuck in

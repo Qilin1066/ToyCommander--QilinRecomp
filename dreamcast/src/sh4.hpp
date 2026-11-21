@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace toycommander {
+namespace dreamcast {
 
 void map_sh4_peripherals();
 
@@ -24,4 +24,4 @@ Dma2 dma_channel2();
 // Channel 2 has moved `bytes`: SAR2 advanced, DMATCR2 zero, CHCR2.TE set.
 void end_dma_channel2(uint32_t bytes);
 
-}  // namespace toycommander
+}  // namespace dreamcast

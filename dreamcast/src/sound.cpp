@@ -30,7 +30,7 @@
 #include "qilin/host/audio.hpp"
 #include "system.hpp"
 
-namespace toycommander::sound {
+namespace dreamcast::sound {
 
 namespace rt = qilin::rt;
 
@@ -329,4 +329,4 @@ void start() {
     }).detach();
 }
 
-}  // namespace toycommander::sound
+}  // namespace dreamcast::sound

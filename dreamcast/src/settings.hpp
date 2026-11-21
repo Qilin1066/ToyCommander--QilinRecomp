@@ -1,4 +1,4 @@
-// The settings file: toycommander.ini in the game's data folder
+// The settings file: <game>.ini (QILIN_APP, e.g. toycommander.ini) in the game's data folder
 // (host/paths.hpp), as the other Qilin recomps keep theirs: [display],
 // [controls] and [console] sections, written with every key and its
 // comments the first time the game runs. The settings menu (F1 or Esc in the
@@ -17,7 +17,7 @@
 
 #include "qilin/host/picture.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 // The Dreamcast controller's controls on port A. The pad's stick and
 // triggers also work it in full (their own range); these are what digital
@@ -83,7 +83,7 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error);
 // The file's text for the given settings, with comments explaining each part.
 std::string settings_text(const Settings& s);
 
-// toycommander.ini in `folder`: read it, or write the defaults there if it's
+// <game>.ini in `folder`: read it, or write the defaults there if it's
 // missing. A file that doesn't read stops the program.
 Settings load_settings(const std::filesystem::path& folder);
 // Write it back (through a temporary file, so a failure leaves the old one);
@@ -91,4 +91,4 @@ Settings load_settings(const std::filesystem::path& folder);
 bool save_settings(const std::filesystem::path& folder, const Settings& s);
 std::filesystem::path settings_file(const std::filesystem::path& folder);
 
-}  // namespace toycommander
+}  // namespace dreamcast

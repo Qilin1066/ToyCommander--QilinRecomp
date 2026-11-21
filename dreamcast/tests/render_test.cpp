@@ -13,8 +13,8 @@
 #include "ta.hpp"
 #include "texture.hpp"
 
-namespace tex = toycommander::texture;
-namespace ta = toycommander::ta;
+namespace tex = dreamcast::texture;
+namespace ta = dreamcast::ta;
 
 namespace {
 
@@ -162,7 +162,7 @@ int renderer() {
     qilin::host::Display::Options o;
     o.headless = true, o.width = 64, o.height = 48;
     qilin::host::Display display(o);
-    toycommander::renderer::Renderer r(display.gpu(), 1);
+    dreamcast::renderer::Renderer r(display.gpu(), 1);
     for (int k = 0; k < 64; ++k) g_vram[k * 2] = 0x1F, g_vram[k * 2 + 1] = 0;  // RGB565 blue
 
     ta::Scene scene;
@@ -189,7 +189,7 @@ int renderer() {
     quad(0, 0, 32, 48, 0.5f, 0, 1, 0, false);
     quad(32, 24, 64, 48, 0.05f, 0, 0, 1, false);
     quad(48, 0, 64, 16, 0.2f, 1, 1, 1, true);
-    toycommander::renderer::Source src;
+    dreamcast::renderer::Source src;
     src.scene = &scene, src.width = 64, src.height = 48;
     src.read = read_vram, src.generation = generation;
     r.draw(src);
@@ -238,7 +238,7 @@ int renderer() {
         shadow.modifiers.push_back({list, 0x80000000u | uint32_t(list) << 24, 0, first, 3});
         shadow.modifiers.push_back({list, 0x80000000u | uint32_t(list) << 24, 1u << 29, first + 3, 1});  // the last: "inside"
     }
-    toycommander::renderer::Source ssrc;
+    dreamcast::renderer::Source ssrc;
     ssrc.scene = &shadow, ssrc.width = 64, ssrc.height = 48, ssrc.frame_buffer = 0x200000;
     ssrc.read = read_vram, ssrc.generation = generation;
     ssrc.shadow_scale = 0x180;

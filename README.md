@@ -93,6 +93,7 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 |---|---|
 | `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported build's regions), `hwaccess` (the hardware-access profile), `fpmode` (the FPSCR mode pass), `lifter` and `lift_output` (SH-4 to C++), `main` (the `qilin` CLI) |
 | `recomp/runtime/` | What lifted code needs at run time: the guest context, memory access, the helpers, calls through the function table, guest memory, the registry of native replacements, the stop report |
+| `dreamcast/` | What the games on this engine share: the hardware the port provides, the renderer, sound, the Maple bus, the window's settings and menu |
 | `toycommander/src/` | The game's program (`qilin_run` during bring-up): the start-up and the native replacements |
 | `recomp/tests/` | Unit tests and end-to-end lifter tests on synthetic programs, so they need no game files |
 | `tools/check/` | The decoder cross-check against Capstone |

@@ -19,7 +19,7 @@
 #define QILIN_VERSION "?"
 #endif
 
-namespace toycommander {
+namespace dreamcast {
 namespace host = qilin::host;
 
 namespace {
@@ -323,7 +323,7 @@ void Menu::draw_menu() {
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::SetNextWindowBgAlpha(0.88f);
     ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextUnformatted("Toy Commander - settings (the game is paused)");
+    ImGui::TextUnformatted(QILIN_APP_TITLE " - settings (the game is paused)");
     // Close and Quit, top right on every page (Quit was at the bottom of the Game page, easy to miss).
     const ImGuiStyle& st = ImGui::GetStyle();
     const float buttons = ImGui::CalcTextSize("Close (Esc)").x + ImGui::CalcTextSize("Quit the game").x + 4 * st.FramePadding.x + st.ItemSpacing.x;
@@ -526,11 +526,11 @@ void Menu::game_page() {
     if (ImGui::Combo("Sound", &sound, kSound, 2)) s_.stereo = sound == 1;
 
     ImGui::SeparatorText("About");
-    ImGui::TextWrapped("Toy Commander QilinRecomp %s: a static recompilation, the game's own code compiled for this computer.",
+    ImGui::TextWrapped(QILIN_APP_TITLE " QilinRecomp %s: a static recompilation, the game's own code compiled for this computer.",
                        QILIN_VERSION);
     ImGui::TextWrapped("Graphics: Vulkan. Window, sound and input: SDL3 (zlib). Menu: Dear ImGui (MIT).");
     ImGui::TextWrapped("Settings file: %s", settings_file(folder_).string().c_str());
     ImGui::TextWrapped("Saves and the memory card: %s", folder_.string().c_str());
 }
 
-}  // namespace toycommander
+}  // namespace dreamcast

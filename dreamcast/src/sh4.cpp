@@ -12,7 +12,7 @@
 #include "clock.hpp"
 #include "guest.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 namespace rt = qilin::rt;
 
@@ -158,4 +158,4 @@ void start_free_running_timer0() {
 
 uint32_t timer0_count() { return current(0, guest_ns()); }
 
-}  // namespace toycommander
+}  // namespace dreamcast

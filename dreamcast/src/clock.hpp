@@ -5,10 +5,10 @@
 
 #include <cstdint>
 
-namespace toycommander {
+namespace dreamcast {
 
 uint64_t guest_ns();
 // Stops the guest's time (true) and starts it again (false).
 void pause_guest_time(bool paused);
 
-}  // namespace toycommander
+}  // namespace dreamcast

@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace toycommander::ta {
+namespace dreamcast::ta {
 
 enum List : uint8_t { kOpaque = 0, kOpaqueModifier = 1, kTranslucent = 2, kTranslucentModifier = 3, kPunchThrough = 4 };
 
@@ -58,4 +58,4 @@ void list_init();
 // The scene the stream has built so far (since the last list_init).
 const Scene& scene();
 
-}  // namespace toycommander::ta
+}  // namespace dreamcast::ta

@@ -3,7 +3,7 @@
 #include <atomic>
 #include <chrono>
 
-namespace toycommander {
+namespace dreamcast {
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -28,4 +28,4 @@ void pause_guest_time(bool paused) {
     }
 }
 
-}  // namespace toycommander
+}  // namespace dreamcast

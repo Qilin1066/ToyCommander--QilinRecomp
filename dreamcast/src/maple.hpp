@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-namespace toycommander::maple {
+namespace dreamcast::maple {
 
 // The host's controls for a port, in the Dreamcast controller's terms: the
 // buttons (its bits, set = pressed), triggers 0-255, the stick 0-255 (128
@@ -34,4 +34,4 @@ void start();
 // A vertical blank: runs the table if the bus is set to (MDTSEL).
 void vblank();
 
-}  // namespace toycommander::maple
+}  // namespace dreamcast::maple

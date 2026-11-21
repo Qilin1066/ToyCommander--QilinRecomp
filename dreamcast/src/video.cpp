@@ -15,9 +15,9 @@
 #include <SDL3/SDL.h>
 
 #include "clock.hpp"
+#include "game.hpp"
 #include "guest.hpp"
 #include "menu.hpp"
-#include "natives.hpp"
 #include "pvr.hpp"
 #include "qilin/host/display.hpp"
 #include "qilin/host/paths.hpp"
@@ -26,7 +26,7 @@
 #include "system.hpp"
 #include "ta.hpp"
 
-namespace toycommander::video {
+namespace dreamcast::video {
 
 namespace rt = qilin::rt;
 
@@ -124,9 +124,9 @@ void shot(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
 void start() {
     g_data = qilin::host::user_folder();
     g_settings = load_settings(g_data);
-    set_console(g_settings.language, g_settings.stereo);
+    game::set_console(g_settings.language, g_settings.stereo);
     // The game's own sound option writes the console's setting: keep it.
-    on_sound_mode([](bool stereo) {
+    game::on_sound_mode([](bool stereo) {
         g_settings.stereo = stereo;
         if (!save_settings(g_data, g_settings)) rt::log("settings: couldn't save the sound mode");
     });
@@ -388,4 +388,4 @@ void poll() {
     }
 }
 
-}  // namespace toycommander::video
+}  // namespace dreamcast::video

@@ -10,7 +10,7 @@
 #include "pvr.hpp"
 #include "sound.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 namespace rt = qilin::rt;
 
@@ -366,4 +366,4 @@ void map_aica(const qilin::gdrom::Disc& disc) {
 
 uint8_t* sound_ram() { return g_ram; }
 
-}  // namespace toycommander
+}  // namespace dreamcast

@@ -4,16 +4,15 @@
 #include <chrono>
 #include <thread>
 
-#include "chain.hpp"
 #include "clock.hpp"
+#include "game.hpp"
 #include "guest.hpp"
-#include "natives.hpp"
 #include "maple.hpp"
 #include "pvr.hpp"
 #include "video.hpp"
 #include "system.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 namespace rt = qilin::rt;
 
@@ -62,11 +61,11 @@ bool level4(rt::Context& c) {
         if (normal) {
             const unsigned bit = static_cast<unsigned>(std::countr_zero(normal));
             set_pvr_register(0x005F6900u, 1u << bit);
-            raise_bus_event(c, 0xA00u + 0x20u * (bit - 12));
+            game::raise_bus_event(c, 0xA00u + 0x20u * (bit - 12));
         } else {
             const unsigned bit = static_cast<unsigned>(std::countr_zero(external));
             set_pvr_register(0x005F6904u, 1u << bit);
-            raise_bus_event(c, 0xB00u + 0x20u * bit);
+            game::raise_bus_event(c, 0xB00u + 0x20u * bit);
         }
     }
     return false;
@@ -75,7 +74,7 @@ bool level4(rt::Context& c) {
 void service(rt::Context& c) {
     raise_blanks();
     rt::g_irq_waiting = false;
-    const uint32_t handler = interrupt_handler(0x224u);
+    const uint32_t handler = game::interrupt_handler(0x224u);
     for (int n = 0; n < 64 && level6_pending(); ++n) {
         if (((c.sr >> 4) & 15u) >= 6 || handler == 0) {
             rt::g_irq_waiting = true;
@@ -106,4 +105,4 @@ void start_interrupts() {
     }).detach();
 }
 
-}  // namespace toycommander
+}  // namespace dreamcast

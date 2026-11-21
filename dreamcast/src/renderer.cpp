@@ -20,7 +20,7 @@
 #include "shaders.inc"
 #include "texture.hpp"
 
-namespace toycommander::renderer {
+namespace dreamcast::renderer {
 
 using qilin::host::Buffer;
 using qilin::host::check;
@@ -902,4 +902,4 @@ std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }
 const Renderer::Stats& Renderer::stats() const { return impl_->stats; }
 
-}  // namespace toycommander::renderer
+}  // namespace dreamcast::renderer

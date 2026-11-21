@@ -17,7 +17,7 @@
 #include "ta.hpp"
 #include "video.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 namespace rt = qilin::rt;
 
@@ -200,4 +200,4 @@ void raise_external_event(unsigned bit) {
     interrupt_pending();
 }
 
-}  // namespace toycommander
+}  // namespace dreamcast

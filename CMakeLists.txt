@@ -209,7 +209,7 @@ if(QILIN_HOST)
     # (On the sources, so it comes after -Wextra on the command line.)
     if(NOT MSVC)
         set_source_files_properties(host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/tests/vktest.cpp
-                                    toycommander/src/renderer.cpp toycommander/src/menu.cpp toycommander/tests/render_test.cpp
+                                    dreamcast/src/renderer.cpp dreamcast/src/menu.cpp dreamcast/tests/render_test.cpp
                                     PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)
     endif()
 
@@ -222,24 +222,25 @@ if(QILIN_HOST)
 
     # The texture decoder and the renderer, without the game (the renderer's part
     # skips where there's no Vulkan 1.3 device; the test then exits 77).
-    add_executable(toycommander_render_test toycommander/tests/render_test.cpp toycommander/src/texture.cpp toycommander/src/renderer.cpp)
-    target_include_directories(toycommander_render_test PRIVATE toycommander/src recomp/runtime)
-    target_link_libraries(toycommander_render_test PRIVATE qilin_host qilin_warnings)
-    add_test(NAME toycommander_render_test COMMAND toycommander_render_test)
-    set_tests_properties(toycommander_render_test PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(dreamcast_render_test dreamcast/tests/render_test.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp)
+    target_include_directories(dreamcast_render_test PRIVATE dreamcast/src recomp/runtime)
+    target_link_libraries(dreamcast_render_test PRIVATE qilin_host qilin_warnings)
+    add_test(NAME dreamcast_render_test COMMAND dreamcast_render_test)
+    set_tests_properties(dreamcast_render_test PROPERTIES SKIP_RETURN_CODE 77)
 
     # The settings file and the settings menu, built here (so CI compiles them
     # with every compiler) and linked into qilin_run.
-    add_library(toycommander_menu STATIC toycommander/src/settings.cpp toycommander/src/menu.cpp)
-    target_include_directories(toycommander_menu PUBLIC toycommander/src recomp/runtime)
-    target_link_libraries(toycommander_menu PUBLIC qilin_host qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
-    target_compile_definitions(toycommander_menu PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
+    add_library(dreamcast_menu STATIC dreamcast/src/settings.cpp dreamcast/src/menu.cpp)
+    target_include_directories(dreamcast_menu PUBLIC dreamcast/src recomp/runtime)
+    target_link_libraries(dreamcast_menu PUBLIC qilin_host qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
+    target_compile_definitions(dreamcast_menu PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
 
     # The settings file's reader and writer (from Punch-Out's).
-    add_executable(toycommander_settings_test toycommander/tests/settings_test.cpp toycommander/src/settings.cpp)
-    target_include_directories(toycommander_settings_test PRIVATE toycommander/src recomp/runtime host/include)
-    target_link_libraries(toycommander_settings_test PRIVATE qilin_warnings)
-    add_test(NAME toycommander_settings_test COMMAND toycommander_settings_test)
+    add_executable(dreamcast_settings_test dreamcast/tests/settings_test.cpp dreamcast/src/settings.cpp)
+    target_include_directories(dreamcast_settings_test PRIVATE dreamcast/src recomp/runtime host/include)
+    target_link_libraries(dreamcast_settings_test PRIVATE qilin_warnings)
+    target_compile_definitions(dreamcast_settings_test PRIVATE QILIN_APP="toycommander" QILIN_APP_TITLE="Toy Commander")
+    add_test(NAME dreamcast_settings_test COMMAND dreamcast_settings_test)
 
     add_executable(qilin_frame_times_test host/tests/frame_times_test.cpp)
     target_include_directories(qilin_frame_times_test PRIVATE host/include)
@@ -277,10 +278,18 @@ if(QILIN_GAME_BOOT)
         COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
         DEPENDS qilin ${QILIN_GAME_BOOT}
         COMMENT "Lifting the game's boot file to C++")
-    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/texture.cpp toycommander/src/renderer.cpp toycommander/src/video.cpp toycommander/src/maple.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp toycommander/src/ta.cpp toycommander/src/interrupts.cpp toycommander/src/threads.cpp toycommander/src/aica.cpp toycommander/src/sound.cpp ${QILIN_RT_SOURCES} ${gen_sources})
-    target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
+    # The shared Dreamcast code (dreamcast/src: the hardware the port provides,
+    # the renderer, sound, the Maple bus, the window) and the game's own
+    # (toycommander/src: its start-up and the system software it replaces).
+    set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
+                                dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
+                                dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp)
+    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/game.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp
+                             toycommander/src/heap.cpp toycommander/src/gdrom_bios.cpp toycommander/src/chain.cpp toycommander/src/rtc.cpp
+                             toycommander/src/threads.cpp ${QILIN_DREAMCAST_SOURCES} ${QILIN_RT_SOURCES} ${gen_sources})
+    target_include_directories(qilin_run PRIVATE toycommander/src dreamcast/src recomp/runtime ${gen})
     find_package(Threads REQUIRED)
-    target_link_libraries(qilin_run PRIVATE qilin_disc toycommander_menu qilin_host qilin_imgui SDL3::SDL3-static qilin_warnings Threads::Threads)
+    target_link_libraries(qilin_run PRIVATE qilin_disc dreamcast_menu qilin_host qilin_imgui SDL3::SDL3-static qilin_warnings Threads::Threads)
     target_compile_definitions(qilin_run PRIVATE QILIN_VERSION="${PROJECT_VERSION}")
     if(QILIN_RUN_CHECKED)
         target_compile_definitions(qilin_run PRIVATE QILIN_CHECKED_MEMORY)

@@ -22,7 +22,7 @@
 #include "qilin/host/vulkan.hpp"
 #include "ta.hpp"
 
-namespace toycommander::renderer {
+namespace dreamcast::renderer {
 
 struct Source {
     const ta::Scene* scene = nullptr;
@@ -88,4 +88,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace toycommander::renderer
+}  // namespace dreamcast::renderer

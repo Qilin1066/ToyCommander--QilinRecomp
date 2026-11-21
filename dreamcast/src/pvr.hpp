@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace toycommander {
+namespace dreamcast {
 
 // Maps the registers and video memory on the bus.
 void map_pvr();
@@ -28,4 +28,4 @@ void raise_event(unsigned bit);
 // An external event (0x005F6904): bit 1 is the sound chip's interrupt.
 void raise_external_event(unsigned bit);
 
-}  // namespace toycommander
+}  // namespace dreamcast

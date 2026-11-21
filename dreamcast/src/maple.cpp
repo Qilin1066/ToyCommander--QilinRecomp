@@ -32,7 +32,7 @@
 #include "system.hpp"
 #include "video.hpp"
 
-namespace toycommander::maple {
+namespace dreamcast::maple {
 
 namespace rt = qilin::rt;
 
@@ -379,4 +379,4 @@ void vblank() {
     if (pvr_register(kMdtsel) & 1u) run();
 }
 
-}  // namespace toycommander::maple
+}  // namespace dreamcast::maple

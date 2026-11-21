@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-namespace toycommander::texture {
+namespace dreamcast::texture {
 
 enum Format : uint32_t { kArgb1555 = 0, kRgb565 = 1, kArgb4444 = 2, kYuv422 = 3, kBump = 4, kPalette4 = 5, kPalette8 = 6 };
 
@@ -55,4 +55,4 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
 // The place of texel (x, y) in a twiddled w x h texture.
 uint32_t twiddle(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
-}  // namespace toycommander::texture
+}  // namespace dreamcast::texture

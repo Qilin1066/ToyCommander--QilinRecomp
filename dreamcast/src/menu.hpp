@@ -23,7 +23,7 @@
 #include "qilin/host/display.hpp"
 #include "settings.hpp"
 
-namespace toycommander {
+namespace dreamcast {
 
 class Menu {
 public:
@@ -83,4 +83,4 @@ private:
     unsigned running_scale_ = 1;
 };
 
-}  // namespace toycommander
+}  // namespace dreamcast

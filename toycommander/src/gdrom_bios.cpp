@@ -10,6 +10,8 @@
 
 namespace toycommander {
 
+using namespace dreamcast;
+
 namespace rt = qilin::rt;
 
 namespace {

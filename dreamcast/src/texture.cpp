@@ -6,7 +6,7 @@
 
 #include "guest.hpp"
 
-namespace toycommander::texture {
+namespace dreamcast::texture {
 
 namespace rt = qilin::rt;
 
@@ -167,4 +167,4 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
         for (uint32_t x = 0; x < w; ++x) out[y * w + x] = x < row ? texel16(fmt, rd16(d, y * row + x)) : 0u;
 }
 
-}  // namespace toycommander::texture
+}  // namespace dreamcast::texture
