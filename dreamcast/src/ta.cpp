@@ -106,7 +106,11 @@ void Decoder::take(const uint8_t* block) {
         want = 32;
         return;
     }
-    uint32_t w[8];
+    // A 32-byte parameter, in a 64-byte buffer as the long ones are: the
+    // decoder reads a parameter's second half only when size_of said it has
+    // one, but the buffer never lets a disagreement read past it (GCC 14 sees
+    // the reads and can't see that).
+    uint32_t w[16] = {};
     std::memcpy(w, block, 32);
     parameter(w);
 }
