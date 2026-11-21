@@ -12,6 +12,7 @@
 #include "bus.hpp"
 #include "guest.hpp"
 #include "interrupts.hpp"
+#include "maple.hpp"
 #include "sh4.hpp"
 #include "ta.hpp"
 #include "video.hpp"
@@ -101,6 +102,10 @@ void write(uint32_t a, uint32_t v, unsigned n) {
     case kTaListInit:
         reg(a) = v & 0x7FFFFFFFu;  // reads back without the start bit
         if (v & 0x80000000u) ta::list_init();
+        return;
+    case 0x005F6C18u:  // MDST: the Maple bus's DMA (maple.cpp)
+        reg(a) = v & 1u;
+        if (v & 1u) maple::start();
         return;
     case kStartRender:
         reg(a) = v;

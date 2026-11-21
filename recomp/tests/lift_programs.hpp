@@ -138,6 +138,7 @@ inline Programs build() {
     a.b12(0xB000, "calls"), a.word(kNop);
     a.b12(0xB000, "indirect"), a.word(kNop);
     a.b12(0xB000, "prcall"), a.word(kNop);
+    a.b12(0xB000, "prbra"), a.word(kNop);
     a.b12(0xB000, "farjmp"), a.word(kNop);
     a.b12(0xB000, "hang"), a.word(kNop);
     a.b12(0xB000, "patch"), a.word(kNop);
@@ -249,6 +250,24 @@ inline Programs build() {
     a.align4();
     a.label("prcall_back");
     a.word(imm(0x7000, 4, 1)), a.word(n_(0x402B, 2)), a.word(kNop);  // add #1,r4 ; jmp @r2 ; nop
+    a.pool();
+    // prbra: calls made by loading PR by hand and branching with bra (as the
+    // engine's hand-written matrix code enters a shared tail), once with the
+    // lds before the bra and once in its delay slot; each call adds 1 and so
+    // does each place it returns to: r4 += 4
+    a.label("prbra");
+    a.word(0x4F22);                         // sts.l pr,@-r15
+    a.movl_label(0, "prbra_back1");
+    a.word(0x402A);                         // lds r0,pr
+    a.b12(0xA000, "inc"), a.word(kNop);     // bra inc
+    a.label("prbra_back1");
+    a.word(imm(0x7000, 4, 1));              // add #1,r4
+    a.movl_label(0, "prbra_back2");
+    a.b12(0xA000, "inc");                   // bra inc
+    a.word(0x402A);                         //  lds r0,pr
+    a.label("prbra_back2");
+    a.word(imm(0x7000, 4, 1));              // add #1,r4
+    a.word(0x4F26), a.word(kRts), a.word(kNop);
     a.pool();
     // farjmp: a branch inside a function made through a register, as SHC does
     // where bra can't reach: r4 == 0 falls into the label with r0 = 1, anything
@@ -399,7 +418,7 @@ inline Programs build() {
     for (int k = 0; k < 252; ++k) a.word(0);
     p.image = a.finish();
     p.data = a.at("data");
-    for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "farjmp", "hang", "patch", "badjump",
+    for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "prbra", "farjmp", "hang", "patch", "badjump",
                              "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.

@@ -1,13 +1,16 @@
 // The port's screen (video.hpp).
 #include "video.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "guest.hpp"
 #include "pvr.hpp"
@@ -145,6 +148,85 @@ void render() {
     if (!g_shot_folder.empty() && g_pictures % g_shot_every == 0) shot(g_renderer->read_back(), p.width, p.height);
     g_display->present_image(p.image, p.view, p.width, p.height, 4.0f / 3.0f, src.height);
     poll();
+}
+
+namespace {
+// QILIN_PRESS=<button>@<picture>[,...]: presses a button for ten pictures from
+// the given one (button: a, b, x, y, start, up, down, left, right, lt, rt),
+// for driving a run without a window.
+struct Press {
+    uint16_t button;
+    bool lt, rt;
+    uint64_t from;
+};
+std::vector<Press> scripted_presses() {
+    std::vector<Press> out;
+    const char* s = std::getenv("QILIN_PRESS");
+    if (!s) return out;
+    static constexpr struct {
+        const char* name;
+        uint16_t button;
+    } kNames[] = {{"a", maple::kA},      {"b", maple::kB},      {"x", maple::kX},        {"y", maple::kY},
+                  {"start", maple::kStart}, {"up", maple::kUp}, {"down", maple::kDown}, {"left", maple::kLeft},
+                  {"right", maple::kRight}, {"lt", 0},          {"rt", 0}};
+    std::string all = s;
+    size_t at = 0;
+    while (at < all.size()) {
+        size_t end = all.find(',', at);
+        if (end == std::string::npos) end = all.size();
+        const std::string item = all.substr(at, end - at);
+        const size_t sign = item.find('@');
+        if (sign == std::string::npos) rt::fatal("QILIN_PRESS: %s has no @<picture>", item.c_str());
+        const std::string name = item.substr(0, sign);
+        bool found = false;
+        for (const auto& n : kNames)
+            if (name == n.name) {
+                out.push_back({n.button, name == "lt", name == "rt", std::strtoull(item.c_str() + sign + 1, nullptr, 10)});
+                found = true;
+            }
+        if (!found) rt::fatal("QILIN_PRESS: no button called %s", name.c_str());
+        at = end + 1;
+    }
+    return out;
+}
+}  // namespace
+
+maple::Controls controls(unsigned port) {
+    maple::Controls c;
+    if (port != 0 || !g_display) return c;
+    c.connected = true;  // port A always has a pad: the keyboard if nothing else
+    const qilin::host::Display::PadState p = g_display->pad_state();
+    using namespace qilin::host;
+    static constexpr struct {
+        uint32_t host;
+        uint16_t dc;
+    } kButtons[] = {{kPadA, maple::kA}, {kPadB, maple::kB}, {kPadX, maple::kX}, {kPadY, maple::kY}, {kPadStart, maple::kStart},
+                    {kPadUp, maple::kUp}, {kPadDown, maple::kDown}, {kPadLeft, maple::kLeft}, {kPadRight, maple::kRight}};
+    for (const auto& b : kButtons)
+        if (p.buttons & b.host) c.buttons |= b.dc;
+    const auto byte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    c.lt = byte(p.lt), c.rt = byte(p.rt);
+    c.x = static_cast<uint8_t>(std::lround(std::clamp(p.lx, -1.0f, 1.0f) * 127.5f + 127.5f));
+    c.y = static_cast<uint8_t>(std::lround(std::clamp(p.ly, -1.0f, 1.0f) * 127.5f + 127.5f));
+    // The keyboard.
+    static const int keys[] = {g_display->key_code("Up"), g_display->key_code("Down"), g_display->key_code("Left"),
+                               g_display->key_code("Right"), g_display->key_code("Return"), g_display->key_code("Z"),
+                               g_display->key_code("X"), g_display->key_code("A"), g_display->key_code("S"),
+                               g_display->key_code("Q"), g_display->key_code("W")};
+    static constexpr uint16_t kKeyButtons[] = {maple::kUp, maple::kDown, maple::kLeft, maple::kRight, maple::kStart, maple::kA, maple::kB,
+                                               maple::kX, maple::kY};
+    for (size_t k = 0; k < std::size(kKeyButtons); ++k)
+        if (g_display->key_down(keys[k])) c.buttons |= kKeyButtons[k];
+    if (g_display->key_down(keys[9])) c.lt = 255;
+    if (g_display->key_down(keys[10])) c.rt = 255;
+    static const std::vector<Press> presses = scripted_presses();
+    for (const Press& p2 : presses)
+        if (g_pictures >= p2.from && g_pictures < p2.from + 10) {
+            c.buttons |= p2.button;
+            if (p2.lt) c.lt = 255;
+            if (p2.rt) c.rt = 255;
+        }
+    return c;
 }
 
 void poll() {

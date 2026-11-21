@@ -149,6 +149,7 @@ struct Display::Impl {
         }
     }
     float stick_x = 0, stick_y = 0;
+    Display::PadState raw;
     bool moved = false;
     float mouse_x = 0, mouse_y = 0;  // window pixels
     float pic_x = 0, pic_y = 0, pic_w = 1, pic_h = 1;  // the picture's place, last present
@@ -554,6 +555,12 @@ bool Display::poll() {
         };
         for (const Map& m : kMap)
             if (SDL_GetGamepadButton(p, m.sdl)) b |= m.bit;
+        const auto unit = [p](SDL_GamepadAxis ax) { return std::clamp(SDL_GetGamepadAxis(p, ax) / 32767.0f, -1.0f, 1.0f); };
+        d.raw.connected = true;
+        d.raw.lx = unit(SDL_GAMEPAD_AXIS_LEFTX), d.raw.ly = unit(SDL_GAMEPAD_AXIS_LEFTY);
+        d.raw.rx = unit(SDL_GAMEPAD_AXIS_RIGHTX), d.raw.ry = unit(SDL_GAMEPAD_AXIS_RIGHTY);
+        d.raw.lt = std::max(0.0f, unit(SDL_GAMEPAD_AXIS_LEFT_TRIGGER)), d.raw.rt = std::max(0.0f, unit(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+        d.raw.buttons = b;
         if (SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16384) b |= kPadLT;
         if (SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16384) b |= kPadRT;
         const int x = SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFTY);
@@ -569,6 +576,7 @@ bool Display::poll() {
         d.stick_y = -axis(SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_RIGHTY));
     } else {
         d.stick_x = d.stick_y = 0;
+        d.raw = {};
     }
     if (d.pad && !d.pad_pressed && (b & ~uint32_t(kPadClick))) {
         d.pad_pressed = true;
@@ -592,6 +600,7 @@ bool Display::key_down(int code) const {
     const bool* k = SDL_GetKeyboardState(&n);
     return code < n && k[code];
 }
+Display::PadState Display::pad_state() const { return impl_->raw; }
 void Display::right_stick(float& x, float& y) const {
     x = impl_->stick_x;
     y = impl_->stick_y;

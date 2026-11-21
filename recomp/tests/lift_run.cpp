@@ -181,6 +181,11 @@ void test_control() {
         c.r[4] = 40;
         if (run(c, "prcall")) eq("prcall", c.r[4], 42);
     }
+    {
+        Context c = fresh();
+        c.r[4] = 40;
+        if (run(c, "prbra")) eq("calls by lds pr and bra", c.r[4], 44);
+    }
     for (uint32_t x : {0u, 7u}) {
         Context c = fresh();
         c.r[4] = x;

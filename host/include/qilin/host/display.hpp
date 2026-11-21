@@ -49,6 +49,16 @@ public:
     bool key_down(int code) const;
     // The right stick, -1 to 1 each way (y up), dead zone removed.
     void right_stick(float& x, float& y) const;
+    // The first pad as it is, for consoles with analogue controls: the
+    // buttons (PadButton bits, the d-pad's alone: the stick isn't folded
+    // into it), the sticks -1 to 1 each way (y down, as SDL gives them, no
+    // dead zone) and the triggers 0 to 1. All zero with no pad.
+    struct PadState {
+        bool connected = false;
+        uint32_t buttons = 0;
+        float lx = 0, ly = 0, rx = 0, ry = 0, lt = 0, rt = 0;
+    };
+    PadState pad_state() const;
     // If the mouse moved over the window since the last poll: where, over the
     // picture last presented, -1 to 1 each way (y up; beyond 1 off the picture).
     bool mouse_moved(float& x, float& y) const;

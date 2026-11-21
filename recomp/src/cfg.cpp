@@ -469,6 +469,26 @@ private:
                 if (into.contains(pc)) unstable_.insert(pc);
                 return false;
             };
+            // A jmp or bra with PR loaded by hand (a constant, not the entry's
+            // return address): a call that returns where PR points.
+            const auto call_by_pr = [&] {
+                if (!r.pr || r.pr_is_entry || !boot_.mapped(*r.pr, 2) || *r.pr % 2 != 0) return false;
+                const uint32_t back = *r.pr;
+                if (!resolved(f.calls)) {
+                    if (std::ranges::find(f.indirect_calls, pc) == f.indirect_calls.end()) f.indirect_calls.push_back(pc);
+                }
+                f.call_returns[pc] = back;
+                Regs after = cleared(r);
+                const auto callee = f.calls.find(pc);
+                const uint16_t clobbered = callee != f.calls.end() ? scratch_written(callee->second) : 0xFF;
+                for (unsigned k = 0; k < 16; ++k)
+                    if (k >= 8 || !(clobbered & (1u << k))) after[k] = r[k];
+                after.entry_pr = static_cast<uint16_t>(r.entry_pr & ~clobbered);
+                after.pr.reset();
+                after.pr_is_entry = false;
+                branch_to(back, after);
+                return true;
+            };
             if (flags & sh4::kCall) {
                 if (!resolved(f.calls)) {
                     if (target && i.op != Op::jsr) throw Reject{std::format("{:08X} calls {:08X}, outside the image", pc, *target)};
@@ -495,6 +515,9 @@ private:
             if (flags & sh4::kReturn) return;
             if (i.op == Op::bra) {
                 if (!boot_.mapped(*target, 2)) throw Reject{std::format("{:08X} branches outside the image", pc)};
+                // `lds rN,pr ; bra f`: a call to f that returns where PR points
+                // (hand-optimised code entering a shared tail this way).
+                if (call_by_pr()) return;
                 if (is_tail(f, *target)) f.tail_jumps[pc] = *target;
                 else branch_to(*target, r);
                 return;
@@ -520,23 +543,7 @@ private:
                     return;
                 }
                 // With PR loaded by hand: a call that returns where PR points.
-                if (r.pr && !r.pr_is_entry && boot_.mapped(*r.pr, 2) && *r.pr % 2 == 0) {
-                    const uint32_t back = *r.pr;
-                    if (!resolved(f.calls)) {
-                        if (std::ranges::find(f.indirect_calls, pc) == f.indirect_calls.end()) f.indirect_calls.push_back(pc);
-                    }
-                    f.call_returns[pc] = back;
-                    Regs after = cleared(r);
-                    const auto callee = f.calls.find(pc);
-                    const uint16_t clobbered = callee != f.calls.end() ? scratch_written(callee->second) : 0xFF;
-                    for (unsigned k = 0; k < 16; ++k)
-                        if (k >= 8 || !(clobbered & (1u << k))) after[k] = r[k];
-                    after.entry_pr = static_cast<uint16_t>(r.entry_pr & ~clobbered);
-                    after.pr.reset();
-                    after.pr_is_entry = false;
-                    branch_to(back, after);
-                    return;
-                }
+                if (call_by_pr()) return;
             }
             // A jmp already found to be a far branch inside the function.
             if (i.op == Op::jmp && f.computed_branches.contains(pc)) {
@@ -889,7 +896,9 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
         add(next);
         break;
     case Op::bra:
-        if (!tail) add(i.branch_target(at));
+        // A call made by loading PR by hand continues where PR points.
+        if (auto it = f.call_returns.find(at); it != f.call_returns.end()) add(it->second);
+        else if (!tail) add(i.branch_target(at));
         break;
     case Op::braf:
         if (auto it = f.computed_branches.find(at); it != f.computed_branches.end()) add(it->second);

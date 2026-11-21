@@ -554,7 +554,10 @@ private:
         const auto tail = f_.tail_jumps.find(pc);
         std::string s = "    {\n";
         const auto line = [&](std::string code) { s += "        " + code + "\n"; };
-        const bool uses_pr = (spec.flags & sh4::kCall) || i.op == Op::rts || f_.call_returns.contains(pc);
+        // Branches that read PR before their slot runs. A call made by
+        // loading PR by hand (`lds rN,pr ; bra f`, the lds possibly in the
+        // slot) doesn't read it: the callee returns to what the slot left.
+        const bool uses_pr = (spec.flags & sh4::kCall) || i.op == Op::rts;
         const auto with_slot = [&] {
             if (delayed) s += indent(slot(pc, uses_pr));
         };
@@ -603,6 +606,17 @@ private:
                 line("(void)c;");
                 line(std::format("rt::hang({});", hex(pc)));
                 line("return;");
+                break;
+            }
+            if (const auto back = f_.call_returns.find(pc); back != f_.call_returns.end()) {
+                // `lds rN,pr ; bra f`: a call to f that returns where PR points.
+                const auto direct = f_.calls.find(pc);
+                if (direct == f_.calls.end()) throw Fail{pc, "a call by bra without its callee"};
+                line("@OUT@");
+                line(call_to(direct->second, pc));
+                line("@IN@");
+                line(std::format("if (c.ret != {}) rt::bad_return({}, c.ret);", hex(back->second), hex(pc)));
+                line(go(back->second));
                 break;
             }
             jump_to(i.branch_target(pc));

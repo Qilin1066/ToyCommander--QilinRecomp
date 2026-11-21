@@ -6,6 +6,7 @@
 #include "clock.hpp"
 #include "guest.hpp"
 #include "natives.hpp"
+#include "maple.hpp"
 #include "pvr.hpp"
 #include "video.hpp"
 #include "system.hpp"
@@ -37,6 +38,7 @@ void raise_blanks() {
         g_frames = due;
         raise_event(3);
         raise_event(4);
+        maple::vblank();
     }
 }
 
