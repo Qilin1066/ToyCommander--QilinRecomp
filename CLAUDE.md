@@ -61,7 +61,7 @@ Before a milestone commit, all of these must hold: tests pass, warnings are clea
 
 ## Conventions
 
-- **Committing and pushing:** the sister projects work on `main` under a standing permission their owner gave for each of them. This repository has no such permission recorded yet: ask the owner before pushing to `main`, and record their answer here in their words.
-- **Before any push, audit what is being published:** every path added, binaries, anything named like game data or game-derived output, copied third-party text or code, personal details (local paths, names, e-mail addresses). No game data or anything derived from it. Never force-push published history.
+- **Push without asking, on `main`, as in the sister projects** (the owner, 2026-11-21, asked whether this repo is worked on `main` with pushes without asking as the other four are: "Yes, same permissions. Keep working."). Push with `git push origin main`. Only what is 100% legal and above board to share with the world, checked before every push:
+- **Audit what is being published:** every path added, binaries, anything named like game data or game-derived output, copied third-party text or code, personal details (local paths, names, e-mail addresses). No game data or anything derived from it. Never force-push published history.
 - Releases are `vX.Y.Z`; the version lives only in `project(... VERSION ...)`. Every release gets a `CHANGELOG.md` entry (Keep a Changelog); never rewrite past entries.
 - Prose in docs and commit messages: plain, specific, British spelling.
