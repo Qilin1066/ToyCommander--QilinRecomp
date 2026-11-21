@@ -248,6 +248,29 @@ void shinobi_record_init_8C0B27E4(rt::Context& c) {
     c.r[6] = 0, c.r[0] = c.r[4];
 }
 
+// 0x8C0B497E: timer 0's count so far, 0xFFFFFFFF - TCNT0 (timer 0 counts
+// down from 0xFFFFFFFF: shinobi_hardware_init). r2 and r3 end as the guest
+// code leaves them.
+void shinobi_timer_count(rt::Context& c) {
+    c.r[2] = 0xFFD8000Cu;
+    c.r[3] = rt::ld32(0xFFD8000Cu);
+    c.r[0] = 0xFFFFFFFFu - c.r[3];
+}
+// 0x8C0B4988: the ticks between two counts, r5 - r4.
+void shinobi_timer_diff(rt::Context& c) { c.r[0] = c.r[5] - c.r[4]; }
+
+// syCache over r5 bytes from r4: 0x8C0BDB94 invalidates the operand cache
+// (ocbi, after a DMA into memory), 0x8C0BDDF2 purges it (ocbp, before one
+// out of memory), 0x8C0BE046 writes it back (ocbwb). The port has no cache
+// between the CPU and its devices: nothing to do.
+void shinobi_cache_invalidate(rt::Context&) {}
+void shinobi_cache_purge(rt::Context&) {}
+void shinobi_cache_write_back(rt::Context&) {}
+
+// 0x8C0B4958: (re)starts timer 0 as a free-running count down from
+// 0xFFFFFFFF at Pphi/4, as Shinobi's hardware set-up does.
+void shinobi_timer_start(rt::Context&) { start_free_running_timer0(); }
+
 const rt::Provided kNatives[] = {
     {0x8C04EDF4u, "memset", memset_sq},
     {0x8C04EEE0u, "memclr", memclr},
@@ -264,6 +287,12 @@ const rt::Provided kNatives[] = {
     {0x8C0B3288u, "shinobi_module_init_8C0B3288", shinobi_module_init_8C0B3288},
     {0x8C0B4244u, "shinobi_rtc_init", shinobi_rtc_init},
     {0x8C0B4840u, "shinobi_hardware_init", shinobi_hardware_init},
+    {0x8C0BDB94u, "shinobi_cache_invalidate", shinobi_cache_invalidate},
+    {0x8C0BDDF2u, "shinobi_cache_purge", shinobi_cache_purge},
+    {0x8C0BE046u, "shinobi_cache_write_back", shinobi_cache_write_back},
+    {0x8C0B4958u, "shinobi_timer_start", shinobi_timer_start},
+    {0x8C0B497Eu, "shinobi_timer_count", shinobi_timer_count},
+    {0x8C0B4988u, "shinobi_timer_diff", shinobi_timer_diff},
     {0x8C0B486Au, "shinobi_peripheral_init", shinobi_peripheral_init},
     {0x8C0BAB98u, "shinobi_set_work_area", shinobi_set_work_area},
     {0x8C0BAF20u, "shinobi_copy", shinobi_copy},

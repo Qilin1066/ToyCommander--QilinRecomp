@@ -67,6 +67,8 @@ A `call` or `tail` target that fails is not a guess but a finding, and is listed
 
 **Successors** (v0.4.0). `successors(boot, f, pc)` gives the instructions control can reach next inside a function: a delayed branch's successor is its delay slot, and the slot's are the branch's targets; a call returns after its slot; tail calls, returns and indirect jumps leave. The FPSCR pass is built on it, and so will the lifter be.
 
+**Pointers into a known function** (v0.10.0). A function-pointer table can point at code an earlier function already took in through a branch that is really a tail call: gdFs's driver table points at `0x8C0B1FD6`, which `0x8C0B1704` reaches with `bra`. Such a pointer becomes a function when the words on both sides of it in the table point at function entries and it isn't a delay slot; the next pass then treats the branch as a tail call. On the supported build it finds exactly that one (4,306 functions). The rule is narrow on purpose: any word that happens to point into code would split functions that aren't split.
+
 **Switches.** SHC compiles a dense `switch` to a bounds check and `shll r0 ; mov r0,rX ; mova table,r0 ; mov.w @(r0,rX),r0 ; braf r0`. The table's size is the constant the `cmp/hs` a few instructions back compares with; without that bound there is no table to trust, and the `braf` is reported as an indirect jump. Table words are classified as jump table, targets become branch targets of the function.
 
 **Delay slots** belong to their branch. A branch target that is also some branch's delay slot is kept and reported.
@@ -78,7 +80,7 @@ A `call` or `tail` target that fails is not a guess but a finding, and is listed
 
 | | |
 |---|---|
-| Functions | 4,307: 1 entry, 2,316 call targets, 305 tail-call targets, 902 from pointers, 783 orphans. By region: 1,319 in the game, 2,192 in the middleware, 795 in Shinobi |
+| Functions | 4,306: 1 entry, 2,317 call targets, 303 tail-call targets, 902 from pointers (one of them inside a function found earlier, from a pointer table: see below), 783 orphans. By region: 1,319 in the game, 2,190 in the middleware, 796 in Shinobi |
 | Direct calls resolved | 11,410; constant tail calls 709; calls by loaded PR 2; returns by `jmp` 18 (v0.4.0) |
 | Indirect calls (through a pointer loaded at run time) | 529 |
 | Indirect jumps with no constant target and no table | 127: 3 in the game, 44 in the middleware, 80 in Shinobi (`code-analysis.md`) |

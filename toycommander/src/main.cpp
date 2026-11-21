@@ -13,11 +13,14 @@
 #include <string>
 
 #include "boot.hpp"
+#include "chain.hpp"
 #include "bootfile.hpp"
 #include "gdrom.hpp"
+#include "gdrom_bios.hpp"
 #include "memory.hpp"
 #include "natives.hpp"
 #include "pvr.hpp"
+#include "rtc.hpp"
 #include "sh4.hpp"
 #include "system.hpp"
 
@@ -57,6 +60,10 @@ int main(int argc, char** argv) {
 #endif
     rt::host_fp_setup();
     toycommander::provide_natives();
+    toycommander::provide_gdrom_bios();
+    toycommander::provide_chain();
+    toycommander::provide_rtc();
+    toycommander::insert_disc(*disc);
     toycommander::map_pvr();
     toycommander::map_sh4_peripherals();
 

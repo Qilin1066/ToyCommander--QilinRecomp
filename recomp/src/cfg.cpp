@@ -535,10 +535,30 @@ public:
             for (uint32_t a = boot_.base(); a + 4 <= boot_.end(); a += 4)
                 if ((kind(a) == Kind::unknown || kind(a) == Kind::data) && (kind(a + 2) == Kind::unknown || kind(a + 2) == Kind::data))
                     candidate(boot_.u32(a));
+            // A table of function pointers can also point into the middle of a
+            // function found already, where another function's code was
+            // reached by a branch that is really a tail call (gdFs's driver
+            // table has one, 0x8C0B1FD6, which 0x8C0B1704 branches to). Such a
+            // pointer is taken when the words beside it in the table point at
+            // function entries and it isn't a delay slot.
+            std::vector<uint32_t> inside;
+            for (uint32_t a = boot_.base() + 4; a + 8 <= boot_.end(); a += 4) {
+                if (kind(a) != Kind::data && kind(a) != Kind::unknown) continue;
+                const uint32_t c = boot_.u32(a);
+                if (c % 2 || !boot_.mapped(c, 2) || kind(c) != Kind::code || cfg_.functions.contains(c)) continue;
+                if (!cfg_.functions.contains(boot_.u32(a - 4)) || !cfg_.functions.contains(boot_.u32(a + 4))) continue;
+                const Insn prev = sh4::decode(boot_.u16(c - 2));
+                if (kind(c - 2) == Kind::code && prev.valid() && (sh4::spec(prev.op).flags & sh4::kDelayed)) continue;
+                inside.push_back(c);
+            }
             const size_t before = cfg_.functions.size();
             const std::vector<uint32_t> round(candidates_.begin(), candidates_.end());
             for (uint32_t c : round) {
                 if (kind(c) != Kind::unknown) continue;
+                add(c, Origin::pointer);
+                drain();
+            }
+            for (uint32_t c : inside) {
                 add(c, Origin::pointer);
                 drain();
             }
