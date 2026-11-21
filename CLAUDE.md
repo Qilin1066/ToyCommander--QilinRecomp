@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Static recompilation of **Toy Commander** (Dreamcast, USA: `MK-57020`, `V1.022`) to native code. Same requirements and scope as the sister projects Qilin1066/GBTGhoulies-QilinRecomp, PunchOutWii-QilinRecomp, BeatTheBeat-QilinRecomp and ApbArcade-QilinRecomp (the owner's instruction, 2026-11-21: "exact same as the other projects", down to the settings menu). When a design question here is undecided, do what they did; BeatTheBeat's `CLAUDE.md` has the longest list of lessons.
+Static recompilation of **Toy Commander** (Dreamcast, USA: `MK-57020`, `V1.022`) to native code. Same requirements and scope as the sister projects Qilin1066/GBTGhoulies--QilinRecomp, PunchOutWii--QilinRecomp, RhythmHeavenFever--QilinRecomp (Beat the Beat) and ApbArcade--QilinRecomp (the owner's instruction, 2026-11-21: "exact same as the other projects", down to the settings menu). When a design question here is undecided, do what they did; BeatTheBeat's `CLAUDE.md` has the longest list of lessons.
 
 ## Requirements (non-negotiable)
 

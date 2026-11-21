@@ -1,8 +1,8 @@
-# ToyCommander-QilinRecomp
+# ToyCommander--QilinRecomp
 
 A static recompilation of **Toy Commander** (No Cliché / Sega, Dreamcast, 1999) into portable C++23 with a Vulkan 1.3 renderer, aimed at 64-bit Windows, Linux and macOS, on x86-64 or ARM64. Anything with a Vulkan 1.3 driver is in scope, including the Raspberry Pi 4 (Mesa 24.3+); Macs are covered through MoltenVK. Efficiency is the first priority: a Raspberry Pi 4–class board is our reference for typical low-end hardware, not a floor.
 
-It has the same requirements and scope as its sister projects, [GBTGhoulies-QilinRecomp](https://github.com/Qilin1066/GBTGhoulies-QilinRecomp), [PunchOutWii-QilinRecomp](https://github.com/Qilin1066/PunchOutWii-QilinRecomp), [BeatTheBeat-QilinRecomp](https://github.com/Qilin1066/BeatTheBeat-QilinRecomp) and [ApbArcade-QilinRecomp](https://github.com/Qilin1066/ApbArcade-QilinRecomp).
+It has the same requirements and scope as its sister projects, [GBTGhoulies--QilinRecomp](https://github.com/Qilin1066/GBTGhoulies--QilinRecomp), [PunchOutWii--QilinRecomp](https://github.com/Qilin1066/PunchOutWii--QilinRecomp), [RhythmHeavenFever--QilinRecomp](https://github.com/Qilin1066/RhythmHeavenFever--QilinRecomp) and [ApbArcade--QilinRecomp](https://github.com/Qilin1066/ApbArcade--QilinRecomp).
 
 > **No game data is included, and none ever will be.** You need your own copy of the game. The tools read your disc dump from a path you give them. `.gitignore` keeps game files, and anything generated from them, out of the repo.
 

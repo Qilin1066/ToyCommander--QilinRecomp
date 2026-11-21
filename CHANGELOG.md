@@ -4,6 +4,11 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [Unreleased]
+
+### Changed
+- **The repository is `ToyCommander--QilinRecomp`**, renamed by the owner for readability, like all the QilinRecomp projects (Beat the Beat's is now `RhythmHeavenFever--QilinRecomp`). The docs and their links use the new names.
+
 ## [0.8.0] - 2026-11-21
 The differential test: every instruction the lifter lifts, against a reference interpreter of our own.
 

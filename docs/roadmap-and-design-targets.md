@@ -1,6 +1,6 @@
 # Toy Commander — Recomp Roadmap & Design Targets
 
-The requirements and scope are those of the sister projects (GBTGhoulies-QilinRecomp, ApbArcade-QilinRecomp, BeatTheBeat-QilinRecomp, PunchOutWii-QilinRecomp), applied to the Dreamcast.
+The requirements and scope are those of the sister projects (GBTGhoulies--QilinRecomp, ApbArcade--QilinRecomp, RhythmHeavenFever--QilinRecomp (Beat the Beat), PunchOutWii--QilinRecomp), applied to the Dreamcast.
 
 **Guiding principle: efficiency and reliability come first.** Every design choice is judged on whether it makes the game cheaper to run on low-end hardware and whether it fails loudly and predictably instead of silently misbehaving.
 
