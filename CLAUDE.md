@@ -50,15 +50,14 @@ Before a milestone commit, all of these must hold: tests pass, warnings are clea
 ## Status (v0.1.0)
 
 - The disc reader, boot file loader and SH-4 decoder exist, with tests and the Capstone cross-check (0 unexplained differences). Nothing is lifted and nothing runs yet.
-- Built and tested so far only with Clang (zig's) on Linux x64; GCC 14, MSVC, macOS and ARM64 are CI's to confirm.
+- CI is green on the v0.1.0 commit on all six jobs (GCC 14 and Clang 19 on Linux x64, GCC 14 on Linux ARM64, macOS ARM64 and x64, MSVC), the decoder check included.
 
 ## Next steps, in order
 
-1. Check CI on the first push; fix what GCC or MSVC flag.
-2. Function discovery and the CFG (`qilin cfg`, `coverage`, `suspects`): literal pools, switch tables, delay slots, calls through pool addresses. Then `docs/code-analysis.md`: the library boundaries, named (Shinobi, Kamui 2, audio manager, TrueMotion, C runtime, game).
-3. The FPSCR mode pass, then the lifter in slices (integer; calls and the function table; FPU), then the differential test (choose the reference: `docs/recompiler-core.md`).
-4. The runtime, as the sister projects brought theirs up: `qilin_run`, the replacement registry, stop on anything unregistered and name it.
-5. The window, input, sound and the settings menu follow the sister projects exactly (`docs/naming.md`, the menu section of `docs/roadmap-and-design-targets.md`; Punch-Out's `punchout/src/menu.cpp` is the model).
+1. Function discovery and the CFG (`qilin cfg`, `coverage`, `suspects`): literal pools, switch tables, delay slots, calls through pool addresses. Then `docs/code-analysis.md`: the library boundaries, named (Shinobi, Kamui 2, audio manager, TrueMotion, C runtime, game).
+2. The FPSCR mode pass, then the lifter in slices (integer; calls and the function table; FPU), then the differential test (choose the reference: `docs/recompiler-core.md`).
+3. The runtime, as the sister projects brought theirs up: `qilin_run`, the replacement registry, stop on anything unregistered and name it.
+4. The window, input, sound and the settings menu follow the sister projects exactly (`docs/naming.md`, the menu section of `docs/roadmap-and-design-targets.md`; Punch-Out's `punchout/src/menu.cpp` is the model).
 
 ## Conventions
 
