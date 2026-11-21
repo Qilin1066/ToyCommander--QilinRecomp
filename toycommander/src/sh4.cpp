@@ -122,9 +122,19 @@ void dmac_write(uint32_t a, uint32_t v, unsigned n) {
     g_dmac[off / 4] = v;
 }
 
+// The operand cache's address array (0xF4000000-0xF4FFFFFF): code writes
+// a line's tag with U = V = 0 to invalidate it (the movie player clears the
+// whole cache that way after a DMA into memory). The port has no cache:
+// such writes do nothing; anything else (a read, a valid or dirty tag) is
+// new and stops.
+void oc_address_write(uint32_t a, uint32_t v, unsigned n) {
+    if (n != 4 || (v & 3u)) unsupported(a, v);
+}
+
 }  // namespace
 
 void map_sh4_peripherals() {
+    rt::map({0xF4000000u, 0xF5000000u, "SH-4 operand cache address array", nullptr, oc_address_write});
     rt::map({kBase, kBase + 0x30u, "SH-4 timer unit", read, write});
     rt::map({kDmacBase, kDmacBase + 0x44u, "SH-4 DMA controller", dmac_read, dmac_write});
 }

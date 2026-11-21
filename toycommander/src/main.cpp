@@ -108,6 +108,17 @@ int main(int argc, char** argv) {
         rt::report(stderr, s, &c);
         if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) {
             rt::backtrace(stderr, c, 0x8C00F400u);
+            // QILIN_DUMP=<hex address>,<bytes>: guest memory at the stop.
+            if (const char* d = std::getenv("QILIN_DUMP")) {
+                char* end = nullptr;
+                const uint32_t from = static_cast<uint32_t>(std::strtoul(d, &end, 16));
+                const uint32_t count = end && *end == ',' ? static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 0)) : 64u;
+                for (uint32_t a = from & ~3u; a < from + count; a += 16) {
+                    std::fprintf(stderr, "    %08X:", a);
+                    for (uint32_t k = 0; k < 16; k += 4) std::fprintf(stderr, " %08X", rt::ld32(a + k));
+                    std::fprintf(stderr, "\n");
+                }
+            }
             if (std::getenv("QILIN_STACK"))
                 for (uint32_t a = c.r[15]; a < 0x8C00F400u; a += 4) std::fprintf(stderr, "    %08X: %08X\n", a, rt::ld32(a));
         }

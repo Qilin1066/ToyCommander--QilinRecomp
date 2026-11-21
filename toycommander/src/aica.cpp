@@ -42,9 +42,24 @@ uint32_t reg_read(uint32_t a, unsigned n) {
     std::memcpy(&v, g_regs + (a - kRegLo), 4);
     return v;
 }
+// The ARM's reset (0x00702C00, bit 0: held in reset while set). Releasing
+// it starts the driver; the port's stand-in does what the driver's start-up
+// does that the audio manager can see: it writes where the sound RAM it
+// doesn't use begins (0x30040) to 0xB408 and to 0xEC, which the audio
+// manager's install waits on (docs/runtime.md, the audio manager).
+constexpr uint32_t kArmReset = 0x00702C00u;
+void start_driver() {
+    const uint32_t free_from = 0x30040u;
+    std::memcpy(g_ram + 0xB408u, &free_from, 4);
+    std::memcpy(g_ram + 0xECu, &free_from, 4);
+}
+
 void reg_write(uint32_t a, uint32_t v, unsigned n) {
     if (n != 4 || (a & 3u)) throw rt::Stop{rt::Stop::Unsupported, 0, a};
+    uint32_t old;
+    std::memcpy(&old, g_regs + (a - kRegLo), 4);
     std::memcpy(g_regs + (a - kRegLo), &v, 4);
+    if (a == kArmReset && (old & 1u) && !(v & 1u)) start_driver();
 }
 
 }  // namespace

@@ -80,6 +80,10 @@ struct Function {
     // braf site -> target, and jmp site -> target where the function is too
     // long for bra to span (`mov.l label,rN ; jmp @rN`).
     std::map<uint32_t, uint32_t> computed_branches;
+    // Indirect call sites whose targets the build's layout knows (a table of
+    // handlers the code indexes by data): site -> the functions it calls.
+    // Not found by the analysis; added from the layout (indirect_targets).
+    std::map<uint32_t, std::vector<uint32_t>> indirect_targets;
     std::map<uint32_t, uint32_t> call_returns;       // jmp site that is a call (PR loaded by hand) -> where it returns
     std::vector<uint32_t> jmp_returns;               // jmp sites that return (through the saved return address), sorted
     std::vector<std::string> problems;        // for `qilin suspects`

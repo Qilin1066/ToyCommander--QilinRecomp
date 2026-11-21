@@ -242,7 +242,20 @@ int cmd_profile(const std::string& path) {
 }
 
 // The analysis, with the build's layout when the build is a supported one.
-Cfg analyse_boot(const BootFile& boot) { return analyse(boot, layout(boot.sha256)); }
+Cfg analyse_boot(const BootFile& boot) {
+    Cfg cfg = analyse(boot, layout(boot.sha256));
+    for (const IndirectTargets& t : indirect_targets(boot.sha256)) {
+        if (!cfg.functions.contains(t.function)) throw Failure{std::format("{:08X} ({}) isn't a function", t.function, t.why)};
+        auto& targets = cfg.functions.at(t.function).indirect_targets[t.site];
+        for (uint32_t k = 0; k < t.count; ++k) {
+            const uint32_t target = boot.u32(t.table + 4 * k);
+            if (target == 0) continue;
+            if (!cfg.functions.contains(target)) throw Failure{std::format("{:08X} in the table at {:08X} ({}) isn't a function", target, t.table, t.why)};
+            targets.push_back(target);
+        }
+    }
+    return cfg;
+}
 
 int cmd_cfg(const std::string& path, const std::optional<std::string>& json) {
     const BootFile boot = load_boot(path);

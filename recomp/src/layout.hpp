@@ -42,4 +42,13 @@ struct ReplacedFunction {
 };
 std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex);
 
+// An indirect call whose targets are a table in the image: `count` words from
+// `table`, the non-zero ones being the functions the site at `site` (in
+// `function`) can call. The FPSCR pass follows the mode into them.
+struct IndirectTargets {
+    uint32_t function, site, table, count;
+    std::string_view why;
+};
+std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex);
+
 }  // namespace qilin

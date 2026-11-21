@@ -21,6 +21,10 @@ enum Command : uint32_t {
     kDmaRead = 17,  // the same, through the system bus's GD-ROM DMA, which ends with event 0xA40
     kInit = 24,     // the drive's initialisation: no parameters
     kVersion = 40,  // the drive's version string, to the address in the first parameter
+    kPlay = 20,     // CD audio: {start, end, repeats, 0}, frame addresses
+    kPlay2 = 21,    // CD audio: the same, in minutes:seconds:frames
+    kPause = 22,    // CD audio: pause
+    kToc = 19,      // {area (0: the single-density area, 1: the high-density one), buffer}: the area's table of contents
 };
 
 // A request: the drive does each command as it is sent, so every request is
@@ -30,6 +34,14 @@ struct Request {
     uint32_t bytes = 0;
 };
 Request g_last;
+
+// CD audio: what the drive plays (the mixer will read the tracks from the
+// disc reader); paused or stopped otherwise. The drive's state reads 3
+// (playing) while it plays, 1 (paused) otherwise.
+struct CdAudio {
+    bool playing = false;
+    uint32_t start = 0, end = 0, repeats = 0, at = 0;
+} g_cd;
 uint32_t g_next_id = 1;
 
 // The GD-ROM DMA's end (the system bus's event 0xA40), raised by a DMA read
@@ -60,6 +72,32 @@ uint32_t read_sectors(uint32_t frame, uint32_t count, uint32_t to) {
     return count * 2048;
 }
 
+// The table of contents of one area, as the drive gives it: 99 words for
+// tracks 1-99 (control << 28 | 1 << 24 | the frame address of index 1; 4 is
+// a data track's control, 0 an audio track's; 0xFFFFFFFF for a track not in
+// the area), then the first and last tracks (control << 28 | 1 << 24 |
+// number << 16) and the lead-out (the last track's control | the frame
+// address after it).
+void write_toc(uint32_t area, uint32_t to) {
+    if (!g_disc || area > 1) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, area};
+    uint32_t words[102];
+    for (uint32_t& w : words) w = 0xFFFFFFFFu;
+    const qilin::gdrom::Track* first = nullptr;
+    const qilin::gdrom::Track* last = nullptr;
+    const auto control = [](const qilin::gdrom::Track& t) { return (t.audio ? 0u : 4u) << 28 | 1u << 24; };
+    for (const auto& t : g_disc->tracks()) {
+        if (t.high_density != (area == 1) || t.number < 1 || t.number > 99) continue;
+        words[t.number - 1] = control(t) | (t.start + kFrameOffset);
+        if (!first) first = &t;
+        last = &t;
+    }
+    if (!first) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, area};
+    words[99] = control(*first) | first->number << 16;
+    words[100] = control(*last) | last->number << 16;
+    words[101] = control(*last) | (last->end() + kFrameOffset);
+    for (uint32_t k = 0; k < 102; ++k) rt::st32(to + 4 * k, words[k]);
+}
+
 // 0x8C0C1520, call 0: sends command r4 with the parameter block at r5 and
 // returns the request's id, never 0 (0 is gdd's "not accepted").
 void gd_send_command(rt::Context& c) {
@@ -67,6 +105,12 @@ void gd_send_command(rt::Context& c) {
     Request r{g_next_id++, 0};
     switch (command) {
     case kInit: break;
+    case kPlay:
+        g_cd = {true, rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8), rt::ld32(c.r[5])};
+        break;
+    case kToc: write_toc(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4)); break;
+    case kPlay2: throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+    case kPause: g_cd.playing = false; break;
     case kPioRead:
     case kDmaRead:
         r.bytes = read_sectors(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4), rt::ld32(c.r[5] + 8));
@@ -112,7 +156,7 @@ void gd_init(rt::Context&) {}
 // gdFs requires; 6, the lid open, is what it would wait on). Returns 0, the
 // state read (gdd takes 1 as "busy, ask again").
 void gd_check_drive(rt::Context& c) {
-    rt::st32(c.r[4], 1), rt::st32(c.r[4] + 4, 0x80);
+    rt::st32(c.r[4], g_cd.playing ? 3 : 1), rt::st32(c.r[4] + 4, 0x80);
     c.r[0] = 0;
 }
 

@@ -238,6 +238,16 @@ Summary summarise(const BootFile& boot, const Function& f, const KnownBits& entr
             if (const auto it = f.calls.find(site); it != f.calls.end()) {
                 if (report) out.sites.push_back({site, Site::call, it->second, mode});
                 s.fpscr = exit_of(it->second, mode);
+            } else if (const auto known = f.indirect_targets.find(site); known != f.indirect_targets.end()) {
+                // Targets the layout knows: each is called in this mode, and
+                // the call returns in what all of them return in.
+                std::optional<KnownBits> after;
+                for (const uint32_t target : known->second) {
+                    if (report) out.sites.push_back({site, Site::call, target, mode});
+                    const KnownBits e = exit_of(target, mode);
+                    after = after ? meet(*after, e) : e;
+                }
+                if (after) s.fpscr = *after;
             } else {
                 // Checked to be the default in phase 2; the callee keeps it.
                 if (report) out.sites.push_back({site, Site::indirect, 0, mode});

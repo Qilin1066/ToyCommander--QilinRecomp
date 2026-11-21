@@ -37,13 +37,16 @@ constexpr Region kUsa[] = {
     {0x8C0B487A, 0x8C0B4D04, "Shinobi", Plan::replace},
     {0x8C0B4D04, 0x8C0B5BD6, "Shinobi's Maple driver: the bus's servers, the devices' drivers", Plan::lift},
     {0x8C0B5BD6, 0x8C0BAB98, "Shinobi's Maple devices' drivers and bu's core", Plan::lift},
-    {0x8C0BAB98, 0x8C0BAFDC, "Shinobi", Plan::replace},
+    {0x8C0BAB98, 0x8C0BAE40, "Shinobi", Plan::replace},
+    {0x8C0BAE40, 0x8C0BAF20, "Shinobi: the peripherals' vibration and screen calls", Plan::lift},
+    {0x8C0BAF20, 0x8C0BAFDC, "Shinobi", Plan::replace},
     {0x8C0BAFDC, 0x8C0BCFE0, "8 KB buffer (zero-filled; the middleware uses it)", Plan::data},
     {0x8C0BCFE0, 0x8C0BD264, "Shinobi", Plan::replace},
     {0x8C0BD264, 0x8C0BDB14, "Shinobi's gdd (the GD-ROM driver, over the boot ROM's system calls)", Plan::lift},
     {0x8C0BDB14, 0x8C0BE9AC, "Shinobi", Plan::replace},
     {0x8C0BE9AC, 0x8C0C1078, "Shinobi's Maple driver: the bus's DMA and frames; bu's device layer", Plan::lift},
-    {0x8C0C1078, 0x8C0C1C0C, "Shinobi", Plan::replace},
+    {0x8C0C1078, 0x8C0C17C4, "Shinobi", Plan::replace},
+    {0x8C0C17C4, 0x8C0C1C0C, "Shinobi's vibration (Jump Pack) and screen (memory card) drivers", Plan::lift},
     {0x8C0C1C0C, 0x8C0C3C24, "8 KB stack (zero-filled; its top is referenced)", Plan::data},
     {0x8C0C3C24, 0x8C0C3CA4, "Shinobi", Plan::replace},
     {0x8C0C3CA4, 0x8C0C3D04, "Shinobi's exception handler's data", Plan::data},
@@ -73,6 +76,20 @@ constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5
 
 std::span<const Region> layout(std::string_view sha256_hex) {
     if (sha256_hex == kUsaSha) return kUsa;
+    return {};
+}
+
+namespace {
+// The movie decoder's block handlers (docs/code-analysis.md): its two block
+// loops turn on 64-bit transfers and call through this table, so the
+// handlers run with SZ = 1.
+constexpr IndirectTargets kUsaIndirect[] = {
+    {0x8C09F2AC, 0x8C09F2F6, 0x8C0A3CDC, 16, "the TrueMotion decoder's block handlers, called with SZ = 1"},
+};
+}  // namespace
+
+std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) {
+    if (sha256_hex == kUsaSha) return kUsaIndirect;
     return {};
 }
 
