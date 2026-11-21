@@ -7,7 +7,12 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
 ## [Unreleased]
 
 ### Added
-- **The bring-up goes on** (`docs/runtime.md`): natives for Shinobi's work-area pointer, the console's settings (a USA console, NTSC, English, stereo, a VGA cable), its hardware set-up and its allocator, with a heap of the port's own over the same guest RAM. The game now runs through the middleware's system initialisation to Kamui 2's, which is the first code to reach hardware: the graphics chip's registers. Kamui 2 is the next to replace, at its API, as Punch-Out replaced GX.
+- **The bring-up goes on** (`docs/runtime.md`): natives for Shinobi's work-area pointer, the console's settings (a USA console, NTSC, English, stereo, a VGA cable), its hardware set-up, its allocator (Shinobi's own algorithm over the same guest RAM, so every block lands where it would on the console), its real-time clock's set-up, the C runtime's `memset` and more. The game now runs through the middleware's whole system initialisation, Kamui 2's included, to the GD-ROM file system's initialisation, which is next.
+- **The bus** (`recomp/runtime/bus.*`): RAM at `0x8C000000` stays the one-compare fast path; every other access goes to the bus, which handles RAM's other views, the SH-4's store queues (with QACR0/1) and the devices the port maps, and stops on anything else.
+- **Hardware under Kamui 2** (`toycommander/src/pvr.*`, `sh4.*`): the PowerVR2's and the system bus's registers, video memory with its 64-bit view, and the SH-4's timer unit (timer 0 free-running, as Shinobi leaves it, counting guest time).
+
+### Changed
+- **Graphics: Kamui 2 is lifted and the port replaces the hardware under it** (the PowerVR2's registers, the tile accelerator's parameter stream, video memory) rather than Kamui 2's API. Without symbols, telling Kamui 2's functions apart inside the interleaved middleware proved unreliable, and Kamui 2 is the code that knows how its own calls become hardware commands: the parameter stream it writes is a small, documented format to decode into Vulkan 1.3 draws. The interrupt registration (`0x8C085E16`) is the one Kamui 2 function replaced.
 - **The stop report ends with the guest call chain**, read from the return addresses saved on the stack; `QILIN_STACK=1` dumps the stack too.
 
 ## [0.9.0] - 2026-11-21

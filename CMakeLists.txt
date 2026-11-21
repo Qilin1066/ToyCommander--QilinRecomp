@@ -110,7 +110,7 @@ add_custom_command(
     COMMAND qilin_liftgen ${QILIN_LIFT_TEST_GEN}
     DEPENDS qilin_liftgen
     COMMENT "Lifting the synthetic test programs")
-add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp ${QILIN_LIFT_TEST_SOURCES})
+add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp ${QILIN_LIFT_TEST_SOURCES})
 target_include_directories(qilin_lift_tests PRIVATE recomp/runtime recomp/tests ${QILIN_LIFT_TEST_GEN})
 target_compile_definitions(qilin_lift_tests PRIVATE QILIN_CHECKED_MEMORY)
 # Lifted code: each guest FPU operation rounds on its own, so the host compiler
@@ -140,7 +140,7 @@ add_custom_command(
     COMMAND qilin_difftest_gen ${QILIN_DIFFTEST_GEN}
     DEPENDS qilin_difftest_gen
     COMMENT "Lifting the differential test's cases")
-add_executable(qilin_difftest recomp/tests/difftest/run.cpp recomp/tests/difftest/ref.cpp recomp/runtime/dispatch.cpp ${QILIN_DIFFTEST_SOURCES})
+add_executable(qilin_difftest recomp/tests/difftest/run.cpp recomp/tests/difftest/ref.cpp recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/bus.cpp ${QILIN_DIFFTEST_SOURCES})
 target_include_directories(qilin_difftest PRIVATE recomp/runtime recomp/tests recomp/tests/difftest ${QILIN_DIFFTEST_GEN})
 target_compile_definitions(qilin_difftest PRIVATE QILIN_CHECKED_MEMORY)
 if(NOT MSVC)
@@ -159,7 +159,7 @@ add_test(NAME qilin_difftest COMMAND qilin_difftest)
 # from the player's disc dump at run time.
 set(QILIN_GAME_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GUTH.BIN, from qilin extract: builds qilin_run")
 option(QILIN_RUN_CHECKED "qilin_run checks every guest memory access (bring-up)" ON)
-set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp)
+set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp)
 if(QILIN_GAME_BOOT)
     set(QILIN_LIFT_FILES 24)
     set(gen ${CMAKE_BINARY_DIR}/generated)
@@ -179,7 +179,7 @@ if(QILIN_GAME_BOOT)
         COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
         DEPENDS qilin ${QILIN_GAME_BOOT}
         COMMENT "Lifting the game's boot file to C++")
-    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp ${QILIN_RT_SOURCES} ${gen_sources})
+    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp toycommander/src/heap.cpp toycommander/src/pvr.cpp toycommander/src/sh4.cpp toycommander/src/clock.cpp ${QILIN_RT_SOURCES} ${gen_sources})
     target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
     target_link_libraries(qilin_run PRIVATE qilin_disc qilin_warnings)
     if(QILIN_RUN_CHECKED)

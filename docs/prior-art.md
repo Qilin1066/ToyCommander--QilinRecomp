@@ -17,6 +17,9 @@ Found in a first search (November 2026), not yet read in detail; licences to be 
 
 Both recompile to C and model the hardware beneath Sega's libraries; this project replaces the libraries at their API instead, as its sisters do. Their experience with SHC's code (delay slots, literal pools, the FPSCR modes, the software divide) is the useful part.
 
+## Hardware references
+- **KallistiOS** (an open-source Dreamcast development library, BSD-style licence): its headers name the PowerVR2's and the system bus's registers, and the port's code uses the same names. Nothing is copied from it; what each register's bits do is read from Kamui 2's own code in the boot file.
+
 ## Decompilations and tools
 - **Tokyo Bus Guide** (lhsazevedo/tbg-decomp) and **Sonic Adventure** (reshaped/sonic-adventure): Dreamcast decompilations built with the original compiler. Useful for how Hitachi's SHC lays out code, pools and switch tables, and for naming Shinobi and Kamui 2 functions by matching code.
 - **Ghidra's Dreamcast scripts and function-ID databases** (the "Dreamcast Disassembly, Debugging and Decompilation Diaries" collection lists them): a way to name library functions in the boot file. Whether their data can be used, or only the method, depends on each one's licence.

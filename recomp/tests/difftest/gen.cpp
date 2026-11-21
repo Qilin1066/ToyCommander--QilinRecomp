@@ -275,7 +275,8 @@ int main(int argc, char** argv) {
         for (unsigned i = 0; i < kFiles; ++i)
             write(std::format("lifted_{}.cpp", i).c_str(), "#include \"functions.hpp\"\n\nnamespace qilin::gen {\n\n" + files[i] + "}  // namespace qilin::gen\n");
         write("table.cpp", "#include \"functions.hpp\"\n\nnamespace qilin::rt {\nextern const FnEntry g_functions[] = {\n" + table +
-                               "};\nextern const size_t g_function_count = sizeof(g_functions) / sizeof(g_functions[0]);\n}  // namespace qilin::rt\n");
+                               "};\nextern const size_t g_function_count = sizeof(g_functions) / sizeof(g_functions[0]);\n"
+                               "extern const char g_lifted_sha256[] = \"synthetic\";\n}  // namespace qilin::rt\n");
         std::string cases = "#include \"cases.hpp\"\n\nnamespace qilin::difftest {\n\nextern const uint16_t kImage[] = {";
         for (size_t i = 0; i < b.image.size(); ++i) cases += std::format("{}0x{:04X},", i % 16 ? "" : "\n    ", b.image[i]);
         cases += std::format("\n}};\nextern const uint32_t kImageWords = {};\n\nextern const Case kCaseList[] = {{\n", b.image.size());

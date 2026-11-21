@@ -20,7 +20,7 @@ constexpr uint32_t kHostReturn = 0xFFFFFFF0u;  // where call_guest's calls retur
 
 const char* kind_name(Stop::Kind k) {
     switch (k) {
-    case Stop::Memory: return "an access outside guest memory";
+    case Stop::Memory: return "an access to an address nothing handles (no RAM, no device)";
     case Stop::BadJump: return "a jump or call to an address with no function";
     case Stop::BadReturn: return "a return to an unexpected address";
     case Stop::Trap: return "a trap";

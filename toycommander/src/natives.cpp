@@ -6,7 +6,11 @@
 #include <cstdint>
 #include <cstring>
 
+#include <map>
+
 #include "heap.hpp"
+#include "pvr.hpp"
+#include "sh4.hpp"
 #include "system.hpp"
 
 namespace toycommander {
@@ -29,6 +33,26 @@ void memclr(rt::Context& c) {
     std::memset(rt::g_mem + dest, 0, n);
     const uint32_t head = 32 - (dest & 31);
     if (n >= 32 && n - head >= 32) c.fr[0] = c.fr[1] = 0.0f;
+}
+
+// 0x8C04EDF4, the C runtime's fill: r6 bytes of r5's low byte from r4, r4
+// returned in r0. A zero byte goes to memclr (with the count moved to r5).
+// The guest code fills 32-byte blocks through the store queues, keeping r8 in
+// FPUL meanwhile, which leaves FPUL holding r8 when it takes that path (on
+// the same condition as memclr's).
+void memset_sq(rt::Context& c) {
+    if (c.r[5] == 0) {  // the guest tests the whole register
+        c.r[5] = c.r[6];
+        memclr(c);
+        return;
+    }
+    const uint32_t dest = c.r[4], n = c.r[6];
+    c.r[0] = dest;
+    if (n == 0) return;
+    rt::check(dest, n);
+    std::memset(rt::g_mem + dest, static_cast<int>(c.r[5] & 0xFFu), n);
+    const uint32_t head = 32 - (dest & 31);
+    if (n >= 32 && n - head >= 32) c.fpul = c.r[8];
 }
 
 // 0x8C0B068A, Shinobi's initialisation, and 0x8C0B06E2, its exit: they walk
@@ -81,29 +105,169 @@ void shinobi_broadcast(rt::Context& c) { put_setting(c, g_console.broadcast); } 
 // 0x8C0B0758: the cable, from the I/O port's bits 9-8, returned in r0.
 void shinobi_cable(rt::Context& c) { c.r[0] = g_console.cable; }
 
-// 0x8C0B4840, Shinobi's hardware set-up (the interrupt controller, the
-// timers, DMA, through 0x8C0B48E0, 0x8C0BE520 and 0x8C0BE6F8), called by the
-// middleware's system initialisation, which doesn't use its result. The
-// hardware is the port's: nothing to do.
-void shinobi_hardware_init(rt::Context&) {}
-
-Heap g_heap;
+// 0x8C0B4840, Shinobi's hardware set-up, called by the middleware's system
+// initialisation, which doesn't use its result. Of what it programs, the
+// port's hardware needs what lifted code reads back: timer 0, which
+// 0x8C0B4958 makes a free-running counter (Kamui 2 times its waits with it).
+// The interrupt controller and DMA (0x8C0B48E0, 0x8C0BE520, 0x8C0BE6F8) are
+// the port's own business.
+void shinobi_hardware_init(rt::Context&) { start_free_running_timer0(); }
 
 // 0x8C0B3E10, Shinobi's allocator set-up: the heap is r5 bytes from r4, both
 // rounded to 32 bytes (the middleware's system initialisation passes the
 // end of the program's data and the rest of RAM). The caller doesn't use r0.
 void shinobi_heap_init(rt::Context& c) {
     rt::check(c.r[4], c.r[5]);
-    g_heap.init(c.r[4], c.r[5]);
+    heap::init(c.r[4], c.r[5]);
+}
+
+// The allocator's entry points jump through the operations table at
+// 0x8C117DBC. Only its set-up writes it, with the default table, so anything
+// else there is something new: stop rather than guess.
+void check_heap_table(uint32_t entry) {
+    if (rt::ld32(heap::kTablePointer) != heap::kDefaultTable)
+        throw rt::Stop{rt::Stop::Unsupported, entry, rt::ld32(heap::kTablePointer)};
+}
+// 0x8C0B3EDE and 0x8C0B3EE8 (two names for one call): malloc(r4).
+void shinobi_malloc(rt::Context& c) {
+    check_heap_table(0x8C0B3EDEu);
+    c.r[0] = heap::alloc(c.r[4]);
+}
+// 0x8C0B3FAC and 0x8C0B3FB6: free(r4).
+void shinobi_free(rt::Context& c) {
+    check_heap_table(0x8C0B3FACu);
+    heap::release(c.r[4]);
+}
+// 0x8C0B3E6A, the allocator's shut-down: an rts.
+void shinobi_heap_exit(rt::Context&) {}
+
+// 0x8C0BAF20, Shinobi's copy: r6 bytes from r5 to r4, in units of the largest
+// size (8, 4, 2 or 1) that all three are multiples of; 8-byte units go
+// through fr0/fr1 with 64-bit fmov. Through the bus, since either side can be
+// a device (Kamui 2 copies to video memory with it). The registers end as the
+// guest code leaves them. A count of 0 would make the guest loop wrap round: stop.
+void shinobi_copy(rt::Context& c) {
+    const uint32_t dst = c.r[4], src = c.r[5], n = c.r[6], all = dst | src | n;
+    const uint32_t unit = (all & 7u) == 0 ? 8u : (all & 3u) == 0 ? 4u : (all & 1u) == 0 ? 2u : 1u;
+    if (n == 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0BAF20u, 0};
+    uint32_t last = 0;
+    for (uint32_t k = 0; k < n; k += unit) {
+        switch (unit) {
+        case 8: {
+            const uint32_t hi = rt::ld32(src + k), lo = rt::ld32(src + k + 4);
+            rt::st32(dst + k, hi), rt::st32(dst + k + 4, lo);
+            c.fr[0] = rt::flt(hi), c.fr[1] = rt::flt(lo);
+            break;
+        }
+        case 4: last = rt::ld32(src + k), rt::st32(dst + k, last); break;
+        case 2: last = rt::ld16s(src + k), rt::st16(dst + k, last); break;
+        default: last = rt::ld8s(src + k), rt::st8(dst + k, last); break;
+        }
+    }
+    c.r[0] = unit == 8 ? all : last;
+    c.r[4] = dst + n, c.r[5] = src + n, c.r[6] = 0, c.t = 1;
+}
+
+// The interrupt handlers code installs in Shinobi's table at VBR + offset:
+// the runtime calls them when it delivers that interrupt.
+std::map<uint32_t, uint32_t> g_vector;
+
+// 0x8C085E16, Kamui 2's interrupt set-up, with r4 its handler (0x8C085C78 or
+// 0x8C085B8C). With interrupts masked it saves IMASK and the level-9 interrupt
+// masks (0xA05F6930 normal events, 0xA05F6938 errors) in its state at
+// 0x8C1135F4 (+8, +12, +16), puts its handler in the table entry at
+// VBR + 0x224 if it isn't there already (keeping the old one at +40 and
+// itself at +44), clears the masks and every pending event, and enables
+// the events it wants (0x280FEC normal, 0xE errors: +24, +28).
+void kamui_install_interrupt_handler(rt::Context& c) {
+    constexpr uint32_t kState = 0x8C1135F4u, kSlot = 0x224u;
+    rt::st32(kState + 8, (c.sr >> 4) & 15u);
+    rt::st32(kState + 12, pvr_register(0xA05F6930u));
+    rt::st32(kState + 16, pvr_register(0xA05F6938u));
+    const uint32_t old = g_vector[kSlot];
+    if (old != c.r[4]) {
+        rt::st32(kState + 40, old), rt::st32(kState + 44, c.r[4]);
+        g_vector[kSlot] = c.r[4];
+    }
+    set_pvr_register(0xA05F6930u, 0), set_pvr_register(0xA05F6938u, 0);
+    set_pvr_register(0xA05F6900u, 0xFFFFFFFFu), set_pvr_register(0xA05F6908u, 0xFFFFFFFFu);
+    rt::st32(kState + 24, 0x00280FECu), rt::st32(kState + 28, 14);
+    set_pvr_register(0xA05F6930u, 0x00280FECu), set_pvr_register(0xA05F6938u, 14);
+}
+
+// 0x8C0BAF74, Shinobi's clear: r5 bytes from r4, in units as its copy picks
+// them (8-byte ones are fr0/fr1 zeroed and stored with 64-bit fmov). Through
+// the bus; the registers end as the guest leaves them; a count of 0 stops.
+void shinobi_clear(rt::Context& c) {
+    const uint32_t dst = c.r[4], n = c.r[5], all = dst | n;
+    const uint32_t unit = (all & 7u) == 0 ? 8u : (all & 3u) == 0 ? 4u : (all & 1u) == 0 ? 2u : 1u;
+    if (n == 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0BAF74u, 0};
+    for (uint32_t k = 0; k < n; k += unit) {
+        if (unit >= 4) {
+            for (uint32_t w = 0; w < unit; w += 4) rt::st32(dst + k + w, 0);
+        } else if (unit == 2) {
+            rt::st16(dst + k, 0);
+        } else {
+            rt::st8(dst + k, 0);
+        }
+    }
+    if (unit == 8) c.fr[0] = c.fr[1] = 0.0f, c.r[0] = all;
+    else c.r[0] = 0;
+    c.r[4] = dst + n, c.r[5] = 0, c.t = 1;
+}
+
+// 0x8C0B486A, called by the middleware's system initialisation, which
+// doesn't use its result: clears Shinobi's interrupt-handler tables
+// (0x8C0B394C) and goes on to 0x8C0BE9AC, which sets up Shinobi's records
+// for the four controller ports (52 bytes each). All Shinobi's own state; the
+// controllers will be the port's, through Shinobi's API: nothing to do.
+void shinobi_peripheral_init(rt::Context&) {}
+
+// 0x8C0B3288 (r4 = 0, r5 = 0x8C0E007C, r6 = 0x8C0EC09C: two buffers), called
+// by the middleware's system initialisation, which doesn't use its result.
+// Unidentified: it clears and sets up 24 records of 52 bytes of Shinobi's
+// own (each with a pointer into a table of 120-byte entries, 0x8C0BF518),
+// keeps the two buffers (0x8C0B4FAC), and reaches an interrupt-mask update
+// (0x8C0B399C) and a DMA set-up (0x8C0BF6D0). All Shinobi's own state, so
+// nothing to do; if anything lifted reads it, that will show.
+void shinobi_module_init_8C0B3288(rt::Context&) {}
+
+// 0x8C0B4244, the real-time clock's initialisation: reads the AICA's clock
+// (0xA0710000, two 16-bit halves of seconds since 1950, read until two reads
+// agree) into 0x8C117DF0, clears the flags at 0x8C117DF4 and adds a refresh
+// handler (0x8C0B427C) to the interrupt chain for event 0x900 at priority 92,
+// keeping the handle at 0x8C117DF8. Only Shinobi reads any of that (its
+// date functions at 0x8C0B42A6 and 0x8C0B439C, which get natives over the
+// host's clock when something calls them), so nothing to do here. Returns 0.
+void shinobi_rtc_init(rt::Context& c) { c.r[0] = 0; }
+
+// 0x8C0B27E4: sets up a three-word record at r4 as {0, r5, 0} and returns
+// r4 (the middleware gives it a 0x400-byte block it just allocated). r6 ends 0.
+void shinobi_record_init_8C0B27E4(rt::Context& c) {
+    rt::st32(c.r[4], 0), rt::st32(c.r[4] + 4, c.r[5]), rt::st32(c.r[4] + 8, 0);
+    c.r[6] = 0, c.r[0] = c.r[4];
 }
 
 const rt::Provided kNatives[] = {
+    {0x8C04EDF4u, "memset", memset_sq},
     {0x8C04EEE0u, "memclr", memclr},
     {0x8C0B068Au, "shinobi_library_init", shinobi_library_init},
+    {0x8C085E16u, "kamui_install_interrupt_handler", kamui_install_interrupt_handler},
     {0x8C0B0758u, "shinobi_cable", shinobi_cable},
     {0x8C0B3E10u, "shinobi_heap_init", shinobi_heap_init},
+    {0x8C0B3E6Au, "shinobi_heap_exit", shinobi_heap_exit},
+    {0x8C0B3EDEu, "shinobi_malloc", shinobi_malloc},
+    {0x8C0B3EE8u, "shinobi_malloc_2", shinobi_malloc},
+    {0x8C0B3FACu, "shinobi_free", shinobi_free},
+    {0x8C0B3FB6u, "shinobi_free_2", shinobi_free},
+    {0x8C0B27E4u, "shinobi_record_init_8C0B27E4", shinobi_record_init_8C0B27E4},
+    {0x8C0B3288u, "shinobi_module_init_8C0B3288", shinobi_module_init_8C0B3288},
+    {0x8C0B4244u, "shinobi_rtc_init", shinobi_rtc_init},
     {0x8C0B4840u, "shinobi_hardware_init", shinobi_hardware_init},
+    {0x8C0B486Au, "shinobi_peripheral_init", shinobi_peripheral_init},
     {0x8C0BAB98u, "shinobi_set_work_area", shinobi_set_work_area},
+    {0x8C0BAF20u, "shinobi_copy", shinobi_copy},
+    {0x8C0BAF74u, "shinobi_clear", shinobi_clear},
     {0x8C0BABEAu, "shinobi_sound_mode", shinobi_sound_mode},
     {0x8C0BAC38u, "shinobi_area", shinobi_area},
     {0x8C0BAC68u, "shinobi_language", shinobi_language},

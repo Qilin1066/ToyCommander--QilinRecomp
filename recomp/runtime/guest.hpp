@@ -86,17 +86,29 @@ inline void check(uint32_t, uint32_t) {}
 #define QILIN_PC(a) ((void)0)
 #endif
 
+// RAM where the game is linked to use it, 16 MB at 0x8C000000: the fast
+// path, one compare. Everything else (RAM's other views, the store queues,
+// the hardware) takes the bus (bus.cpp), which hands it to the devices the
+// runtime maps there, or stops.
+inline constexpr uint32_t kRamLo = 0x8C000000u, kRamBytes = 0x01000000u;
+inline bool in_ram(uint32_t a, uint32_t n) { return a - kRamLo <= kRamBytes - n; }
+uint32_t bus_read(uint32_t a, unsigned n);
+void bus_write(uint32_t a, uint32_t v, unsigned n);
+
 inline uint32_t ld8(uint32_t a) {
+    if (!in_ram(a, 1)) [[unlikely]] return bus_read(a, 1);
     check(a, 1);
     return g_mem[a];
 }
 inline uint32_t ld16(uint32_t a) {
+    if (!in_ram(a, 2)) [[unlikely]] return bus_read(a, 2);
     check(a, 2);
     uint16_t v;
     std::memcpy(&v, g_mem + a, 2);
     return v;
 }
 inline uint32_t ld32(uint32_t a) {
+    if (!in_ram(a, 4)) [[unlikely]] return bus_read(a, 4);
     check(a, 4);
     uint32_t v;
     std::memcpy(&v, g_mem + a, 4);
@@ -105,15 +117,18 @@ inline uint32_t ld32(uint32_t a) {
 inline uint32_t ld8s(uint32_t a) { return static_cast<uint32_t>(static_cast<int8_t>(ld8(a))); }
 inline uint32_t ld16s(uint32_t a) { return static_cast<uint32_t>(static_cast<int16_t>(ld16(a))); }
 inline void st8(uint32_t a, uint32_t v) {
+    if (!in_ram(a, 1)) [[unlikely]] return bus_write(a, v & 0xFFu, 1);
     check(a, 1);
     g_mem[a] = static_cast<uint8_t>(v);
 }
 inline void st16(uint32_t a, uint32_t v) {
+    if (!in_ram(a, 2)) [[unlikely]] return bus_write(a, v & 0xFFFFu, 2);
     check(a, 2);
     const uint16_t h = static_cast<uint16_t>(v);
     std::memcpy(g_mem + a, &h, 2);
 }
 inline void st32(uint32_t a, uint32_t v) {
+    if (!in_ram(a, 4)) [[unlikely]] return bus_write(a, v, 4);
     check(a, 4);
     std::memcpy(g_mem + a, &v, 4);
 }
@@ -209,10 +224,10 @@ inline void mac(uint32_t& mach, uint32_t& macl, int64_t product, uint32_t s, uin
 }
 
 // pref: a prefetch is a no-op, but a prefetch of a store-queue address sends
-// the queue to memory or the tile accelerator: the runtime has to take that
-// over (until it does, it stops).
+// that queue's 32 bytes on to memory or the tile accelerator (the bus does).
+void bus_flush_store_queue(uint32_t a, uint32_t pc);  // bus.cpp
 inline void pref(uint32_t a, uint32_t pc) {
-    if ((a & 0xFC000000u) == 0xE0000000u) unsupported(pc, a);
+    if ((a & 0xFC000000u) == 0xE0000000u) [[unlikely]] bus_flush_store_queue(a, pc);
 }
 
 // ---- the FPU ----

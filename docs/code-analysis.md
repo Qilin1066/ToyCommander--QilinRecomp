@@ -106,7 +106,7 @@ The conventions it found:
 
 ## The runtime's to-do list (v0.3.0)
 1. **Shinobi:** replaced whole, at its API: start-up, interrupts, timers, cache, store queues, memory allocation, the GD-ROM file system (over the disc image), Maple (controllers, memory cards, the Jump Pack), the system configuration, the real-time clock.
-2. **The middleware's hardware-facing parts:** Kamui 2 and `kmdk` (to Vulkan), the audio manager (to the native mixer; `AUDIO64.DRV` is not run), the DMA and store-queue copy routines. Which functions exactly is the attribution's result.
+2. **The middleware's hardware-facing parts:** Kamui 2 and `kmdk` (lifted since the bring-up, against the PowerVR2's registers, video memory and tile accelerator, which the port provides and draws with Vulkan: `runtime.md`), the audio manager (to the native mixer; `AUDIO64.DRV` is not run), the DMA and store-queue copy routines. Which functions exactly is the attribution's result.
 3. **Lifted:** the game, and the middleware's pure computation: No Cliché's engine, the movie player's decoder, the C runtime and maths, as far as the attribution confirms.
 4. **The development system's leftovers** (CodeScape file names, the debugger stubs): replaced by no-ops, with a log line if one is ever reached.
 

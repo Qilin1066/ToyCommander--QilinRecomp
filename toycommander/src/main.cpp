@@ -17,6 +17,8 @@
 #include "gdrom.hpp"
 #include "memory.hpp"
 #include "natives.hpp"
+#include "pvr.hpp"
+#include "sh4.hpp"
 #include "system.hpp"
 
 namespace rt = qilin::rt;
@@ -55,6 +57,8 @@ int main(int argc, char** argv) {
 #endif
     rt::host_fp_setup();
     toycommander::provide_natives();
+    toycommander::map_pvr();
+    toycommander::map_sh4_peripherals();
 
     rt::Context c;
     try {

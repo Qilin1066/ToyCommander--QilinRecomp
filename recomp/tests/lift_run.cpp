@@ -17,6 +17,7 @@
 #include "functions.hpp"
 #include "guest.hpp"
 #include "lift_programs.hpp"
+#include "bus.hpp"
 #include "memory.hpp"
 #include "system.hpp"
 
@@ -237,12 +238,12 @@ void test_memory() {
     // An access outside the mapped regions stops, naming the instruction.
     reset_memory();
     Context c = fresh();
-    c.r[4] = 0x0C000000u, c.r[5] = 1;
+    c.r[4] = 0x00200000u, c.r[5] = 1;  // nothing is mapped there
     try {
         qilin::rt::call(c, g_p.entry.at("memory"), 0);
         ++g_failures, std::printf("FAIL unmapped store returned\n");
     } catch (const Stop& s) {
-        eq("unmapped", s.kind, Stop::Memory), eq("unmapped pc", s.pc, g_p.entry.at("memory") + 4), eq("unmapped address", s.value, 0x0C000000u);
+        eq("unmapped", s.kind, Stop::Memory), eq("unmapped pc", s.pc, g_p.entry.at("memory") + 4), eq("unmapped address", s.value, 0x00200000u);
     }
 }
 
@@ -466,6 +467,34 @@ void test_registry() {
     eq("call_guest", d.r[0], 42), eq("call_guest restores PR", d.pr, 0x12345678u);
 }
 
+// The bus: RAM's other views, the store queues sent on by pref, a device.
+void test_bus() {
+    namespace rt = qilin::rt;
+    reset_memory();
+    const uint32_t p = g_p.data + 64;  // 32-byte aligned (data is 4-aligned: round up)
+    const uint32_t block = (p + 31) & ~31u;
+    rt::st32(block, 0x11223344u);
+    eq("the uncached view", rt::ld32(block - 0x8C000000u + 0xAC000000u), 0x11223344u);
+    eq("the physical view", rt::ld32(block - 0x8C000000u + 0x0C000000u), 0x11223344u);
+    eq("a mirror", rt::ld32(block - 0x8C000000u + 0x8D000000u), 0x11223344u);
+    rt::st16(block - 0x8C000000u + 0xAC000002u, 0xBEEFu);
+    eq("a store through a view", rt::ld32(block), 0xBEEF3344u);
+    // A store queue sent to RAM: QACR0 names area 3 (0x0C000000, bits 4-2 = 3).
+    rt::st32(0xFF000038u, 0x0Cu);
+    for (uint32_t k = 0; k < 32; k += 4) rt::st32(0xE0000000u + k, 0xA0000000u + k);
+    rt::pref(0xE0000000u | (block & 0x03FFFFE0u), 0);
+    eq("store queue target", rt::store_queue_target(0xE0000000u | (block & 0x03FFFFE0u)), (block & 0x03FFFFE0u) | 0x0C000000u);
+    eq("store queue sent", rt::ld32(block + 28), 0xA000001Cu);
+    // A device, and its block writes from a store queue.
+    static uint32_t last_write = 0, blocks = 0;
+    rt::map({0x10000000u, 0x10800000u, "test device", [](uint32_t a, unsigned) { return a ^ 0xFFFFFFFFu; },
+             [](uint32_t, uint32_t v, unsigned) { last_write = v; }, [](uint32_t, const uint8_t*, unsigned n) { blocks += n; }});
+    eq("device read (a P2 address)", rt::ld32(0xB0000010u), 0x10000010u ^ 0xFFFFFFFFu);
+    rt::st32(0x10000020u, 7), eq("device write", last_write, 7);
+    rt::st32(0xFF00003Cu, 0x10u);  // QACR1: area 4 (0x10000000)
+    rt::pref(0xE0000020u, 0), eq("a store queue to a device", blocks, 32);
+}
+
 // Guest memory: 4 GB reserved, a range committed and usable.
 void test_guest_memory() {
     qilin::rt::GuestMemory m;
@@ -531,6 +560,7 @@ int main() {
     test_approximate(rng);
     test_registry();
     test_guest_memory();
+    test_bus();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

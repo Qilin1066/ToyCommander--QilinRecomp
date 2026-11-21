@@ -33,7 +33,9 @@ constexpr Region kUsa[] = {
 };
 
 constexpr ReplacedFunction kUsaReplaced[] = {
+    {0x8C04EDF4, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
     {0x8C04EEE0, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
+    {0x8C085E16, "kamui_install_interrupt_handler", "puts Kamui 2's handler in the exception table (VBR)"},
 };
 
 constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd";
