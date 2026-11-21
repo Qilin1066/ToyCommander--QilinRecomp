@@ -354,6 +354,64 @@ void test_cfg_switch() {
     CHECK(suspects(lc).contains("an indirect jump"));
 }
 
+void test_cfg_address_table() {
+    // Hand-written code's table of code addresses, indexed by r0 (the C
+    // runtime's unrolled copy at 0x8C081C2C enters itself this way).
+    const BootFile boot = program({
+        0xD303,  // 00  mov.l 0x10,r3   (the table's address)
+        0x033E,  // 02  mov.l @(r0,r3),r3
+        0x432B,  // 04  jmp @r3
+        0x0009,  // 06   nop
+        0x000B,  // 08  rts
+        0xE001,  // 0A   mov #1,r0
+        0x000B,  // 0C  rts
+        0xE002,  // 0E   mov #2,r0
+        0x0014, 0x8C01,  // 10  .long 0x8C010014
+        0x0008, 0x8C01, 0x000C, 0x8C01,  // 14  .long 0x8C010008, 0x8C01000C
+        0x0009, 0x000B,  // 1C  (not addresses: the table ends)
+    });
+    const Cfg cfg = analyse(boot);
+    const Function& f = cfg.functions.at(kB);
+    CHECK(f.switches.size() == 1 && f.indirect_jumps.empty());
+    if (f.switches.size() == 1) {
+        const Switch& sw = f.switches[0];
+        CHECK(sw.braf == kB + 4 && sw.table == kB + 0x14 && sw.entry_size == 4);
+        CHECK(sw.targets == std::vector<uint32_t>({kB + 0x08, kB + 0x0C}));
+    }
+    CHECK(cfg.at(kB + 0x08) == Kind::code && cfg.at(kB + 0x0E) == Kind::code);
+    CHECK(cfg.at(kB + 0x14) == Kind::jump_table && cfg.at(kB + 0x1A) == Kind::jump_table);
+}
+
+void test_cfg_known() {
+    // What a layout knows that references don't show: an entry nothing
+    // refers to that falls into the next function, a stub that doesn't
+    // decode, a data block, and the engine's swapped-nop filler.
+    const BootFile boot = program({
+        0x000B,  // 00  rts
+        0x0009,  // 02   nop
+        0x0900,  // 04  (filler: nop with its bytes swapped)
+        0x0900,  // 06
+        0xE001,  // 08  mov #1,r0       (an entry nothing refers to, falling into 0x0A)
+        0xE002,  // 0A  mov #2,r0       (a function the image points at)
+        0x000B,  // 0C  rts
+        0x0009,  // 0E   nop
+        0x003B,  // 10  a debugger's break
+        0x000B,  // 12  rts
+        0x0009,  // 14   nop
+        0x1234,  // 16  data
+        0x000A, 0x8C01,  // 18  .long 0x8C01000A
+    });
+    Known known;
+    known.entries = {kB + 0x08};
+    known.stubs = {{kB + 0x10, kB + 0x16}};
+    known.data = {{kB + 0x16, kB + 0x18}};
+    const Cfg cfg = analyse(boot, {}, known);
+    CHECK(cfg.functions.contains(kB + 0x08) && cfg.functions.at(kB + 0x08).origin == Origin::layout);
+    CHECK(cfg.functions.contains(kB + 0x10) && cfg.functions.at(kB + 0x10).insns.empty());
+    CHECK(cfg.at(kB + 0x04) == Kind::padding && cfg.at(kB + 0x06) == Kind::padding);
+    CHECK(cfg.at(kB + 0x10) == Kind::code && cfg.at(kB + 0x14) == Kind::code && cfg.at(kB + 0x16) == Kind::data);
+}
+
 void test_cfg_join() {
     // r1 holds one function on one path and another on the other: the call
     // through it is not resolved.
@@ -1131,6 +1189,8 @@ int main() {
     test_gpr_written();
     test_cfg_calls();
     test_cfg_switch();
+    test_cfg_address_table();
+    test_cfg_known();
     test_cfg_join();
     test_cfg_guesses();
     test_cfg_rejects();

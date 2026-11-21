@@ -9,7 +9,7 @@
 namespace qilin {
 
 std::string summary(const Cfg& cfg) {
-    std::array<size_t, 5> by_origin{};
+    std::array<size_t, 6> by_origin{};
     size_t insns = 0, calls = 0, tails = 0, ind_calls = 0, ind_jumps = 0, problems = 0, pr_calls = 0, jmp_returns = 0, computed = 0;
     std::map<uint32_t, size_t> switches;  // braf -> cases: shared code reaches a switch from several functions
     for (const auto& [entry, f] : cfg.functions) {

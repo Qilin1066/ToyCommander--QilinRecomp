@@ -20,7 +20,7 @@
 //                                             the FPSCR mode at every FPU instruction, per region;
 //                                             --list: every place it can't be proven;
 //                                             --json: every function's entry and exit modes
-//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans] [--files N]
+//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--no-orphans] [--files N]
 //                                             the lifted C++: functions.hpp, table.cpp, stubs.cpp,
 //                                             lifted_NNN.cpp (256 functions each), lift_report.txt
 //   qilin hwaccess <1GUTH.BIN> [--json out.json]
@@ -81,7 +81,7 @@ int usage() {
                "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
                "  qilin suspects <1GUTH.BIN>\n"
                "  qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]\n"
-               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans] [--files N]\n"
+               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--no-orphans] [--files N]\n"
                "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
@@ -243,7 +243,19 @@ int cmd_profile(const std::string& path) {
 
 // The analysis, with the build's layout when the build is a supported one.
 Cfg analyse_boot(const BootFile& boot) {
-    Cfg cfg = analyse(boot, layout(boot.sha256));
+    Known known;
+    for (const KnownEntry& e : known_entries(boot.sha256)) known.entries.push_back(e.entry);
+    for (const DataBlock& d : data_blocks(boot.sha256)) known.data.emplace_back(d.begin, d.end);
+    for (const ReplacedFunction& r : replaced_functions(boot.sha256))
+        if (r.bytes) known.stubs.emplace_back(r.entry, r.entry + r.bytes);
+    Cfg cfg = analyse(boot, layout(boot.sha256), known);
+    for (const KnownEntry& e : known_entries(boot.sha256))
+        if (!cfg.functions.contains(e.entry)) {
+            std::string why = "not a function";
+            for (const Rejected& r : cfg.rejected)
+                if (r.address == e.entry) why = r.reason;
+            throw Failure{std::format("the layout's entry {:08X} ({}): {}", e.entry, e.why, why)};
+        }
     for (const IndirectTargets& t : indirect_targets(boot.sha256)) {
         if (!cfg.functions.contains(t.function)) throw Failure{std::format("{:08X} ({}) isn't a function", t.function, t.why)};
         auto& targets = cfg.functions.at(t.function).indirect_targets[t.site];
@@ -419,7 +431,7 @@ int cmd_hwaccess(const std::string& path, const std::optional<std::string>& json
 int run(int argc, char** argv) {
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
-    bool list = false, map = false, orphans = false;
+    bool list = false, map = false, orphans = true;
     std::optional<std::string> range, files;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
@@ -436,7 +448,7 @@ int run(int argc, char** argv) {
         else if (a == "--pc") value(pc);
         else if (a == "--list") list = true;
         else if (a == "--map") map = true;
-        else if (a == "--orphans") orphans = true;
+        else if (a == "--no-orphans") orphans = false;
         else if (a == "--range") value(range);
         else if (a == "--files") value(files);
         else if (a.starts_with("-")) throw Failure{std::format("unknown option {}", a)};

@@ -686,6 +686,13 @@ private:
                 line(go(back->second));
             } else if (tail != f_.tail_jumps.end()) {
                 leave_to(tail->second);
+            } else if (const auto sw = std::ranges::find(f_.switches, pc, &Switch::braf); sw != f_.switches.end()) {
+                // Through a table of code addresses: keyed on the address it gave.
+                std::set<uint32_t> cases(sw->targets.begin(), sw->targets.end());
+                line("switch (target) {");
+                for (uint32_t t : cases) line(std::format("case {}: {}", hex(t), go(t)));
+                line(std::format("default: rt::bad_jump({}, target);", hex(pc)));
+                line("}");
             } else {
                 line("@OUT@");
                 line(std::format("rt::call(c, target, {});", hex(pc)));

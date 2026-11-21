@@ -4,6 +4,8 @@
 #include "natives.hpp"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <map>
@@ -90,10 +92,13 @@ struct Console {
 } g_console;
 }  // namespace
 
+void (*g_save_sound_mode)(bool) = nullptr;
+
 void set_console(unsigned language, bool stereo) {
     g_console.language = language;
     g_console.sound = stereo ? 0 : 1;
 }
+void on_sound_mode(void (*save)(bool stereo)) { g_save_sound_mode = save; }
 
 namespace {
 
@@ -212,6 +217,102 @@ void kamui_install_interrupt_handler(rt::Context& c) {
     set_pvr_register(0xA05F6930u, 0x00280FECu), set_pvr_register(0xA05F6938u, 14);
 }
 
+// 0x8C085ED4, Kamui 2's interrupt removal, the other half of 0x8C085E16:
+// with interrupts masked it saves IMASK and the level-9 masks in its state
+// again, puts the handler it kept (+40) back in the table entry at VBR +
+// 0x224 unless the entry still holds the one at +44, clears the masks and
+// every pending event, and leaves its own masks (+24, +28) at 0.
+void kamui_remove_interrupt_handler(rt::Context& c) {
+    constexpr uint32_t kState = 0x8C1135F4u, kSlot = 0x224u;
+    rt::st32(kState + 8, (c.sr >> 4) & 15u);
+    rt::st32(kState + 12, pvr_register(0xA05F6930u));
+    rt::st32(kState + 16, pvr_register(0xA05F6938u));
+    if (rt::ld32(kState + 44) != g_vector[kSlot]) g_vector[kSlot] = rt::ld32(kState + 40);
+    set_pvr_register(0xA05F6930u, 0), set_pvr_register(0xA05F6938u, 0);
+    set_pvr_register(0xA05F6900u, 0xFFFFFFFFu), set_pvr_register(0xA05F6908u, 0xFFFFFFFFu);
+    rt::st32(kState + 24, 0), rt::st32(kState + 28, 0);
+}
+
+// 0x8C0C3C28: calls r4 with r5 and r6 as its arguments on Shinobi's own
+// stack (top 0x8C0C3C20, the caller's kept at 0x8C0C3C24), with PR and SZ
+// cleared in FPSCR and the current bank, MACH, MACL, FPSCR and PR as they
+// were afterwards (Kamui 2's interrupt handler calls the game's callbacks
+// this way).
+void shinobi_call_on_own_stack(rt::Context& c) {
+    const rt::Context saved = c;
+    rt::st32(0x8C0C3C24u, c.r[15]);
+    c.r[15] = 0x8C0C3C20u - 4 * 20;  // where the guest code's pushes leave it
+    c.fpscr &= ~0x00180000u;
+    c.r[4] = saved.r[5], c.r[5] = saved.r[6];
+    rt::call_guest(c, saved.r[4]);
+    std::memcpy(c.fr, saved.fr, sizeof c.fr);
+    c.mach = saved.mach, c.macl = saved.macl, c.fpscr = saved.fpscr, c.pr = saved.pr;
+    c.r[15] = saved.r[15];
+}
+
+// 0x8C0B426E, the real-time clock's exit: clears the count it keeps and
+// takes its refresh handler out of the interrupt chain. The port's set-up
+// (0x8C0B4244) added no handler, so only the count is cleared.
+void shinobi_rtc_exit(rt::Context& c) {
+    rt::st32(0x8C117DF0u, 0);
+    c.r[0] = 0;
+}
+
+// 0x8C0BABAA: forgets the work area 0x8C0BAB98 was given (Shinobi's exit).
+void shinobi_clear_work_area(rt::Context& c) {
+    rt::st32(rt::ld32(0x8C0BAD80u), 0);
+    c.r[0] = 0;
+}
+
+// 0x8C0BABB4: sets the console's sound mode, r4 (0 stereo, 1 mono): the
+// boot ROM's copy at 0x8C00007E, then the console's flash memory through
+// the work area (0x8C0C16C8). Fails (-1) without a work area or for another
+// value. The port's flash memory is the settings file.
+void shinobi_set_sound_mode(rt::Context& c) {
+    if (rt::ld32(rt::ld32(0x8C0BAD80u)) == 0 || c.r[4] > 1) {
+        c.r[0] = 0xFFFFFFFFu;
+        return;
+    }
+    rt::st8(0x8C00007Eu, static_cast<uint8_t>(c.r[4]));
+    g_console.sound = c.r[4];
+    if (g_save_sound_mode) g_save_sound_mode(c.r[4] == 0);
+    c.r[0] = 0;
+}
+
+// 0x8C0B487A, Shinobi's exit: on the console, interrupts masked, its
+// libraries shut down and a jump to the boot ROM's start (its menu). The
+// port's equivalent is to quit.
+void shinobi_exit(rt::Context&) {
+    rt::log("the game exited to the console's menu (Shinobi's exit, 0x8C0B487A)");
+    std::fflush(nullptr);
+    std::_Exit(0);
+}
+
+// 0x8C0BADE0, Shinobi's boot of the next program: with a program named
+// (0x8C0BCFE0 puts the name at 0x8C0080F0 and sets 0x8C0080FC), the boot
+// ROM loads and runs it; without, it returns to its menu. The port runs one
+// program, this one: a name stops, naming it; no name quits.
+void shinobi_boot_next(rt::Context& c) {
+    if (rt::ld8(0x8C0080FCu) == 1) throw rt::Stop{rt::Stop::Unsupported, 0x8C0BADE0u, rt::ld32(0x8C0080F0u)};
+    shinobi_exit(c);
+}
+
+// 0x8C0C1078, 0x8C0C108C, 0x8C0C10A0: the boot ROM's font (its address, and
+// locking and unlocking it). The font is the boot ROM's own, and the port has
+// no boot ROM: stop if the game ever draws with it.
+void rom_font(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1078u, 0}; }
+
+// 0x8C04F0D0: the debug base register (stc dbr), a debugger's. Nothing
+// refers to it; the port has no debugger: stop.
+void read_dbr(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C04F0D0u, 0}; }
+
+// 0x8C099470: a debugger's break (0x003B), which the engine's checks call
+// when one fails; 0x8C09947C: trapa #2, the C runtime's default handler. On
+// a console without a debugger both end in Shinobi's exception handler:
+// the game stops, and so does the port, saying where.
+void debug_break(rt::Context& c) { throw rt::Stop{rt::Stop::Trap, c.pr - 4, 0x003B}; }
+void debug_trap(rt::Context& c) { throw rt::Stop{rt::Stop::Trap, c.pr - 4, 2}; }
+
 // 0x8C0BAF74, Shinobi's clear: r5 bytes from r4, in units as its copy picks
 // them (8-byte ones are fr0/fr1 zeroed and stored with 64-bit fmov). Through
 // the bus; the registers end as the guest leaves them; a count of 0 stops.
@@ -278,6 +379,19 @@ const rt::Provided kNatives[] = {
     {0x8C04EEE0u, "memclr", memclr},
     {0x8C0B068Au, "shinobi_library_init", shinobi_library_init},
     {0x8C085E16u, "kamui_install_interrupt_handler", kamui_install_interrupt_handler},
+    {0x8C085ED4u, "kamui_remove_interrupt_handler", kamui_remove_interrupt_handler},
+    {0x8C0C3C28u, "shinobi_call_on_own_stack", shinobi_call_on_own_stack},
+    {0x8C0B426Eu, "shinobi_rtc_exit", shinobi_rtc_exit},
+    {0x8C0BABAAu, "shinobi_clear_work_area", shinobi_clear_work_area},
+    {0x8C0BABB4u, "shinobi_set_sound_mode", shinobi_set_sound_mode},
+    {0x8C0B487Au, "shinobi_exit", shinobi_exit},
+    {0x8C0BADE0u, "shinobi_boot_next", shinobi_boot_next},
+    {0x8C0C1078u, "rom_font_address", rom_font},
+    {0x8C0C108Cu, "rom_font_lock", rom_font},
+    {0x8C0C10A0u, "rom_font_unlock", rom_font},
+    {0x8C04F0D0u, "read_dbr", read_dbr},
+    {0x8C099470u, "debug_break", debug_break},
+    {0x8C09947Cu, "debug_trap", debug_trap},
     {0x8C0B0758u, "shinobi_cable", shinobi_cable},
     {0x8C0B3E10u, "shinobi_heap_init", shinobi_heap_init},
     {0x8C0B3E6Au, "shinobi_heap_exit", shinobi_heap_exit},

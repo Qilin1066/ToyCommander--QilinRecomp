@@ -30,7 +30,7 @@ namespace qilin {
 
 struct LiftOptions {
     std::optional<std::pair<uint32_t, uint32_t>> range;  // lift only functions starting in [lo, hi)
-    bool orphans = false;                                 // lift unreferenced functions too
+    bool orphans = true;                                  // lift unreferenced functions too (every function found is lifted or replaced)
     unsigned files = 0;  // lifted_NNN.cpp files: 0 for 256 functions each; else exactly this many (for build systems)
     std::span<const ReplacedFunction> replaced;  // functions replaced natively outside the replaced regions
 };

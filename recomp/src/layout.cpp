@@ -41,11 +41,14 @@ constexpr Region kUsa[] = {
     {0x8C0BAE40, 0x8C0BAF20, "Shinobi: the peripherals' vibration and screen calls", Plan::lift},
     {0x8C0BAF20, 0x8C0BAFDC, "Shinobi", Plan::replace},
     {0x8C0BAFDC, 0x8C0BCFE0, "8 KB buffer (zero-filled; the middleware uses it)", Plan::data},
-    {0x8C0BCFE0, 0x8C0BD264, "Shinobi", Plan::replace},
+    // Software only (no hardware, no system calls): lifted.
+    {0x8C0BCFE0, 0x8C0BD264, "Shinobi: the boot's next program's name and number; the GD-ROM's TOC and BCD helpers", Plan::lift},
     {0x8C0BD264, 0x8C0BDB14, "Shinobi's gdd (the GD-ROM driver, over the boot ROM's system calls)", Plan::lift},
     {0x8C0BDB14, 0x8C0BE9AC, "Shinobi", Plan::replace},
     {0x8C0BE9AC, 0x8C0C1078, "Shinobi's Maple driver: the bus's DMA and frames; bu's device layer", Plan::lift},
-    {0x8C0C1078, 0x8C0C17C4, "Shinobi", Plan::replace},
+    {0x8C0C1078, 0x8C0C10BC, "Shinobi: the boot ROM's font calls", Plan::replace},
+    {0x8C0C10BC, 0x8C0C1520, "Shinobi: character code conversions for the boot ROM's font (software only)", Plan::lift},
+    {0x8C0C1520, 0x8C0C17C4, "Shinobi: the boot ROM's GD-ROM and flash calls", Plan::replace},
     {0x8C0C17C4, 0x8C0C1C0C, "Shinobi's vibration (Jump Pack) and screen (memory card) drivers", Plan::lift},
     {0x8C0C1C0C, 0x8C0C3C24, "8 KB stack (zero-filled; its top is referenced)", Plan::data},
     {0x8C0C3C24, 0x8C0C3CA4, "Shinobi", Plan::replace},
@@ -68,6 +71,46 @@ constexpr ReplacedFunction kUsaReplaced[] = {
     {0x8C04EDF4, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
     {0x8C04EEE0, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
     {0x8C085E16, "kamui_install_interrupt_handler", "puts Kamui 2's handler in the exception table (VBR)"},
+    {0x8C085ED4, "kamui_remove_interrupt_handler", "takes Kamui 2's handler out of the exception table (VBR) again"},
+    {0x8C04F0D0, "read_dbr", "the C runtime's read of the debug base register (stc dbr): a debugger's"},
+    {0x8C099470, "debug_break", "a debugger's break (0x003B ; rts ; nop), which the engine's checks call when they fail", 6},
+    {0x8C09947C, "debug_trap", "a debugger's trap (trapa #2 ; rts), the C runtime's default handler at 0x8C0994E8", 4},
+};
+
+// Hand-written code's spare entries and small functions nothing refers to
+// (docs/code-analysis.md, "Every byte"): found by reading the code, lifted
+// with the rest.
+constexpr KnownEntry kUsaEntries[] = {
+    {0x8C0613AC, "the engine's matrix code: an identity load into the back bank, falling into its neighbour's"},
+    {0x8C06145C, "the engine's matrix code: a vector load from r4, falling into the code at 0x8C061464"},
+    {0x8C06169C, "the engine's matrix code: the shared call into 0x8C0616A0 with its own routine"},
+    {0x8C0616B8, "the engine's matrix code: 0x8C0615C8, then 0x8C06169C"},
+    {0x8C0616C4, "the engine's matrix code: 0x8C0616A0 with its routine 0x8C0613D4"},
+    {0x8C0616D0, "the engine's matrix code: 0x8C0616A0 with its routine 0x8C0613FC"},
+    {0x8C0616DC, "the engine's matrix code: 0x8C0616A0 with its routine 0x8C0614A0"},
+    {0x8C0616E8, "the engine's matrix code: 0x8C0616A0 with its routine 0x8C0614C8"},
+    {0x8C0616F4, "the engine's matrix code: PR saved, then 0x8C0616F6 (where 0x8C061700's call returns with PR already in r4)"},
+    {0x8C061DB8, "the engine's matrix code: a look-at rotation from the back bank's vector"},
+    {0x8C061DC4, "the engine's matrix code: the same from a vector at r4"},
+    {0x8C061ECC, "the engine's matrix code: the look-at rotation called with PR set by hand"},
+    {0x8C061EE0, "the engine's matrix code: the look-at rotation, then 0x8C061EEC"},
+    {0x8C099478, "the C runtime's stack pointer (rts ; mov r15,r0), beside the debugger stubs"},
+    {0x8C0C400C, "Shinobi's exception stub (replaced: the port takes interrupts itself)"},
+};
+
+// Data inside code regions (docs/code-analysis.md, "Every byte").
+constexpr DataBlock kUsaData[] = {
+    {0x8C099564, 0x8C099568, "the middle word of an 8-byte constant at 0x8C099560 a literal pool points at"},
+    {0x8C09D18C, 0x8C09D190, "the TrueMotion decoder's mask table between its block handlers, read with indexed loads"},
+    {0x8C09D198, 0x8C09D19C, "the TrueMotion decoder's mask table (continued)"},
+    {0x8C09D278, 0x8C09D288, "the TrueMotion decoder's mask table before the handler at 0x8C09D288"},
+    {0x8C09D464, 0x8C09D468, "the TrueMotion decoder's mask table"},
+    {0x8C09D71C, 0x8C09D720, "the TrueMotion decoder's mask table"},
+    {0x8C09D728, 0x8C09D738, "the TrueMotion decoder's mask table before the handler at 0x8C09D738"},
+    {0x8C09F324, 0x8C09F326, "the movie dispatcher's offsets the decoder patches (0x8C09F320-0x8C09F333)"},
+    {0x8C09F328, 0x8C09F334, "the movie dispatcher's offsets (continued)"},
+    {0x8C0C10B4, 0x8C0C10BC, "Shinobi's 8-character build tag, before 0x8C0C10BC"},
+    {0x8C0C3FF8, 0x8C0C3FFC, "a literal nothing loads (0xAC004000) in Shinobi's exception code"},
 };
 
 constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd";
@@ -100,6 +143,16 @@ std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) {
 
 std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) {
     if (sha256_hex == kUsaSha) return kUsaReplaced;
+    return {};
+}
+
+std::span<const KnownEntry> known_entries(std::string_view sha256_hex) {
+    if (sha256_hex == kUsaSha) return kUsaEntries;
+    return {};
+}
+
+std::span<const DataBlock> data_blocks(std::string_view sha256_hex) {
+    if (sha256_hex == kUsaSha) return kUsaData;
     return {};
 }
 

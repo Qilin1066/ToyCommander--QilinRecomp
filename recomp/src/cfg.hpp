@@ -57,13 +57,19 @@ enum class Origin : uint8_t {
     tail,     // target of a resolved jmp
     pointer,  // an address found in a literal pool or in data
     orphan,   // unreferenced code in a gap
+    layout,   // named by the build's layout (code nothing refers to; a stub that doesn't decode)
 };
 std::string_view name(Origin o);
 
 struct Switch {
-    uint32_t braf = 0;   // address of the braf
-    uint32_t table = 0;  // address of the 16-bit offset table
+    uint32_t braf = 0;   // address of the braf (or of the jmp, for a table of addresses)
+    uint32_t table = 0;  // address of the table
     std::vector<uint32_t> targets;
+    // 2: SHC's switch, 16-bit offsets from the braf's slot; 4: hand-written
+    // code's table of code addresses a jmp goes through (`mov.l @(r0,rT),rN ;
+    // jmp @rN`, entering an unrolled copy part-way: the C runtime's 0x8C081C2C).
+    uint32_t entry_size = 2;
+    uint32_t table_bytes() const { return entry_size * static_cast<uint32_t>(targets.size()); }
 };
 
 struct Function {
@@ -113,9 +119,23 @@ struct Cfg {
     Kind at(uint32_t a) const { return kind[(a - base) / 2]; }
 };
 
+// What the build's layout knows that references don't show (layout.hpp).
+struct Known {
+    // Code nothing refers to, to start functions at. They may run on into
+    // code other functions branch to (hand-written library code's spare
+    // entries).
+    std::vector<uint32_t> entries;
+    // Data inside code regions, [begin, end): tables read through computed
+    // addresses, constants nothing loads.
+    std::vector<std::pair<uint32_t, uint32_t>> data;
+    // Functions replaced natively whose code doesn't decode (a debugger's
+    // break, a trapa), [entry, end): taken as functions without instructions.
+    std::vector<std::pair<uint32_t, uint32_t>> stubs;
+};
+
 // With a layout, words of its data regions are data from the start: no
 // function is found in them, and a call or jump into one is reported.
-Cfg analyse(const BootFile& boot, std::span<const Region> regions = {});
+Cfg analyse(const BootFile& boot, std::span<const Region> regions = {}, const Known& known = {});
 
 // The instructions control can reach next from `pc`, within `f`: a delayed
 // branch's successor is its delay slot, and the slot's are the branch's

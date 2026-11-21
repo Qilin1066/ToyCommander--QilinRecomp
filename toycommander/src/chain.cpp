@@ -70,6 +70,38 @@ void shinobi_chain_add(rt::Context& c) {
     c.r[0] = index;
 }
 
+// 0x8C0B3CA4: takes record r4 (an index chain_add returned) out of its
+// event's list and frees it. A record is first looked for as another
+// record's next; failing that, as a list's head, and a list left empty
+// gives its event back: Kamui 2's callback cleared (events 0x900 and
+// 0x920), a system bus event's level-4 mask bit cleared (the guest code also
+// puts the default handler back in its slot of the vector table, which the
+// port doesn't keep).
+void shinobi_chain_remove(rt::Context& c) {
+    const uint32_t record = kRecords + (c.r[4] << 4);
+    for (uint32_t index = 1; index < kRecordCount; ++index) {
+        const uint32_t r = kRecords + index * 16;
+        if (rt::ld32(r + 4) == record && (rt::ld32(r + 12) & kInUse)) {
+            rt::st32(r + 4, rt::ld32(record + 4));
+            rt::st32(record + 12, 0);
+            return;
+        }
+    }
+    for (uint32_t slot = 1; slot < 0xC0u; ++slot) {
+        const uint32_t head = kHeads + slot * 4;
+        if (rt::ld32(head) != record) continue;
+        rt::st32(head, rt::ld32(record + 4));
+        rt::st32(record + 12, 0);
+        if (rt::ld32(head) != 0) return;
+        const uint32_t event = slot << 4;
+        if (event == 0x900u) hook_kamui(c, 0x8C087E34u, 0);
+        else if (event == 0x920u) hook_kamui(c, 0x8C087E1Cu, 0);
+        else if ((event >> 8) == 0xAu) rt::st32(0xA05F6920u, rt::ld32(0xA05F6920u) & ~(1u << (((event & 0xFFu) >> 5) + 12)));
+        else if ((event >> 8) == 0xBu) rt::st32(0xA05F6924u, rt::ld32(0xA05F6924u) & ~(1u << ((event & 0xFFu) >> 5)));
+        return;
+    }
+}
+
 // 0x8C0B3B6E and 0x8C0B3BB8, the dispatchers Kamui 2 calls back: IMASK to 6
 // (left so; the interrupt's return restores SR), then each handler of the
 // list in turn, with its argument in r4.
@@ -98,6 +130,7 @@ void shinobi_chain_dispatch_920(rt::Context& c) { dispatch(c, 0x920u); }
 
 constexpr rt::Provided kNatives[] = {
     {0x8C0B399Cu, "shinobi_chain_add", shinobi_chain_add},
+    {0x8C0B3CA4u, "shinobi_chain_remove", shinobi_chain_remove},
     {0x8C0B3B6Eu, "shinobi_chain_dispatch_900", shinobi_chain_dispatch_900},
     {0x8C0B3BB8u, "shinobi_chain_dispatch_920", shinobi_chain_dispatch_920},
 };

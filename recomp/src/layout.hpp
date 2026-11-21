@@ -39,6 +39,7 @@ struct ReplacedFunction {
     uint32_t entry;
     std::string_view name;  // our name for it
     std::string_view why;
+    uint32_t bytes = 0;     // for one whose code doesn't decode (a debugger's break, a trapa): its size
 };
 std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex);
 
@@ -50,5 +51,22 @@ struct IndirectTargets {
     std::string_view why;
 };
 std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex);
+
+// Code nothing refers to, which the analysis can't find from references:
+// hand-written library code's spare entry points (they run on into code
+// their neighbours share) and small functions in gaps it doesn't try.
+struct KnownEntry {
+    uint32_t entry;
+    std::string_view why;
+};
+std::span<const KnownEntry> known_entries(std::string_view sha256_hex);
+
+// Data inside code regions, read through computed addresses or not at all:
+// [begin, end).
+struct DataBlock {
+    uint32_t begin, end;
+    std::string_view why;
+};
+std::span<const DataBlock> data_blocks(std::string_view sha256_hex);
 
 }  // namespace qilin

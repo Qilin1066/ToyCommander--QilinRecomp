@@ -46,6 +46,7 @@ std::string_view name(Origin o) {
     case Origin::tail: return "tail";
     case Origin::pointer: return "pointer";
     case Origin::orphan: return "orphan";
+    case Origin::layout: return "layout";
     }
     return "?";
 }
@@ -53,6 +54,9 @@ std::string_view name(Origin o) {
 namespace {
 
 using Regs = RegConstants;
+
+// A start that isn't known to be one: the analysis checks it.
+constexpr bool guess(Origin o) { return o == Origin::pointer || o == Origin::orphan || o == Origin::layout; }
 
 // Where paths join, a register keeps its constant only if both agree.
 // Returns whether `into` changed.
@@ -217,8 +221,9 @@ public:
         Function f;
         f.entry = entry;
         f.origin = origin;
-        guess_ = origin == Origin::pointer || origin == Origin::orphan;
-        pointer_ = origin == Origin::pointer;
+        guess_ = guess(origin);
+        pointer_ = origin == Origin::pointer || origin == Origin::layout;
+        layout_ = origin == Origin::layout;
         state_.clear();
         todo_.clear();
         literals_.clear();
@@ -278,8 +283,8 @@ public:
             for (uint32_t k = 0; k < n; k += 2)
                 if (state_.contains(a + k)) throw Reject{std::format("the literal at {:08X} is also executed", a)};
         for (const Switch& sw : f.switches)
-            for (uint32_t k = 0; k < sw.targets.size(); ++k)
-                if (state_.contains(sw.table + 2 * k)) throw Reject{std::format("the jump table at {:08X} is also executed", sw.table)};
+            for (uint32_t k = 0; k < sw.table_bytes(); k += 2)
+                if (state_.contains(sw.table + k)) throw Reject{std::format("the jump table at {:08X} is also executed", sw.table)};
         for (uint32_t t : f.leaders)
             if (slots_.contains(t)) f.problems.push_back(std::format("{:08X}: a branch lands in a delay slot", t));
         return f;
@@ -400,6 +405,37 @@ private:
         return std::nullopt;
     }
 
+    // Hand-written code's table of code addresses:
+    //   mov.l table,rT ; ... mov.l @(r0,rT),rN ; [add #i,rX] ; jmp @rN
+    // with rT holding the table's address where it's read. The table is the
+    // run of words from there that are even addresses of the code just
+    // before it (within 1 KB): the unrolled copies that use this enter
+    // themselves part-way, the entries counting down to the copy's start, and
+    // the next word is code again. At least two.
+    std::optional<Switch> find_address_table(uint32_t jmp) const {
+        const auto at = [&](uint32_t a) { return boot_.mapped(a, 2) && state_.contains(a) ? sh4::decode(boot_.u16(a)) : Insn{}; };
+        const unsigned n = sh4::decode(boot_.u16(jmp)).n();
+        for (uint32_t a = jmp - 2; a + 8 > jmp && a > boot_.base(); a -= 2) {
+            const Insn i = at(a);
+            if (i.op == Op::movl_ld_r0 && i.n() == n) {
+                const auto t = state_.at(a).r[i.m()];
+                if (!t || *t % 4) return std::nullopt;
+                Switch sw;
+                sw.braf = jmp, sw.table = *t, sw.entry_size = 4;
+                for (uint32_t w = *t; boot_.mapped(w, 4); w += 4) {
+                    const uint32_t v = boot_.u32(w);
+                    if (v % 2 || v >= *t || v + 0x400 < *t) break;
+                    sw.targets.push_back(v);
+                }
+                if (sw.targets.size() < 2) return std::nullopt;
+                return sw;
+            }
+            // Only an add to another register may come between.
+            if (i.op != Op::add_imm || i.n() == n) return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
     void walk(Function& f, uint32_t pc, Regs r) {
         bool sequential = false;  // reached by falling through, not by a branch
         for (;;) {
@@ -421,9 +457,10 @@ private:
                     // 0x8C0B6778, before the tail the entries beside it reach
                     // with `bra`). Bytes nothing points at that a branch skips
                     // are still data.
-                    if (cfg_.at(pc) == Kind::code && !(pointer_ && shared_tail(pc)))
+                    if (cfg_.at(pc) == Kind::code && !(pointer_ && shared_tail(pc)) && !(layout_ && cfg_.functions.contains(pc)))
                         throw Reject{std::format("it runs on into known code at {:08X}", pc), pc};
-                    if (cfg_.functions.contains(pc) || candidates_.contains(pc))
+                    // (A layout's entry may: hand-written code falls into its neighbour.)
+                    if ((cfg_.functions.contains(pc) || candidates_.contains(pc)) && !layout_)
                         throw Reject{std::format("it runs on into the start of another function at {:08X}", pc), pc};
                 }
                 state_.emplace(pc, r);
@@ -553,6 +590,12 @@ private:
             }
             // jmp, or a braf with no table: a tail jump if the target is a constant.
             if (i.op == Op::jmp && resolved(f.tail_jumps)) return;
+            if (i.op == Op::jmp && !target)
+                if (auto sw = find_address_table(pc)) {
+                    for (uint32_t t : sw->targets) branch_to(t, cleared(r));
+                    switches_[pc] = std::move(*sw);
+                    return;
+                }
             if (std::ranges::find(f.indirect_jumps, pc) == f.indirect_jumps.end()) f.indirect_jumps.push_back(pc);
             return;
         }
@@ -565,6 +608,7 @@ private:
     std::map<uint32_t, uint16_t>& scratch_cache_;  // function -> scratch registers a call to it can change
     bool guess_ = false;
     bool pointer_ = false;  // a guess from an address the image holds
+    bool layout_ = false;   // an entry the build's layout names
     std::map<uint32_t, Regs> state_;  // registers on entry to each instruction reached
     std::vector<std::pair<uint32_t, Regs>> todo_;
     std::map<uint32_t, uint32_t> literals_;
@@ -574,15 +618,26 @@ private:
 
 class Analysis {
 public:
-    Analysis(const BootFile& boot, std::span<const Region> regions, std::set<uint32_t> entries,
+    Analysis(const BootFile& boot, std::span<const Region> regions, const Known& known, std::set<uint32_t> entries,
              const std::map<uint32_t, uint32_t>& banned)
-        : boot_(boot), banned_(banned), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_, scratch_) {
+        : boot_(boot), known_(known), banned_(banned), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_, scratch_) {
         cfg_.base = boot.base();
         cfg_.kind.assign(boot.size() / 2, Kind::unknown);
         cfg_.owner.assign(boot.size() / 2, 0);
+        const auto data = [&](uint32_t begin, uint32_t end) {
+            for (uint32_t a = std::max(begin, boot.base()); a < end && a < boot.end(); a += 2) cfg_.kind[index(a)] = Kind::data;
+        };
         for (const Region& r : regions)
-            if (r.plan == Plan::data)
-                for (uint32_t a = std::max(r.begin, boot.base()); a < r.end && a < boot.end(); a += 2) cfg_.kind[index(a)] = Kind::data;
+            if (r.plan == Plan::data) data(r.begin, r.end);
+        for (const auto& [begin, end] : known.data) data(begin, end);
+        // The stubs: functions without instructions, their words code.
+        for (const auto& [entry, end] : known.stubs) {
+            for (uint32_t a = entry; a < end; a += 2) cfg_.kind[index(a)] = Kind::code, cfg_.owner[index(a)] = entry;
+            Function f;
+            f.entry = entry;
+            f.origin = Origin::layout;
+            cfg_.functions.emplace(entry, std::move(f));
+        }
     }
 
     Cfg run() {
@@ -636,6 +691,11 @@ public:
             }
             if (cfg_.functions.size() == before) break;
         }
+        // The layout's entries nothing refers to.
+        for (uint32_t e : known_.entries) {
+            add(e, Origin::layout);
+            drain();
+        }
         // Orphans: the first thing in each gap that isn't padding.
         for (bool added = true; added;) {
             added = false;
@@ -669,9 +729,9 @@ public:
                 continue;
             }
             uint32_t b = a;
-            bool pad = true;
-            while (b < boot_.end() && kind(b) == Kind::unknown) pad &= is_padding(boot_.u16(b)), b += 2;
-            if (pad && (b - a <= 16 || b == boot_.end()))
+            bool pad = true, swapped = true;
+            while (b < boot_.end() && kind(b) == Kind::unknown) pad &= is_padding(boot_.u16(b)), swapped &= boot_.u16(b) == 0x0900, b += 2;
+            if (pad && (b - a <= (swapped ? 32u : 16u) || b == boot_.end()))
                 for (uint32_t k = a; k < b; k += 2) cfg_.kind[index(k)] = Kind::padding;
             a = b;
         }
@@ -683,7 +743,9 @@ public:
     const std::map<uint32_t, uint32_t>& evicted() const { return evicted_; }
 
 private:
-    static bool is_padding(uint16_t w) { return w == 0x0000 || w == 0x0009; }
+    // Zero, nop, and nop with its bytes swapped: the engine's objects fill
+    // their alignment (to 32 bytes) with that (0x8C081474 and on).
+    static bool is_padding(uint16_t w) { return w == 0x0000 || w == 0x0009 || w == 0x0900; }
     size_t index(uint32_t a) const { return (a - boot_.base()) / 2; }
     Kind kind(uint32_t a) const { return cfg_.kind[index(a)]; }
 
@@ -698,6 +760,13 @@ private:
     // commonest such word is a long function's own literal: the label of a
     // far branch inside it.)
     void find_evictions() {
+        // A pointer guess whose entry another function reads as data (a
+        // float constant the engine's matrix code loads through a literal
+        // holding its address, 0x8C061E58): the address was the constant's.
+        for (const auto& [entry, f] : cfg_.functions)
+            for (const auto& [a, n] : f.literals)
+                if (const auto it = cfg_.functions.find(a); it != cfg_.functions.end() && a != entry && it->second.origin == Origin::pointer)
+                    evicted_.emplace(a, entry);
         if (ran_into_.empty()) return;
         std::set<uint32_t> referenced;
         for (const auto& [entry, f] : cfg_.functions) {
@@ -716,7 +785,7 @@ private:
 
     void add(uint32_t entry, Origin origin) {
         // A guess that failed once fails again: try each only once.
-        if ((origin == Origin::pointer || origin == Origin::orphan) && !guessed_.insert(entry).second) return;
+        if (guess(origin) && !guessed_.insert(entry).second) return;
         work_.emplace_back(entry, origin);
     }
 
@@ -728,20 +797,28 @@ private:
             try {
                 Function f = explorer_.run(entry, origin);
                 if (const auto clash = collision(f, origin)) {
+                    // A layout's entry whose data a pointer guess took for
+                    // code: the guess goes, and the next pass tries again.
+                    if (origin == Origin::layout)
+                        for (const auto& [a, n] : f.literals)
+                            if (kind(a) == Kind::code)
+                                if (const auto it = cfg_.functions.find(cfg_.owner[index(a)]);
+                                    it != cfg_.functions.end() && it->second.origin == Origin::pointer)
+                                    evicted_.emplace(it->first, entry);
                     // A direct call or jump is a fact about the code: keep it and say so.
-                    if (origin == Origin::pointer || origin == Origin::orphan) throw Reject{*clash};
+                    if (guess(origin)) throw Reject{*clash};
                     f.problems.push_back(*clash);
                 }
                 // A guess is only as good as what it calls: real code doesn't
                 // call or jump to something that isn't code.
-                if (origin == Origin::pointer || origin == Origin::orphan) {
+                if (guess(origin)) {
                     std::set<uint32_t> visiting{entry};
                     if (const auto bad = dead_end(f, visiting)) throw Reject{*bad};
                 }
                 commit(std::move(f));
             } catch (const Reject& r) {
                 if (rejected_.insert(entry).second) cfg_.rejected.push_back({entry, origin, r.reason});
-                if ((origin == Origin::orphan || origin == Origin::pointer) && r.ran_into) ran_into_.emplace_back(entry, r.ran_into);
+                if (guess(origin) && r.ran_into) ran_into_.emplace_back(entry, r.ran_into);
             }
         }
     }
@@ -771,8 +848,8 @@ private:
 
     // Code on another function's data, or data on code.
     std::optional<std::string> collision(const Function& f, Origin origin) const {
-        const bool guess = origin == Origin::pointer || origin == Origin::orphan;
-        if (guess && f.insns.size() < 2) return "too short to be a function";
+        const bool guessed = guess(origin);
+        if (guessed && f.insns.size() < 2) return "too short to be a function";
         for (uint32_t pc : f.insns) {
             const Kind k = kind(pc);
             if (k == Kind::literal || k == Kind::jump_table) return std::format("its code at {:08X} is another function's data", pc);
@@ -781,10 +858,10 @@ private:
         for (const auto& [a, n] : f.literals)
             for (uint32_t o = 0; o < n; o += 2)
                 if (kind(a + o) == Kind::code) return std::format("its literal at {:08X} is another function's code", a);
-                else if (kind(a + o) == Kind::data && guess) return std::format("its literal at {:08X} is in a data region", a);
+                else if (kind(a + o) == Kind::data && guessed) return std::format("its literal at {:08X} is in a data region", a);
         for (const Switch& sw : f.switches)
-            for (uint32_t k = 0; k < sw.targets.size(); ++k)
-                if (kind(sw.table + 2 * k) == Kind::code) return std::format("its jump table at {:08X} is another function's code", sw.table);
+            for (uint32_t k = 0; k < sw.table_bytes(); k += 2)
+                if (kind(sw.table + k) == Kind::code) return std::format("its jump table at {:08X} is another function's code", sw.table);
         return std::nullopt;
     }
 
@@ -797,13 +874,14 @@ private:
         for (const auto& [a, n] : f.literals)
             for (uint32_t o = 0; o < n; o += 2) mark(a + o, Kind::literal);
         for (const Switch& sw : f.switches)
-            for (uint32_t k = 0; k < sw.targets.size(); ++k) mark(sw.table + 2 * k, Kind::jump_table);
+            for (uint32_t k = 0; k < sw.table_bytes(); k += 2) mark(sw.table + k, Kind::jump_table);
         for (const auto& [site, target] : f.calls) add(target, Origin::call);
         for (const auto& [site, target] : f.tail_jumps) add(target, Origin::tail);
         cfg_.functions.emplace(f.entry, std::move(f));
     }
 
     const BootFile& boot_;
+    const Known& known_;
     const std::map<uint32_t, uint32_t>& banned_;
     std::map<uint32_t, uint32_t> evicted_;
     std::vector<std::pair<uint32_t, uint32_t>> ran_into_;  // a rejected guess, the address it ran on into
@@ -839,11 +917,11 @@ void find_patched_literals(const BootFile& boot, Cfg& cfg) {
         }
 }
 
-Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
+Cfg analyse(const BootFile& boot, std::span<const Region> regions, const Known& known) {
     std::set<uint32_t> entries;
     std::map<uint32_t, uint32_t> banned;
     for (int pass = 0;; ++pass) {
-        Analysis analysis(boot, regions, entries, banned);
+        Analysis analysis(boot, regions, known, entries, banned);
         Cfg cfg = analysis.run();
         if (!analysis.evicted().empty() && pass < 8) {
             for (const auto& [guess, inside] : analysis.evicted()) banned.emplace(guess, inside), entries.erase(guess);
@@ -912,6 +990,10 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
         if (auto it = f.call_returns.find(at); it != f.call_returns.end()) add(it->second);
         // A far branch inside the function.
         if (auto it = f.computed_branches.find(at); it != f.computed_branches.end()) add(it->second);
+        // Through a table of code addresses.
+        for (const Switch& sw : f.switches)
+            if (sw.braf == at)
+                for (uint32_t t : sw.targets) add(t);
         break;
     default: break;  // trapa never reaches here
     }
@@ -919,6 +1001,7 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
 }
 
 std::map<uint32_t, RegConstants> register_constants(const BootFile& boot, const Cfg& cfg, const Function& f) {
+    if (f.insns.empty()) return {};  // a layout's stub: no code to explore
     const std::set<uint32_t> none;
     std::set<uint32_t> entries;
     for (const auto& [entry, fn] : cfg.functions) entries.insert(entry);

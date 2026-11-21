@@ -221,7 +221,37 @@ void gd_check_drive(rt::Context& c) {
 // The drive's transfers are done when sent: nothing to do.
 void gd_dma_end(rt::Context& c) { c.r[0] = 0; }
 
+// 0x8C0C1598 and 0x8C0C15AC, calls 6 and 7: a DMA transfer of a stream
+// command's data into r5's buffer, and its progress (gdd, 0x8C0BD30E and
+// 0x8C0BD494). Only a stream command has one, and gd_send_command takes
+// none: reaching either means one was sent, which has already stopped.
+void gd_dma_transfer(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1598u, c.r[4]}; }
+void gd_dma_progress(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C15ACu, c.r[4]}; }
+
+// 0x8C0C15C0, call 8: abandons request r4 (gdd, 0x8C0BD420). The drive does
+// each request as it is sent, so there is none in progress to abandon: the
+// call returns 0 and the request stays as it finished.
+void gd_abort(rt::Context& c) {
+    deliver_pending(c);
+    c.r[0] = 0;
+}
+
+// 0x8C0C15D4, call 9: resets the drive (gdd, 0x8C0BD560). Nothing is in
+// progress; CD audio stops, as a reset stops the drive.
+void gd_reset(rt::Context& c) {
+    deliver_pending(c);
+    {
+        auto held = sound::lock();
+        sound::cd_pause();
+    }
+    c.r[0] = 0;
+}
+
 constexpr rt::Provided kCalls[] = {
+    {0x8C0C1598u, "gd_dma_transfer", gd_dma_transfer},
+    {0x8C0C15ACu, "gd_dma_progress", gd_dma_progress},
+    {0x8C0C15C0u, "gd_abort", gd_abort},
+    {0x8C0C15D4u, "gd_reset", gd_reset},
     {0x8C0C1520u, "gd_send_command", gd_send_command},
     {0x8C0C1534u, "gd_check_command", gd_check_command},
     {0x8C0C1548u, "gd_main_loop", gd_main_loop},

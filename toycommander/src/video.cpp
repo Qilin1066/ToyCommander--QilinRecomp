@@ -125,6 +125,11 @@ void start() {
     g_data = qilin::host::user_folder();
     g_settings = load_settings(g_data);
     set_console(g_settings.language, g_settings.stereo);
+    // The game's own sound option writes the console's setting: keep it.
+    on_sound_mode([](bool stereo) {
+        g_settings.stereo = stereo;
+        if (!save_settings(g_data, g_settings)) rt::log("settings: couldn't save the sound mode");
+    });
     qilin::host::Display::Options o;
     o.width = 1280, o.height = 960;
     const char* headless = std::getenv("QILIN_HEADLESS");
