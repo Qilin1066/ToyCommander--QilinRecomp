@@ -200,11 +200,14 @@ struct Renderer::Impl {
         white.image = Image::create(gpu, 1, 1, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     }
 
-    // The frame buffer's image (created, or created again at a new size: the
-    // display may still be showing the old one, so the device goes idle first).
+    // The frame buffer's image (created, or created again larger: the display
+    // may still be showing the old one, so the device goes idle first).
     Target& target(uint32_t key, uint32_t width, uint32_t height) {
-        const uint32_t w = width * scale, h = height * scale;
         Target& t = targets[key];
+        // Only ever grown: renders of one frame may see it a line taller or
+        // shorter (Toy Racer's last line is inside one part's clip only), and
+        // what the others drew must stay.
+        const uint32_t w = std::max(width * scale, t.colour.width), h = std::max(height * scale, t.colour.height);
         if (!t.colour.image || t.colour.width != w || t.colour.height != h) {
             check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
             t.colour.destroy(gpu);
@@ -526,7 +529,8 @@ struct Renderer::Impl {
         ri.pColorAttachments = &ca;
         ri.pDepthAttachment = &da;
         vkCmdBeginRendering(cmd, &ri);
-        const VkViewport viewport{0.0f, 0.0f, float(colour.width), float(colour.height), 0.0f, 1.0f};
+        // The game's pixels map onto the image one to `scale` (the image may be larger than this render's frame).
+        const VkViewport viewport{0.0f, 0.0f, float(src.width * scale), float(src.height * scale), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &clip);
         {
