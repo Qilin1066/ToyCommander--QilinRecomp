@@ -25,11 +25,18 @@ namespace qilin::rt {
 
 static_assert(std::endian::native == std::endian::little, "the guest and the hosts are little-endian");
 
+// SR's bits the port holds fixed: MD = 1, RB = 0, BL = 0, FD = 0.
+inline constexpr uint32_t kSrSystem = 0x70008000u, kSrFixed = 0x40000000u, kSrTSQM = 0x00000303u;
+
 struct Context {
     uint32_t r[16] = {};
     uint32_t pr = 0, gbr = 0, mach = 0, macl = 0;
     uint32_t t = 0, s = 0, q = 0, m = 0;  // SR's T, S, Q and M bits, each 0 or 1
     uint32_t fpul = 0, fpscr = 0x00040000u;
+    // SR but for T, S, Q and M (held in their own fields): privileged mode,
+    // register bank 0, exceptions unblocked, the FPU enabled, IMASK as the
+    // code sets it (0: every interrupt allowed, as after Shinobi's set-up).
+    uint32_t sr = kSrFixed;
     float fr[16] = {};  // the current bank
     float xf[16] = {};  // the back bank (frchg swaps them)
     uint32_t ret = 0;   // where the last function returned to (its rts's target)
@@ -320,6 +327,15 @@ inline void host_fp_setup() {
 #endif
 }
 
+// ldc to SR: IMASK and the other free bits are kept (the runtime delivers
+// interrupts only where IMASK allows them); a change of mode, register bank,
+// exception blocking or the FPU's enable isn't something lifted code can
+// follow: stop. T, S, Q and M go to their fields (the lifter does that).
+inline void set_sr(Context& c, uint32_t v, uint32_t pc) {
+    if ((v & kSrSystem) != kSrFixed) unsupported(pc, v);
+    c.sr = v & ~kSrTSQM;
+}
+
 // ---- calls through the function table ----
 using Fn = void (*)(Context&);
 struct FnEntry {
@@ -329,5 +345,12 @@ struct FnEntry {
 // Calls the function at `target` (the generated table, sorted by address);
 // stops if there is none. `from`: the instruction that called.
 void call(Context& c, uint32_t target, uint32_t from);
+
+// A function the port replaces natively (the stubs qilin lift writes for the
+// replaced regions and functions call this): runs the native code registered
+// for it, and returns to the caller as the guest code would (c.ret = PR);
+// stops as unregistered, naming it and its caller, if there is none.
+// Defined by the runtime (system.cpp).
+void replaced(Context& c, uint32_t fn);
 
 }  // namespace qilin::rt

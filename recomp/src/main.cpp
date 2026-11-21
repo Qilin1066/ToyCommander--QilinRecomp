@@ -20,7 +20,7 @@
 //                                             the FPSCR mode at every FPU instruction, per region;
 //                                             --list: every place it can't be proven;
 //                                             --json: every function's entry and exit modes
-//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans]
+//   qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans] [--files N]
 //                                             the lifted C++: functions.hpp, table.cpp, stubs.cpp,
 //                                             lifted_NNN.cpp (256 functions each), lift_report.txt
 //   qilin hwaccess <1GUTH.BIN> [--json out.json]
@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <expected>
 #include <format>
@@ -80,7 +81,7 @@ int usage() {
                "  qilin coverage <1GUTH.BIN> [--list|--map]\n"
                "  qilin suspects <1GUTH.BIN>\n"
                "  qilin fpmode   <1GUTH.BIN> [--list] [--json out.json]\n"
-               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans]\n"
+               "  qilin lift     <1GUTH.BIN> --out <dir> [--range lo-hi] [--orphans] [--files N]\n"
                "  qilin hwaccess <1GUTH.BIN> [--json out.json]\n"
                "  qilin --version\n");
     return 2;
@@ -269,11 +270,13 @@ int cmd_suspects(const std::string& path) {
     return 0;
 }
 
-int cmd_lift(const std::string& path, const std::string& out_dir, const std::optional<std::string>& range, bool orphans) {
+int cmd_lift(const std::string& path, const std::string& out_dir, const std::optional<std::string>& range, bool orphans, unsigned files) {
     const BootFile boot = load_boot(path);
     const Cfg cfg = analyse_boot(boot);
     LiftOptions options;
     options.orphans = orphans;
+    options.files = files;
+    options.replaced = replaced_functions(boot.sha256);
     if (range) {
         const size_t dash = range->find('-');
         if (dash == std::string::npos) throw Failure{"--range takes lo-hi"};
@@ -404,7 +407,7 @@ int run(int argc, char** argv) {
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
     bool list = false, map = false, orphans = false;
-    std::optional<std::string> range;
+    std::optional<std::string> range, files;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         const auto value = [&](std::optional<std::string>& into) {
@@ -422,6 +425,7 @@ int run(int argc, char** argv) {
         else if (a == "--map") map = true;
         else if (a == "--orphans") orphans = true;
         else if (a == "--range") value(range);
+        else if (a == "--files") value(files);
         else if (a.starts_with("-")) throw Failure{std::format("unknown option {}", a)};
         else pos.emplace_back(a);
     }
@@ -446,7 +450,12 @@ int run(int argc, char** argv) {
     if (command == "fpmode") return cmd_fpmode(input(), list, json);
     if (command == "lift") {
         if (!out_dir) throw Failure{"lift needs --out <dir>"};
-        return cmd_lift(input(), *out_dir, range, orphans);
+        unsigned n = 0;
+        if (files) {
+            n = static_cast<unsigned>(std::strtoul(files->c_str(), nullptr, 10));
+            if (n == 0 || n > 4096) throw Failure{"--files takes a count from 1 to 4096"};
+        }
+        return cmd_lift(input(), *out_dir, range, orphans, n);
     }
     if (command == "disasm") {
         if (pos.size() != 1) throw Failure{"disasm takes no file"};

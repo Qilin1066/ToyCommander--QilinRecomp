@@ -1,5 +1,6 @@
 #include "lift_output.hpp"
 
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -51,12 +52,24 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     LiftSummary sum;
     std::string details;
     size_t index = 0;
+    const size_t total = cfg.functions.size();
+    if (options.files) chunks.resize(options.files);
+    const auto replaced_here = [&](uint32_t a) { return std::ranges::any_of(options.replaced, [&](const ReplacedFunction& r) { return r.entry == a; }); };
+    for (const ReplacedFunction& r : options.replaced)
+        if (!cfg.functions.contains(r.entry)) throw std::runtime_error(std::format("replaced function {:08X} ({}) isn't a function", r.entry, r.name));
     for (const auto& [entry, f] : cfg.functions) {
-        if (index++ % kChunkFunctions == 0) chunks.emplace_back();
+        std::string* chunk;
+        if (options.files) {
+            chunk = &chunks[index * options.files / total];
+        } else {
+            if (index % kChunkFunctions == 0) chunks.emplace_back();
+            chunk = &chunks.back();
+        }
+        ++index;
         header += std::format("void {}(rt::Context& c);\n", fn_name(entry));
         table += std::format("    {{0x{:08X}u, gen::{}}},\n", entry, fn_name(entry));
-        if (plan_of(entry) == Plan::replace) {
-            stubs += std::format("void {}(rt::Context& c) {{ rt::unregistered(0x{:08X}u, c.pr); }}\n", fn_name(entry), entry);
+        if (plan_of(entry) == Plan::replace || replaced_here(entry)) {
+            stubs += std::format("void {}(rt::Context& c) {{ rt::replaced(c, 0x{:08X}u); }}\n", fn_name(entry), entry);
             ++sum.replaced;
             continue;
         }
@@ -69,7 +82,7 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
         }
         const LiftResult r = lifter.lift(f);
         if (r.ok) {
-            chunks.back() += r.code + "\n";
+            *chunk += r.code + "\n";
             ++sum.lifted;
             continue;
         }
@@ -79,7 +92,9 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
         details += std::format("{} at {:08X}: {}\n", fn_name(entry), r.fail_at, r.why);
     }
     header += "}  // namespace qilin::gen\n";
-    table += "};\nextern const size_t g_function_count = sizeof(g_functions) / sizeof(g_functions[0]);\n}  // namespace qilin::rt\n";
+    table += "};\nextern const size_t g_function_count = sizeof(g_functions) / sizeof(g_functions[0]);\n";
+    table += std::format("// The boot file this was lifted from: the runtime checks the one it loads against it.\nextern const char g_lifted_sha256[] = \"{}\";\n", boot.sha256);
+    table += "}  // namespace qilin::rt\n";
     stubs += "}  // namespace qilin::gen\n";
     sum.written += update_file(dir / "functions.hpp", header);
     sum.written += update_file(dir / "table.cpp", table);
@@ -87,7 +102,7 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     std::set<std::string> names;
     if (chunks.empty()) chunks.emplace_back();
     for (size_t i = 0; i < chunks.size(); ++i) {
-        const std::string name = std::format("lifted_{:03}.cpp", i);
+        const std::string name = std::format("lifted_{:03}.cpp", i);  // the same names with --files
         names.insert(name);
         sum.written += update_file(dir / name, banner + "#include \"functions.hpp\"\n\nnamespace qilin::gen {\n\n" + chunks[i] +
                                                    "}  // namespace qilin::gen\n");

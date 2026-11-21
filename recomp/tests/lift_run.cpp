@@ -17,6 +17,8 @@
 #include "functions.hpp"
 #include "guest.hpp"
 #include "lift_programs.hpp"
+#include "memory.hpp"
+#include "system.hpp"
 
 namespace {
 
@@ -437,6 +439,42 @@ void test_approximate(std::mt19937& rng) {
     }
 }
 
+// The registry of native replacements: a replaced function stops, naming
+// itself and its caller, until native code is provided; then the call works.
+void test_registry() {
+    const uint32_t native = g_p.entry.at("native_me"), caller = g_p.entry.at("call_native");
+    {
+        Context c = fresh();
+        try {
+            qilin::rt::call(c, caller, 0);
+            ++g_failures, std::printf("FAIL an unregistered function returned\n");
+        } catch (const Stop& s) {
+            eq("unregistered", s.kind, Stop::Unregistered), eq("unregistered: the function", s.pc, native);
+            eq("unregistered: the caller's return address", s.value, caller + 6);
+        }
+    }
+    static const qilin::rt::Provided natives[] = {{native, "native_me", [](qilin::rt::Context& c) { c.r[0] = 41; }}};
+    qilin::rt::provide(natives);
+    eq("native_name", qilin::rt::native_name(native) != nullptr, 1);
+    Context c = fresh();
+    if (run(c, "call_native")) eq("native code ran, and returned to its caller", c.r[0], 42);
+    eq("function_containing", qilin::rt::function_containing(caller + 4), caller);
+    // call_guest: from native code, with PR restored afterwards.
+    Context d = fresh();
+    d.pr = 0x12345678u;
+    qilin::rt::call_guest(d, caller);
+    eq("call_guest", d.r[0], 42), eq("call_guest restores PR", d.pr, 0x12345678u);
+}
+
+// Guest memory: 4 GB reserved, a range committed and usable.
+void test_guest_memory() {
+    qilin::rt::GuestMemory m;
+    eq("reserve", m.reserve(), 1);
+    eq("commit", m.commit(0x8C000000u, 16u << 20), 1);
+    m.base()[0x8C000000u] = 1, m.base()[0x8CFFFFFFu] = 2;
+    eq("committed memory", m.base()[0x8C000000u] + m.base()[0x8CFFFFFFu], 3);
+}
+
 // The runtime helpers on their own, at the edges.
 void test_helpers() {
     using namespace qilin::rt;
@@ -491,6 +529,8 @@ int main() {
     test_fpair();
     test_fdouble(rng);
     test_approximate(rng);
+    test_registry();
+    test_guest_memory();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

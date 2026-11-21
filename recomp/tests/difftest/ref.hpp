@@ -22,6 +22,7 @@ struct State {
     uint32_t pr = 0, gbr = 0, mach = 0, macl = 0;
     uint32_t t = 0, s = 0, q = 0, m = 0;
     uint32_t fpul = 0, fpscr = 0x00040000u;
+    uint32_t sr = 0x40000000u;  // SR but for T, S, Q and M: MD = 1, RB = BL = FD = 0, IMASK free
     uint32_t fr[16] = {}, xf[16] = {};  // the current and the back bank, as bit patterns
 };
 

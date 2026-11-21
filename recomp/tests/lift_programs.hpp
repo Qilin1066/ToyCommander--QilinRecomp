@@ -148,6 +148,7 @@ inline Programs build() {
     a.b12(0xB000, "fipr"), a.word(kNop);
     a.b12(0xB000, "ftrv"), a.word(kNop);
     a.b12(0xB000, "fsca"), a.word(kNop);
+    a.b12(0xB000, "call_native"), a.word(kNop);
     a.word(kRts), a.word(kNop);
 
     // add64: (r5:r4) + (r7:r6) -> (r1:r0)
@@ -352,6 +353,11 @@ inline Programs build() {
     a.label("fsca");
     a.word(n_(0x405A, 4)), a.word(n_(0xF0FD, 6)), a.word(nm(0xF00A, 5, 6)), a.word(imm(0x7000, 5, 4)), a.word(nm(0xF00A, 5, 7));
     a.word(kRts), a.word(kNop);
+    // call_native: calls native_me, which the generator marks as replaced
+    // (its stub goes through the runtime's registry), and adds 1 to its r0.
+    a.label("call_native");
+    a.word(0x4F22), a.b12(0xB000, "native_me"), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(imm(0x7000, 0, 1));
+    a.label("native_me"), a.word(kRts), a.word(kNop);
     // data: the indirect-call table (inc, dbl), then scratch
     a.align4();
     a.label("data");
@@ -360,7 +366,7 @@ inline Programs build() {
     p.image = a.finish();
     p.data = a.at("data");
     for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "badjump",
-                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "inc", "dbl", "tail"})
+                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.
     const size_t t = (a.at("sw_table") - kBase) / 2;

@@ -2,10 +2,12 @@
 //
 // functions.hpp declares every function the CFG found; table.cpp is the
 // sorted function table indirect calls dispatch through; stubs.cpp holds a
-// stub for every function not lifted (replaced ones stop as unregistered,
-// naming the caller; the rest as not lifted); lifted_NNN.cpp hold the lifted
+// stub for every function not lifted (replaced ones call rt::replaced, the
+// runtime's registry, which stops as unregistered if it has no native code;
+// the rest stop as not lifted); lifted_NNN.cpp hold the lifted
 // functions, 256 per file counted over every function found, so lifting more
-// changes only the files that hold them; lift_report.txt says why each
+// changes only the files that hold them (or a fixed number of files, for a
+// build system that has to name them in advance); lift_report.txt says why each
 // function that wasn't lifted wasn't. A file is rewritten only when its
 // content changes, so a rebuild recompiles only what changed.
 #pragma once
@@ -29,6 +31,8 @@ namespace qilin {
 struct LiftOptions {
     std::optional<std::pair<uint32_t, uint32_t>> range;  // lift only functions starting in [lo, hi)
     bool orphans = false;                                 // lift unreferenced functions too
+    unsigned files = 0;  // lifted_NNN.cpp files: 0 for 256 functions each; else exactly this many (for build systems)
+    std::span<const ReplacedFunction> replaced;  // functions replaced natively outside the replaced regions
 };
 
 struct LiftSummary {

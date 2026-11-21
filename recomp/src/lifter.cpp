@@ -146,6 +146,15 @@ private:
         else line(std::format("{} -= {}; rt::{}({}, {});", R(n), size, store, R(n), R(m)));
     }
 
+    // SR as the guest reads it: the context's, with T, S, Q and M from their locals.
+    std::string sr_value() {
+        return std::format("(c.sr | {} | ({} << 1) | ({} << 8) | ({} << 9))", T(), use(kS, "s"), use(kQ, "q"), use(kM, "m"));
+    }
+    std::string set_sr(const std::string& v, uint32_t pc) {
+        return std::format("{{ const uint32_t sr = {}; rt::set_sr(c, sr, {}); {} = sr & 1u; {} = (sr >> 1) & 1u; {} = (sr >> 8) & 1u; {} = (sr >> 9) & 1u; }}",
+                           v, hex(pc), T(), use(kS, "s"), use(kQ, "q"), use(kM, "m"));
+    }
+
     std::string mem(uint32_t pc) const { return std::format("    QILIN_PC({});\n", hex(pc)); }
 
     // ---- one instruction that isn't a branch ----
@@ -159,7 +168,10 @@ private:
     std::string plain(uint32_t pc, const Insn& i) {
         const sh4::Spec& spec = sh4::spec(i.op);
         const std::string text = sh4::disasm(i, pc);
-        if (spec.flags & sh4::kPrivileged) throw Fail{pc, std::format("privileged: {}", text)};
+        // SR, but for T, S, Q and M, is held in the context: lifted code
+        // reads it, and writes its interrupt mask (guest.hpp's set_sr).
+        const bool sr_op = i.op == Op::stc_sr || i.op == Op::ldc_sr || i.op == Op::stcl_sr || i.op == Op::ldcl_sr;
+        if ((spec.flags & sh4::kPrivileged) && !sr_op) throw Fail{pc, std::format("privileged: {}", text)};
         if (spec.flags & sh4::kFloat) return fpu(pc, i);
         const unsigned n = i.n(), m = i.m();
         const auto same = [&](const char* what) {
@@ -326,6 +338,10 @@ private:
         case Op::stsl_macl: line(std::format("{} -= 4u; rt::st32({}, {});", R(n), R(n), MACL())); break;
         case Op::stsl_pr: line(std::format("{} -= 4u; rt::st32({}, {});", R(n), R(n), PR())); break;
         case Op::movca_l: line(std::format("rt::st32({}, {});", R(n), R(0))); break;
+        case Op::stc_sr: line(std::format("{} = {};", R(n), sr_value())); break;
+        case Op::stcl_sr: line(std::format("{} -= 4u; rt::st32({}, {});", R(n), R(n), sr_value())); break;
+        case Op::ldc_sr: line(set_sr(R(n), pc)); break;
+        case Op::ldcl_sr: line(std::format("{{ const uint32_t v = rt::ld32({}); {} += 4u; {} }}", R(n), R(n), set_sr("v", pc))); break;
         case Op::nop: break;
         case Op::ocbi:
         case Op::ocbp:

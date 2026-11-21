@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -123,9 +124,18 @@ int main() {
         const sh4::Insn in = t.insn ? sh4::decode(static_cast<uint16_t>(difftest::kImage[(t.insn - test::kBase) / 2])) : sh4::Insn{};
         for (int trial = 0; trial < kTrials; ++trial, ++runs) {
             ref::State s;
+            std::optional<uint32_t> pending_sr;
             for (uint32_t& r : s.r) r = value(rng);
             s.pr = kReturn, s.gbr = value(rng), s.mach = value(rng), s.macl = value(rng), s.fpul = value(rng);
             s.t = u32(rng) & 1, s.s = trial % 4 == 0 ? 1u : 0u, s.q = u32(rng) & 1, s.m = u32(rng) & 1;
+            // SR: IMASK and the other free bits at random; for ldc, a value
+            // that keeps the system bits half the time.
+            s.sr = 0x40000000u | (u32(rng) & 0x000000F0u);
+            if (t.insn && (in.op == Op::ldc_sr || in.op == Op::ldcl_sr) && trial % 2 == 0) {
+                const uint32_t v = (u32(rng) & ~0x70008000u) | 0x40000000u;
+                if (in.op == Op::ldc_sr) s.r[in.n()] = v;
+                else pending_sr = v;
+            }
             for (uint32_t& f : s.fr) f = fvalue(rng);
             for (uint32_t& f : s.xf) f = fvalue(rng);
             if (t.insn) steer(s, in, t.kind == difftest::sz64, rng);
@@ -135,12 +145,14 @@ int main() {
                 do s.r[3] = u32(rng) & ~1u;
                 while (is_function(s.r[3]) || is_function(t.entry + 4 + s.r[3]));
             for (uint8_t& b : window) b = static_cast<uint8_t>(rng());
+            if (pending_sr && in.op == Op::ldcl_sr) std::memcpy(window.data() + (s.r[in.n()] - kWin), &*pending_sr, 4);
+            pending_sr.reset();
             std::memcpy(mem_a.data() + (kWin - kLo), window.data(), kWinSize);
             std::memcpy(mem_b.data() + (kWin - kLo), window.data(), kWinSize);
 
             rt::Context c;
             std::memcpy(c.r, s.r, sizeof c.r);
-            c.pr = s.pr, c.gbr = s.gbr, c.mach = s.mach, c.macl = s.macl, c.t = s.t, c.s = s.s, c.q = s.q, c.m = s.m, c.fpul = s.fpul, c.fpscr = s.fpscr;
+            c.pr = s.pr, c.gbr = s.gbr, c.mach = s.mach, c.macl = s.macl, c.t = s.t, c.s = s.s, c.q = s.q, c.m = s.m, c.fpul = s.fpul, c.fpscr = s.fpscr, c.sr = s.sr;
             for (int i = 0; i < 16; ++i) c.fr[i] = std::bit_cast<float>(s.fr[i]), c.xf[i] = std::bit_cast<float>(s.xf[i]);
             ref::Outcome lifted{ref::Outcome::returned, 0, 0, {}};
             try {
@@ -165,7 +177,7 @@ int main() {
             if (lifted.kind == want.kind && (want.kind == ref::Outcome::returned || want.kind == ref::Outcome::bad_jump)) {
                 for (int i = 0; i < 16; ++i) cmp(std::format("r{}", i).c_str(), c.r[i], s.r[i]);
                 cmp("pr", c.pr, s.pr), cmp("gbr", c.gbr, s.gbr), cmp("mach", c.mach, s.mach), cmp("macl", c.macl, s.macl);
-                cmp("t", c.t, s.t), cmp("s", c.s, s.s), cmp("q", c.q, s.q), cmp("m", c.m, s.m), cmp("fpscr", c.fpscr, s.fpscr);
+                cmp("t", c.t, s.t), cmp("s", c.s, s.s), cmp("q", c.q, s.q), cmp("m", c.m, s.m), cmp("fpscr", c.fpscr, s.fpscr), cmp("sr", c.sr, s.sr);
                 const bool nan_class = t.insn && arithmetic(in.op);
                 const auto fcmp = [&](const char* what, uint32_t got, uint32_t expected) {
                     if (nan_class && is_nan(got) && is_nan(expected)) return;

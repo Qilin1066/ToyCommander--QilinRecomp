@@ -191,7 +191,8 @@ int main(int argc, char** argv) {
         std::vector<Planned> plan;
         std::map<std::string, int> planned_per_op;
         for (const sh4::Spec& s : sh4::specs()) {
-            if (s.op == Op::invalid || (s.flags & (sh4::kBranch | sh4::kPrivileged))) continue;
+            const bool sr_op = s.op == Op::stc_sr || s.op == Op::ldc_sr || s.op == Op::stcl_sr || s.op == Op::ldcl_sr;  // modelled
+            if (s.op == Op::invalid || (s.flags & sh4::kBranch) || ((s.flags & sh4::kPrivileged) && !sr_op)) continue;
             std::set<uint16_t> seen;
             for (int tries = 0; static_cast<int>(seen.size()) < per && tries < per * 200; ++tries) {
                 const uint16_t w = static_cast<uint16_t>(s.match | (rng() & ~s.mask & 0xFFFFu));
@@ -209,7 +210,7 @@ int main(int argc, char** argv) {
                 if (!(s.flags & sh4::kPcRelative) && !uses_pr(s.op)) plan.push_back({difftest::slot, {w}, 0});
                 if (s.flags & sh4::kFpSz) plan.push_back({difftest::sz64, {w}, 0});
                 if (s.flags & sh4::kFpPr) plan.push_back({difftest::double_, {w}, 0});
-                ++planned_per_op[std::string(s.name)];
+                ++planned_per_op[std::format("{}", static_cast<int>(s.op))];
             }
         }
         for (unsigned p = 0; p < kPrograms; ++p) plan.push_back({program_kind(p), {}, p});
@@ -294,7 +295,7 @@ int main(int argc, char** argv) {
 
         size_t total_refused = 0;
         for (const auto& [why, n] : refused) total_refused += n;
-        std::println("difftest_gen: {} cases ({} instructions, {} branch programs), {} functions; {} encodings the lifter refuses:", kept.size(),
+        std::println("difftest_gen: {} cases ({} instruction forms, {} branch programs), {} functions; {} encodings the lifter refuses:", kept.size(),
                      planned_per_op.size(), kPrograms, fns.size(), total_refused);
         for (const auto& [why, n] : refused) std::println("  {:5}  {}", n, why);
         return 0;

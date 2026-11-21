@@ -4,7 +4,16 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
-## [Unreleased]
+## [0.9.0] - 2026-11-21
+The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.
+
+### Added
+- **`qilin_run`** (`toycommander/src/`), built only from the player's own boot file: `-DQILIN_GAME_BOOT=<extracted>/files/1GUTH.BIN` makes `qilin lift` write the lifted C++ into the build tree at build time. It reads the boot file from the disc dump, checks it is the build it was lifted from, maps guest RAM and runs Shinobi's start-up natively (the stack fill, the C runtime's section set-up, Shinobi's initialisation, `main`, Shinobi's exit). Anything the port doesn't handle yet stops it with a report naming what was reached, where from, and the registers (exit code 3). `docs/runtime.md` has the design and the bring-up log.
+- **The runtime library** (`recomp/runtime/`): guest memory reserved as 4 GB of address space with RAM committed; the registry of native replacements, which the stubs for replaced functions now call (`rt::replaced`); calls from native code into guest code; the stop report.
+- **Native replacements** for the store-queue `memclr` and Shinobi's library initialisation and exit.
+- **Replaced functions outside the replaced regions** (`replaced_functions` in `layout.cpp`, starting with `memclr`): `qilin lift` writes stubs for them that go through the registry. `qilin lift --files N` writes exactly N files of lifted code, for a build system that must name them in advance.
+- **SR is modelled:** lifted code reads it and writes its interrupt mask, which the middleware does around its hardware set-up; a change of mode, register bank, exception blocking or FPU enable stops. 19 more functions lift: **2,934 in all**, only 2 not (exception set-up, to be replaced). The differential test covers the SR forms: 248,016 runs, 0 mismatches.
+- **Tests** for the registry (a replaced function stops, naming itself and its caller, until native code is provided), `call_guest` and guest memory.
 
 ### Changed
 - **The repository is `ToyCommander--QilinRecomp`**, renamed by the owner for readability, like all the QilinRecomp projects (Beat the Beat's is now `RhythmHeavenFever--QilinRecomp`). The docs and their links use the new names.

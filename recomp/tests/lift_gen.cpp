@@ -26,6 +26,8 @@ int main(int argc, char** argv) {
         const qilin::Cfg cfg = qilin::analyse(*boot);
         qilin::LiftOptions options;
         options.orphans = true;
+        const qilin::ReplacedFunction replaced[] = {{p.entry.at("native_me"), "native_me", "the registry's test"}};
+        options.replaced = replaced;
         const qilin::LiftSummary sum = qilin::write_lifted(*boot, cfg, {}, argv[1], options, "test");
         std::fputs(sum.report.c_str(), stdout);
         return 0;

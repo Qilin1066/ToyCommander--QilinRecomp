@@ -32,10 +32,21 @@ constexpr Region kUsa[] = {
     {0x8C0C5690, 0x8C0C6B9C, "Shinobi's initialised data and version strings", Plan::data},
 };
 
+constexpr ReplacedFunction kUsaReplaced[] = {
+    {0x8C04EEE0, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
+};
+
+constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd";
+
 }  // namespace
 
 std::span<const Region> layout(std::string_view sha256_hex) {
-    if (sha256_hex == "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd") return kUsa;
+    if (sha256_hex == kUsaSha) return kUsa;
+    return {};
+}
+
+std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) {
+    if (sha256_hex == kUsaSha) return kUsaReplaced;
     return {};
 }
 

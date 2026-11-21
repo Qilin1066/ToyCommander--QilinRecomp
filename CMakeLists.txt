@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.8.0 LANGUAGES CXX)
+project(ToyCommanderQilinRecomp VERSION 0.9.0 LANGUAGES CXX)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -110,7 +110,7 @@ add_custom_command(
     COMMAND qilin_liftgen ${QILIN_LIFT_TEST_GEN}
     DEPENDS qilin_liftgen
     COMMENT "Lifting the synthetic test programs")
-add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp ${QILIN_LIFT_TEST_SOURCES})
+add_executable(qilin_lift_tests recomp/tests/lift_run.cpp recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp ${QILIN_LIFT_TEST_SOURCES})
 target_include_directories(qilin_lift_tests PRIVATE recomp/runtime recomp/tests ${QILIN_LIFT_TEST_GEN})
 target_compile_definitions(qilin_lift_tests PRIVATE QILIN_CHECKED_MEMORY)
 # Lifted code: each guest FPU operation rounds on its own, so the host compiler
@@ -151,6 +151,47 @@ endif()
 target_link_libraries(qilin_difftest PRIVATE qilin_core qilin_warnings)
 qilin_tool(qilin_difftest)
 add_test(NAME qilin_difftest COMMAND qilin_difftest)
+
+# ---- The game: built only from the player's own boot file ----
+# cmake -DQILIN_GAME_BOOT=<extracted disc>/files/1GUTH.BIN: qilin lift turns it
+# into C++ at build time (into the build tree, never the source tree), and
+# qilin_run is built from that with the runtime. It reads the rest of the game
+# from the player's disc dump at run time.
+set(QILIN_GAME_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GUTH.BIN, from qilin extract: builds qilin_run")
+option(QILIN_RUN_CHECKED "qilin_run checks every guest memory access (bring-up)" ON)
+set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp)
+if(QILIN_GAME_BOOT)
+    set(QILIN_LIFT_FILES 24)
+    set(gen ${CMAKE_BINARY_DIR}/generated)
+    set(gen_sources ${gen}/table.cpp ${gen}/stubs.cpp)
+    math(EXPR last "${QILIN_LIFT_FILES} - 1")
+    foreach(i RANGE ${last})
+        string(LENGTH "${i}" len)
+        if(len EQUAL 1)
+            set(i "00${i}")
+        elseif(len EQUAL 2)
+            set(i "0${i}")
+        endif()
+        list(APPEND gen_sources ${gen}/lifted_${i}.cpp)
+    endforeach()
+    add_custom_command(
+        OUTPUT ${gen}/functions.hpp ${gen_sources}
+        COMMAND qilin lift ${QILIN_GAME_BOOT} --out ${gen} --files ${QILIN_LIFT_FILES}
+        DEPENDS qilin ${QILIN_GAME_BOOT}
+        COMMENT "Lifting the game's boot file to C++")
+    add_executable(qilin_run toycommander/src/main.cpp toycommander/src/boot.cpp toycommander/src/natives.cpp ${QILIN_RT_SOURCES} ${gen_sources})
+    target_include_directories(qilin_run PRIVATE toycommander/src recomp/runtime ${gen})
+    target_link_libraries(qilin_run PRIVATE qilin_disc qilin_warnings)
+    if(QILIN_RUN_CHECKED)
+        target_compile_definitions(qilin_run PRIVATE QILIN_CHECKED_MEMORY)
+    endif()
+    if(MSVC)
+        target_compile_options(qilin_run PRIVATE /bigobj)
+        target_link_options(qilin_run PRIVATE /STACK:16777216)  # lifted calls nest as deeply as the guest's
+    else()
+        target_compile_options(qilin_run PRIVATE -ffp-contract=off)
+    endif()
+endif()
 
 # ---- qilin_dcref: the FPU's approximate instructions against a Dreamcast emulator ----
 # A developer tool, not built by default and not in CI: it runs Flycast's

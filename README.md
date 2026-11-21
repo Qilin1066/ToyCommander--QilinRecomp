@@ -22,7 +22,7 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies--Qil
 | Lifter, SH-4 → C++ (`qilin lift`) | ✅ every function of the game (1,259) and all but 21 hardware-facing ones of the middleware: 2,916 lifted, tested end to end under every CI compiler. The FPU's approximate instructions are measured against a Dreamcast emulator (`tools/dcref`) |
 | Middleware attribution (engine, Kamui 2, audio manager, C runtime) | during bring-up: the lifted middleware stops on hardware, which names what to replace |
 | Differential test of every lifted instruction | ✅ against a reference interpreter of our own, in CI: 242,496 runs, 0 mismatches. Whole call trees to come |
-| Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | to do |
+| Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | 🔨 bring-up: `qilin_run` boots the game's lifted code into `main` and stops at the next library function the port doesn't have yet (`docs/runtime.md`) |
 | Enhancements (resolution, widescreen, high refresh rate) and the settings menu shared with the sister projects | to do, after the game plays at original spec |
 
 The supported release is the USA disc (`MK-57020`, `V1.022`); see `docs/disc-analysis.md`.
@@ -70,6 +70,16 @@ build/qilin lift     extracted/files/1GUTH.BIN --out gen  # the lifted C++ (gen/
 
 The dump is a Redump-style one: a `.cue` beside one `.bin` per track.
 
+To build the game's program (during bring-up, `qilin_run`) from your own boot file, and run it:
+
+```sh
+cmake -S . -B build -DQILIN_GAME_BOOT=extracted/files/1GUTH.BIN
+cmake --build build --target qilin_run
+build/qilin_run path/to/game.cue
+```
+
+The lifted C++ goes into the build tree only. `qilin_run` checks that the disc's boot file is the one it was built from.
+
 The decoder check needs no game files:
 
 ```sh
@@ -82,7 +92,8 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 | Path | What |
 |---|---|
 | `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported build's regions), `hwaccess` (the hardware-access profile), `fpmode` (the FPSCR mode pass), `lifter` and `lift_output` (SH-4 to C++), `main` (the `qilin` CLI) |
-| `recomp/runtime/` | What lifted code needs at run time: the guest context, memory access, the helpers, calls through the function table |
+| `recomp/runtime/` | What lifted code needs at run time: the guest context, memory access, the helpers, calls through the function table, guest memory, the registry of native replacements, the stop report |
+| `toycommander/src/` | The game's program (`qilin_run` during bring-up): the start-up and the native replacements |
 | `recomp/tests/` | Unit tests and end-to-end lifter tests on synthetic programs, so they need no game files |
 | `tools/check/` | The decoder cross-check against Capstone |
 | `tools/dcref/` | Measures the FPU's approximate instructions against a Dreamcast emulator run as a black box (Linux developer tool; the emulator is fetched, never committed) |

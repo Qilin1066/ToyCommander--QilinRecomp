@@ -69,6 +69,8 @@ struct Cpu {
         for (unsigned k = 0; k < 16; ++k) std::swap(s.fr[k], s.xf[k]);
     }
 
+    uint32_t sr_now() const { return s.sr | s.t | s.s << 1 | s.q << 8 | s.m << 9; }
+
     // ---- div1, from its definition: Q and M say whether Rm is subtracted
     // (they agree) or added; the carry or borrow out of bit 31 combines with
     // the bit shifted out into the new Q.
@@ -253,6 +255,17 @@ struct Cpu {
         case Op::stsl_mach: store(r[n] - 4, s.mach, 4), r[n] -= 4; break;
         case Op::stsl_macl: store(r[n] - 4, s.macl, 4), r[n] -= 4; break;
         case Op::stsl_pr: store(r[n] - 4, s.pr, 4), r[n] -= 4; break;
+        // SR: the system bits (MD, RB, BL, FD) can't change under lifted code; the rest can.
+        case Op::stc_sr: r[n] = sr_now(); break;
+        case Op::stcl_sr: store(r[n] - 4, sr_now(), 4), r[n] -= 4; break;
+        case Op::ldc_sr:
+        case Op::ldcl_sr: {
+            const uint32_t v = i.op == Op::ldc_sr ? r[n] : load(r[n], 4);
+            if ((v & 0x70008000u) != 0x40000000u) stop(Outcome::unsupported, pc, v);
+            if (i.op == Op::ldcl_sr) r[n] += 4;
+            s.sr = v & ~0x303u, s.t = v & 1u, s.s = (v >> 1) & 1u, s.q = (v >> 8) & 1u, s.m = (v >> 9) & 1u;
+            break;
+        }
         case Op::movca_l: store(r[n], r[0], 4); break;
         case Op::ocbi:
         case Op::ocbp:

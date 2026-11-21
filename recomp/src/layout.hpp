@@ -32,4 +32,14 @@ struct Region {
 // image; empty for anything else.
 std::span<const Region> layout(std::string_view sha256_hex);
 
+// Functions outside the replaced regions that are replaced natively all the
+// same (they reach hardware the port provides otherwise): the lifter emits a
+// stub that goes through the runtime's registry, as for the replaced regions.
+struct ReplacedFunction {
+    uint32_t entry;
+    std::string_view name;  // our name for it
+    std::string_view why;
+};
+std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex);
+
 }  // namespace qilin
