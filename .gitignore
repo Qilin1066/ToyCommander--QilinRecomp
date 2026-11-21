@@ -1,0 +1,53 @@
+# ---- Game data: never commit (copyright Sega / No Cliché) ----
+*.gdi
+*.cdi
+*.chd
+*.cue
+*.bin
+*.BIN
+*.iso
+*.raw
+*.GHQ
+*.ghq
+*.PVR
+*.pvr
+*.AVI
+*.avi
+*.DRV
+*.drv
+*.LST
+/game/
+/disc/
+/extracted/
+/orig/
+
+# Anything derived from the game binary: listings, CFG dumps, lifted code.
+/analysis-out/
+/generated/
+/gen/
+/gen-rt/
+*.insns.txt
+cfg.json
+cfg.json.gz
+functions.json
+functions.json.gz
+symbols.txt
+
+# ---- Build output ----
+/build*/
+/out/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+
+# ---- Personal Claude Code settings (permissions on this machine) ----
+.claude/settings.local.json
+
+# ---- Editors / OS ----
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+__pycache__/

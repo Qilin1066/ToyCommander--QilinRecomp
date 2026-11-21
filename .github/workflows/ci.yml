@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64-gcc14,   os: ubuntu-24.04,     cc: gcc-14,   cxx: g++-14, sweep: true }
+          - { name: linux-x64-clang19, os: ubuntu-24.04,     cc: clang-19, cxx: clang++-19 }
+          - { name: linux-arm64-gcc14, os: ubuntu-24.04-arm, cc: gcc-14,   cxx: g++-14 }
+          # macOS: the runtime is built for 10.15 (CMakeLists.txt's default), the tools for 13.3, on Apple Silicon and Intel.
+          - { name: macos-arm64,       os: macos-latest }
+          - { name: macos-x64,         os: macos-15-intel }
+          - { name: windows-x64,       os: windows-2022 }
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      # Compiler errors and warnings become annotations on the commit (file,
+      # line and message), readable on GitHub without opening the log.
+      - name: Annotate compiler messages
+        shell: bash
+        run: echo "::add-matcher::.github/matchers/compilers.json"
+      # GCC 14's libstdc++ provides <print>; Clang on Linux uses it too.
+      - name: Install compilers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-14 ${{ startsWith(matrix.cc, 'clang') && matrix.cc || '' }}
+      - name: Configure
+        shell: bash
+        run: |
+          args=()
+          if [ -n "${{ matrix.cxx }}" ]; then
+            args+=(-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }})
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQILIN_WERROR=ON "${args[@]}"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      # The decoder against Capstone over the whole encoding space (no game files needed).
+      - name: Decoder check
+        if: matrix.sweep
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet capstone==5.0.7
+          "$RUNNER_TEMP/venv/bin/python" tools/check/verify_decoder.py --qilin build/qilin

@@ -1,0 +1,68 @@
+# CLAUDE.md
+
+Static recompilation of **Toy Commander** (Dreamcast, USA: `MK-57020`, `V1.022`) to native code. Same requirements and scope as the sister projects Qilin1066/GBTGhoulies-QilinRecomp, PunchOutWii-QilinRecomp, BeatTheBeat-QilinRecomp and ApbArcade-QilinRecomp (the owner's instruction, 2026-11-21: "exact same as the other projects", down to the settings menu). When a design question here is undecided, do what they did; BeatTheBeat's `CLAUDE.md` has the longest list of lessons.
+
+## Requirements (non-negotiable)
+
+- **Efficiency first, then accuracy, and fail loudly.** Never paper over an unknown: stop with a clear error (exit codes, CMake `FATAL_ERROR`, later `rt::Stop`).
+- **C++23** everywhere: recompiler, runtime and generated code.
+- **Vulkan 1.3 only** for graphics. No OpenGL, D3D or Metal backends (macOS goes through MoltenVK).
+- **Static recompilation only.** No interpreter, JIT or emulator at run time, not even as a fallback. That includes the sound driver's ARM code: the audio manager is replaced above it.
+- Targets: 64-bit **Windows, Linux, macOS** on **x86-64 and ARM64**. The low-end reference is ARM boards like the **Raspberry Pi 4**. No 32-bit.
+- Compiler minimums: GCC 14, Clang 19, Apple Clang (Xcode 16), MSVC 2022 17.10.
+- No GPL code, tables or constants (no Dreamcast emulator's, not QEMU's): they may be run as black boxes, never read into this code. Hitachi's and Sega's documents are cited by title, not linked, quoted or included. Keep dependencies to the fewest possible; third-party libraries (SDL3, Vulkan headers, Dear ImGui for the menu, when they arrive) are permissive and handled as the sister projects handle them.
+- Never commit game data or anything derived from it: disc images, `1GUTH.BIN`, extracted files, listings, `gen/`, `cfg.json`, symbol lists made from the binary. These are gitignored.
+
+## Layout
+
+- `recomp/src/`: `gdrom` (Redump cue/bin reader, bootstrap, ISO 9660), `bootfile` (loader, known-build SHA-256), `sha256`, `decoder` (SH-4, table-driven, X-macro `QILIN_SH4_OPS`), `main.cpp` (the `qilin` CLI). `gdrom`, `bootfile` and `sha256` are runtime code too (target `qilin_disc`): no `std::format` there.
+- `recomp/tests/tests.cpp`: unit tests (`ctest`), no game files.
+- `tools/check/verify_decoder.py`: the decoder against Capstone, the whole encoding space.
+- `docs/`: design and results. Keep them current. `roadmap-and-design-targets.md` is the roadmap; `disc-analysis.md` the disc and boot file; `recompiler-core.md` the loader, disc reader and decoder, and what comes next; `prior-art.md`; `naming.md`.
+
+## Build and check
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQILIN_WERROR=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+python3 tools/check/verify_decoder.py --qilin build/qilin     # pip install capstone; 0 unexplained differences
+build/qilin disc path/to/game.cue
+build/qilin extract path/to/game.cue --out extracted          # outside the repo, or in an ignored folder
+build/qilin info extracted/files/1GUTH.BIN                    # exit 0: the supported build
+```
+
+Before a milestone commit, all of these must hold: tests pass, warnings are clean (`QILIN_WERROR`), the decoder check has 0 unexplained differences, and (once they exist) generated code is warning-free under GCC, Clang and MSVC and the differential test has 0 unexplained mismatches.
+
+## Known facts worth not rediscovering
+
+- The boot file is `1GUTH.BIN` ("Guth" is the working title, Gutherman): SHA-256 `ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd`, 748,444 bytes, loaded at `0x8C010000`, ending at `0x8C0C6B9C`, entered at its first byte. No header, sections or symbols.
+- The entry code sets the cache control register and jumps to `0x8C0B0340`. Roughly: code to about `0x8C0A0000`, data to `0x8C0B0000`, then code and data mixed (libraries). Function discovery must replace this guess.
+- The dump is Redump-style: `.cue` plus 15 `.bin` tracks. Tracks 1–2 single density; track 3 (sector 45000) holds the bootstrap and directories; tracks 4–14 are the music (CD audio); track 15 (index 1 at 377422) holds all 81 files. ISO sector numbers are absolute disc sectors.
+- Libraries in the boot file: Shinobi 1.61, Kamui 2 (16,3,0,0) with `kmdk`, the audio manager (`am*`/`ac*`, loads `AUDIO64.DRV`, ARM code), a TrueMotion 2X AVI player, No Cliché's engine with its script interpreter. No Windows CE.
+- Movies: AVI, `TM2X` video, Duck DK4 ADPCM sound (format tag 0x61), 640×480; `60HZ_` and `50HZ_` versions.
+- SH-4 points that shape the lifter: delay slots; PC-relative literal pools inside the code (`mov.l` rounds the PC down to a multiple of 4, `mov.w` doesn't); calls are usually `mov.l pool,rN` + `jsr @rN`; FPU instruction meaning depends on FPSCR.PR/SZ/FR, and the code does switch them (`fschg`, `frchg` both appear); `fmac`, `fsca`, `fsrra`, `fipr`, `ftrv` need a clean source for their exact results before they can be lifted (don't guess, don't take them from an emulator).
+- Capstone 5's SH-4 mode also decodes SH-2A/SH-4A instructions and lacks `fipr`, `fcnvds`, `fcnvsd`: both are reviewed differences in `verify_decoder.py`. Unicorn has no SuperH: the differential test needs another reference (`docs/recompiler-core.md`).
+- The decoder's table throws at start-up if a form leaves a bit undefined or two forms share a word: after editing `kRows`, run the tests; the pinned counts (59,001 valid words, 8,770 delayed branches) change only if the instruction set does.
+- Building where there is no GCC 14 or Clang 19 (a session's Linux container, a Windows PC without LLVM): `pip install ziglang`, then use `python -m ziglang c++` as the compiler (a wrapper script for CMake's `CMAKE_CXX_COMPILER`). GCC 14 and MSVC are then checked only by CI: check CI after pushing. Compiler messages are annotations on the commit (`.github/matchers/compilers.json`).
+- GCC's `-Wshadow` also flags a local reusing a file-scope name (Clang's and MSVC's don't), and MSVC's `[[maybe_unused]]` covers only a declaration's first declarator: both bit the sister projects.
+
+## Status (v0.1.0)
+
+- The disc reader, boot file loader and SH-4 decoder exist, with tests and the Capstone cross-check (0 unexplained differences). Nothing is lifted and nothing runs yet.
+- Built and tested so far only with Clang (zig's) on Linux x64; GCC 14, MSVC, macOS and ARM64 are CI's to confirm.
+
+## Next steps, in order
+
+1. Check CI on the first push; fix what GCC or MSVC flag.
+2. Function discovery and the CFG (`qilin cfg`, `coverage`, `suspects`): literal pools, switch tables, delay slots, calls through pool addresses. Then `docs/code-analysis.md`: the library boundaries, named (Shinobi, Kamui 2, audio manager, TrueMotion, C runtime, game).
+3. The FPSCR mode pass, then the lifter in slices (integer; calls and the function table; FPU), then the differential test (choose the reference: `docs/recompiler-core.md`).
+4. The runtime, as the sister projects brought theirs up: `qilin_run`, the replacement registry, stop on anything unregistered and name it.
+5. The window, input, sound and the settings menu follow the sister projects exactly (`docs/naming.md`, the menu section of `docs/roadmap-and-design-targets.md`; Punch-Out's `punchout/src/menu.cpp` is the model).
+
+## Conventions
+
+- **Committing and pushing:** the sister projects work on `main` under a standing permission their owner gave for each of them. This repository has no such permission recorded yet: ask the owner before pushing to `main`, and record their answer here in their words.
+- **Before any push, audit what is being published:** every path added, binaries, anything named like game data or game-derived output, copied third-party text or code, personal details (local paths, names, e-mail addresses). No game data or anything derived from it. Never force-push published history.
+- Releases are `vX.Y.Z`; the version lives only in `project(... VERSION ...)`. Every release gets a `CHANGELOG.md` entry (Keep a Changelog); never rewrite past entries.
+- Prose in docs and commit messages: plain, specific, British spelling.
