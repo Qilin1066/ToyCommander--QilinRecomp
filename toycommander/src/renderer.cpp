@@ -86,6 +86,9 @@ constexpr uint32_t pipeline_key(bool blend, uint32_t src, uint32_t dst, bool pun
     return (blend ? 1u | src << 1 | dst << 4 : 0u) | (punch ? 0x80u : 0u);
 }
 constexpr uint32_t kVolumeKey = 0x100u;
+// A draw's flag (pvr.frag's bit 6): darken where inside a translucent modifier volume.
+constexpr uint32_t kInVolumesFlag = 0x40u;
+constexpr uint32_t kMaxVolumes = 64;  // pvr.frag's array
 
 VkBlendFactor blend_factor(uint32_t f, bool source) {
     switch (f) {
@@ -137,6 +140,14 @@ struct Renderer::Impl {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     Buffer vertex_buffer{}, staging{};
+    // The translucent modifier volumes, for the fragment shader's test
+    // (pvr.frag): a header, the volumes, their triangles.
+    Buffer volume_buffer{};
+    std::vector<float> volume_data;
+    VkDescriptorSetLayout volume_layout = VK_NULL_HANDLE;
+    VkDescriptorPool volume_pool = VK_NULL_HANDLE;
+    VkDescriptorSet volume_set = VK_NULL_HANDLE;
+    VkBuffer volume_set_buffer = VK_NULL_HANDLE;  // the buffer volume_set points at
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     std::vector<VkDescriptorPool> set_pools;
     VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -149,6 +160,7 @@ struct Renderer::Impl {
     Stats stats{};
     bool said_modifiers = false, said_fog = false, said_two_volumes = false;
     bool shadows = false;  // this scene has cheap shadows to draw
+    bool translucent_volumes = false;  // and translucent modifier volumes for translucent polygons
 
     // The frame being built.
     std::vector<HostVertex> vertices;
@@ -197,10 +209,29 @@ struct Renderer::Impl {
         sli.bindingCount = 1;
         sli.pBindings = &b;
         check(vkCreateDescriptorSetLayout(gpu.device, &sli, nullptr, &set_layout), "vkCreateDescriptorSetLayout");
+        VkDescriptorSetLayoutBinding vb{};
+        vb.binding = 0;
+        vb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        vb.descriptorCount = 1;
+        vb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        sli.pBindings = &vb;
+        check(vkCreateDescriptorSetLayout(gpu.device, &sli, nullptr, &volume_layout), "vkCreateDescriptorSetLayout");
+        const VkDescriptorPoolSize vsize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+        VkDescriptorPoolCreateInfo vpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        vpi.maxSets = 1;
+        vpi.poolSizeCount = 1;
+        vpi.pPoolSizes = &vsize;
+        check(vkCreateDescriptorPool(gpu.device, &vpi, nullptr, &volume_pool), "vkCreateDescriptorPool");
+        VkDescriptorSetAllocateInfo vai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        vai.descriptorPool = volume_pool;
+        vai.descriptorSetCount = 1;
+        vai.pSetLayouts = &volume_layout;
+        check(vkAllocateDescriptorSets(gpu.device, &vai, &volume_set), "vkAllocateDescriptorSets");
         VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push)};
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &set_layout;
+        const VkDescriptorSetLayout set_layouts[2] = {set_layout, volume_layout};
+        pli.setLayoutCount = 2;
+        pli.pSetLayouts = set_layouts;
         pli.pushConstantRangeCount = 1;
         pli.pPushConstantRanges = &range;
         check(vkCreatePipelineLayout(gpu.device, &pli, nullptr, &layout), "vkCreatePipelineLayout");
@@ -451,6 +482,9 @@ struct Renderer::Impl {
         d.depth = background ? 7u : depth_mode(s.isp);
         d.depth_write = !z_write_off(s.isp);
         if (shadows && !translucent) d.stencil = (s.pcw & 0x80u) && !background ? Stencil::mark_shadow : Stencil::mark_none;
+        // A translucent polygon that takes shadows tests itself against the
+        // translucent modifier volumes, pixel by pixel (pvr.frag).
+        if (translucent_volumes && translucent && (s.pcw & 0x80u)) d.flags |= kInVolumesFlag;
         d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[0]), sampler_bits(tsp)) : set_for(white, 0);
         d.first = uint32_t(vertices.size());
         const bool gouraud = s.pcw & 0x02u;
@@ -487,6 +521,48 @@ struct Renderer::Impl {
         if (d.count == 0) return;
         if (!draws.empty() && draws.back().same_state(d) && draws.back().first + draws.back().count == d.first) draws.back().count += d.count;
         else draws.push_back(d);
+    }
+
+    // The translucent modifier volumes, for pvr.frag: a header (the volume
+    // count, the shadow's factor, the depth scale, the picture's pixels per
+    // scene pixel), then per volume its
+    // bounds on screen and its triangles' range, then the triangles (three
+    // vec4s each: x, y, z). False if there are none.
+    bool collect_translucent_volumes(const Source& src, const ta::Scene& scene) {
+        volume_data.assign(8 + kMaxVolumes * 8, 0.0f);
+        std::vector<float> triangles;
+        uint32_t volumes = 0, first = 0;
+        float box[4] = {1e30f, 1e30f, -1e30f, -1e30f};
+        const auto end_volume = [&] {
+            const uint32_t count = uint32_t(triangles.size() / 12) - first;
+            if (count == 0) return;
+            if (volumes == kMaxVolumes) throw rt::Stop{rt::Stop::Unsupported, 0, volumes};
+            float* v = volume_data.data() + 8 + volumes * 8;
+            std::memcpy(v, box, sizeof box);
+            const uint32_t range[2] = {first, count};
+            std::memcpy(v + 4, range, sizeof range);
+            ++volumes, first += count;
+            box[0] = box[1] = 1e30f, box[2] = box[3] = -1e30f;
+        };
+        for (const ta::Modifier& m : scene.modifiers) {
+            if (m.list == ta::kOpaqueModifier) continue;
+            for (uint32_t t = m.first; t < m.first + m.count; ++t) {
+                const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
+                for (int k = 0; k < 3; ++k) {
+                    const float x = f[3 * k], y = f[3 * k + 1];
+                    triangles.insert(triangles.end(), {x, y, clean_z(f[3 * k + 2]), 0.0f});
+                    box[0] = std::min(box[0], x), box[1] = std::min(box[1], y), box[2] = std::max(box[2], x), box[3] = std::max(box[3], y);
+                }
+            }
+            if (m.isp & 0x60000000u) end_volume();
+        }
+        end_volume();
+        if (volumes == 0) return false;
+        const uint32_t head[2] = {volumes, 0};
+        std::memcpy(volume_data.data(), head, sizeof head);
+        volume_data[2] = float(src.shadow_scale & 0xFFu) / 256.0f;
+        volume_data.insert(volume_data.end(), triangles.begin(), triangles.end());
+        return true;
     }
 
     // The opaque modifier volumes into the stencil, one volume at a time
@@ -625,13 +701,12 @@ struct Renderer::Impl {
         // Cheap shadows (SHADOW_SCALE's bit 8): the opaque modifier volumes
         // darken the polygons that take shadows inside them. Translucent
         // modifier volumes and the two-volume mode aren't drawn yet.
-        bool opaque_volumes = false;
-        for (const ta::Modifier& m : scene.modifiers) {
-            if (m.list == ta::kOpaqueModifier) opaque_volumes = true;
-            else once(said_modifiers, "translucent modifier volumes");
-        }
-        shadows = opaque_volumes && (src.shadow_scale & 0x100u);
-        if (opaque_volumes && !shadows) once(said_modifiers, "modifier volumes in two-volume mode");
+        bool opaque_volumes = false, any_translucent = false;
+        for (const ta::Modifier& m : scene.modifiers) (m.list == ta::kOpaqueModifier ? opaque_volumes : any_translucent) = true;
+        const bool cheap = (src.shadow_scale & 0x100u) != 0;
+        shadows = opaque_volumes && cheap;
+        translucent_volumes = any_translucent && cheap && collect_translucent_volumes(src, scene);
+        if ((opaque_volumes || any_translucent) && !cheap) once(said_modifiers, "modifier volumes in two-volume mode");
         if (src.background.count) add_strip(src, src.background, src.background_vertices, true);
         size_t translucent_draws = 0, translucent_vertices = 0;
         for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent}) {
@@ -654,6 +729,25 @@ struct Renderer::Impl {
 
         grow(vertex_buffer, vertices.size() * sizeof(HostVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         if (!vertices.empty()) std::memcpy(vertex_buffer.mapped, vertices.data(), vertices.size() * sizeof(HostVertex));
+        if (translucent_volumes) {
+            volume_data[3] = push.screen[2];  // the depth scale, for the volumes' z
+            volume_data[4] = float(scale);
+            grow(volume_buffer, volume_data.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            std::memcpy(volume_buffer.mapped, volume_data.data(), volume_data.size() * sizeof(float));
+        } else if (!volume_buffer.buffer) {
+            grow(volume_buffer, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);  // something to bind
+            std::memset(volume_buffer.mapped, 0, 64);
+        }
+        if (volume_set_buffer != volume_buffer.buffer) {
+            const VkDescriptorBufferInfo bi{volume_buffer.buffer, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet = volume_set;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &bi;
+            vkUpdateDescriptorSets(gpu.device, 1, &w, 0, nullptr);
+            volume_set_buffer = volume_buffer.buffer;
+        }
         grow(staging, upload_bytes.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         if (!upload_bytes.empty()) std::memcpy(staging.mapped, upload_bytes.data(), upload_bytes.size());
 
@@ -721,6 +815,7 @@ struct Renderer::Impl {
             vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &zero);
         }
         uint32_t bound = ~0u;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &volume_set, 0, nullptr);
         for (const Draw& d : draws) {
             if (d.pipeline != bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(d.pipeline)), bound = d.pipeline;
             vkCmdSetDepthWriteEnable(cmd, d.depth_write);
@@ -790,7 +885,9 @@ struct Renderer::Impl {
         vkDestroyShaderModule(gpu.device, frag_punch, nullptr);
         vkDestroyPipelineLayout(gpu.device, layout, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, set_layout, nullptr);
-        vertex_buffer.destroy(gpu), staging.destroy(gpu);
+        vertex_buffer.destroy(gpu), staging.destroy(gpu), volume_buffer.destroy(gpu);
+        vkDestroyDescriptorPool(gpu.device, volume_pool, nullptr);
+        vkDestroyDescriptorSetLayout(gpu.device, volume_layout, nullptr);
         for (auto& [k, t] : targets) t.colour.destroy(gpu);
         depth.destroy(gpu);
         vkDestroyFence(gpu.device, fence, nullptr);

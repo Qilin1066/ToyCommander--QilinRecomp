@@ -3,7 +3,9 @@
 // back. The renderer's part skips (exit 77) where there's no Vulkan 1.3
 // device, as on CI runners; the decoder's part always runs.
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "qilin/host/display.hpp"
@@ -205,6 +207,52 @@ int renderer() {
     // Drawn again with nothing changed: no new upload.
     r.draw(src);
     expect(r.stats().uploads == 0, "renderer: a texture unchanged isn't uploaded again");
+
+    // Cheap shadows: an opaque red quad over everything and a translucent
+    // green one over the left quarter, both taking shadows (PCW bit 7); one
+    // volume, a box from x 8 to 24 enclosing both surfaces, sent to the
+    // opaque and the translucent modifier lists; SHADOW_SCALE 0x180 (a half).
+    ta::Scene shadow;
+    auto shadow_quad = [&](ta::List list, float x0, float x1, float z, float r_, float g_, float b_) {
+        ta::Strip s{};
+        s.list = list;
+        s.pcw = gouraud | 0x80u;
+        s.isp = list == ta::kOpaque ? isp_ge : 7u << 29;
+        s.tsp[0] = 1u << 29 | 2u << 22;  // one, zero: the colour as it is; no fog
+        s.first = uint32_t(shadow.vertices.size()), s.count = 4;
+        shadow.vertices.push_back(vertex(x0, 0, z, r_, g_, b_));
+        shadow.vertices.push_back(vertex(x1, 0, z, r_, g_, b_));
+        shadow.vertices.push_back(vertex(x0, 48, z, r_, g_, b_));
+        shadow.vertices.push_back(vertex(x1, 48, z, r_, g_, b_));
+        shadow.strips.push_back(s);
+    };
+    shadow_quad(ta::kOpaque, 0, 64, 0.1f, 1, 0, 0);
+    shadow_quad(ta::kTranslucent, 0, 16, 0.5f, 0, 1, 0);
+    // The box's faces seen from the front: one nearer than both surfaces (z
+    // 0.9), one farther (z 0.05); its sides are edge-on.
+    const float faces[4][9] = {{8, 8, 0.9f, 24, 8, 0.9f, 8, 40, 0.9f},   {24, 8, 0.9f, 24, 40, 0.9f, 8, 40, 0.9f},
+                               {8, 8, 0.05f, 24, 8, 0.05f, 8, 40, 0.05f}, {24, 8, 0.05f, 24, 40, 0.05f, 8, 40, 0.05f}};
+    for (const ta::List list : {ta::kOpaqueModifier, ta::kTranslucentModifier}) {
+        const uint32_t first = uint32_t(shadow.modifier_triangles.size() / 9);
+        for (const auto& f : faces) shadow.modifier_triangles.insert(shadow.modifier_triangles.end(), std::begin(f), std::end(f));
+        shadow.modifiers.push_back({list, 0x80000000u | uint32_t(list) << 24, 0, first, 3});
+        shadow.modifiers.push_back({list, 0x80000000u | uint32_t(list) << 24, 1u << 29, first + 3, 1});  // the last: "inside"
+    }
+    toycommander::renderer::Source ssrc;
+    ssrc.scene = &shadow, ssrc.width = 64, ssrc.height = 48, ssrc.frame_buffer = 0x200000;
+    ssrc.read = read_vram, ssrc.generation = generation;
+    ssrc.shadow_scale = 0x180;
+    r.draw(ssrc);
+    const std::vector<uint8_t> sp = r.read_back();
+    auto near = [&](int x, int y, int red, int green, int blue) {
+        const uint8_t* p = &sp[size_t(y * 64 + x) * 4];
+        return std::abs(p[0] - red) <= 2 && std::abs(p[1] - green) <= 2 && std::abs(p[2] - blue) <= 2;
+    };
+    expect(near(40, 20, 255, 0, 0), "shadows: the opaque surface outside the volume");
+    expect(near(20, 20, 128, 0, 0), "shadows: the opaque surface inside the volume, halved");
+    expect(near(4, 20, 0, 255, 0), "shadows: the translucent surface outside the volume");
+    expect(near(12, 20, 0, 128, 0), "shadows: the translucent surface inside the volume, halved");
+    expect(near(12, 44, 0, 255, 0), "shadows: the translucent surface below the volume");
     return 0;
 }
 
