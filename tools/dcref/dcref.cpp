@@ -130,11 +130,75 @@ bool env(unsigned cmd, void* data) {
     default: return false;
     }
 }
-void video(const void*, unsigned, unsigned, size_t) {}
+// --game's pictures and presses, to compare the port's renderer with the
+// emulator's on the same scene: QILIN_DCREF_SHOT=<folder>,<every> writes
+// every so many frames as a PPM; QILIN_DCREF_PRESS=<button>@<frame>[,...]
+// (or <button>@<first>-<last>/<every>) holds a button for ten frames from
+// the given one, with the names QILIN_PRESS uses (a b x y start up down
+// left right lt rt).
+std::string g_shot_folder;
+int g_shot_every = 0, g_frame = 0;
+struct Press {
+    unsigned id;  // libretro's joypad button
+    int from;
+};
+std::vector<Press> g_presses;
+
+void video(const void* data, unsigned w, unsigned h, size_t) {
+    if (g_shot_folder.empty() || g_frame % g_shot_every != 0 || data != RETRO_HW_FRAME_BUFFER_VALID) return;
+    std::vector<uint8_t> px(size_t{w} * h * 4);
+    gl<void (*)(unsigned, unsigned)>("glBindFramebuffer")(0x8D40, g_fbo);
+    gl<void (*)(int, int, int, int, unsigned, unsigned, void*)>("glReadPixels")(0, 0, static_cast<int>(w), static_cast<int>(h), 0x1908 /* RGBA */,
+                                                                                0x1401 /* UNSIGNED_BYTE */, px.data());
+    const std::string name = g_shot_folder + "/frame_" + std::to_string(g_frame) + ".ppm";
+    std::FILE* f = std::fopen(name.c_str(), "wb");
+    if (!f) throw std::runtime_error("cannot write " + name);
+    std::fprintf(f, "P6\n%u %u\n255\n", w, h);
+    for (unsigned y = h; y-- > 0;)  // OpenGL's rows run upwards
+        for (unsigned x = 0; x < w; ++x) std::fwrite(&px[(size_t{y} * w + x) * 4], 1, 3, f);
+    std::fclose(f);
+}
 void audio(int16_t, int16_t) {}
 size_t audio_batch(const int16_t*, size_t n) { return n; }
 void poll() {}
-int16_t input(unsigned, unsigned, unsigned, unsigned) { return 0; }
+bool held(unsigned id) {
+    for (const Press& p : g_presses)
+        if (p.id == id && g_frame >= p.from && g_frame < p.from + 10) return true;
+    return false;
+}
+int16_t input(unsigned port, unsigned device, unsigned index, unsigned id) {
+    if (port != 0) return 0;
+    if (device == RETRO_DEVICE_JOYPAD) return held(id) ? 1 : 0;
+    // The triggers, as analogue buttons.
+    if (device == RETRO_DEVICE_ANALOG && index == RETRO_DEVICE_INDEX_ANALOG_BUTTON) return held(id) ? 0x7FFF : 0;
+    return 0;
+}
+void parse_presses(const char* spec) {
+    // The Dreamcast's buttons on libretro's pad as the core lays them out
+    // (its A where libretro's B is, and so on round the face).
+    static const std::map<std::string, unsigned> ids = {
+        {"a", RETRO_DEVICE_ID_JOYPAD_B},       {"b", RETRO_DEVICE_ID_JOYPAD_A},         {"x", RETRO_DEVICE_ID_JOYPAD_Y},
+        {"y", RETRO_DEVICE_ID_JOYPAD_X},       {"start", RETRO_DEVICE_ID_JOYPAD_START}, {"up", RETRO_DEVICE_ID_JOYPAD_UP},
+        {"down", RETRO_DEVICE_ID_JOYPAD_DOWN}, {"left", RETRO_DEVICE_ID_JOYPAD_LEFT},   {"right", RETRO_DEVICE_ID_JOYPAD_RIGHT},
+        {"lt", RETRO_DEVICE_ID_JOYPAD_L2},     {"rt", RETRO_DEVICE_ID_JOYPAD_R2}};
+    const std::string all = spec;
+    for (size_t at = 0; at <= all.size();) {
+        size_t end = all.find(',', at);
+        if (end == std::string::npos) end = all.size();
+        const std::string one = all.substr(at, end - at);
+        at = end + 1;
+        if (one.empty()) continue;
+        const size_t a = one.find('@');
+        if (a == std::string::npos || !ids.contains(one.substr(0, a))) throw std::runtime_error("QILIN_DCREF_PRESS: " + one);
+        const unsigned id = ids.at(one.substr(0, a));
+        int first = 0, last = 0, every = 0;
+        if (std::sscanf(one.c_str() + a + 1, "%d-%d/%d", &first, &last, &every) == 3 && every > 0) {
+            for (int f = first; f <= last; f += every) g_presses.push_back({id, f});
+        } else {
+            g_presses.push_back({id, std::atoi(one.c_str() + a + 1)});
+        }
+    }
+}
 
 // Boots `elf` in the core and runs frames until the word at `done` holds
 // `magic`; returns guest RAM (16 MB from 0x8C000000).
@@ -179,8 +243,9 @@ std::vector<uint8_t> run_core(const char* core_path, const std::filesystem::path
 // The game itself, for comparing the port's RAM with the console's at the
 // same point of a run: loads `disc` (the player's own dump) in the core with
 // its BIOS replacement and writes guest RAM (16 MB from 0x8C000000) to
-// `dump`.<frame> every `every` frames up to `frames`. Nothing of the game is
-// kept by this tool: the dumps go where the user says, outside the repo.
+// `dump`.<frame> every `every` frames up to `frames` (and pictures and
+// presses, above). Nothing of the game is kept by this tool: the dumps and
+// pictures go where the user says, outside the repo.
 int run_game(const char* core_path, const std::filesystem::path& disc, int frames, int every, const std::filesystem::path& dump) {
     void* h = dlopen(core_path, RTLD_NOW);
     if (!h) throw std::runtime_error(dlerror());
@@ -209,7 +274,16 @@ int run_game(const char* core_path, const std::filesystem::path& disc, int frame
     if (g_hw.context_reset) g_hw.context_reset();
     const auto* ram = static_cast<const uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
     if (!ram || retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM) < (16u << 20)) throw std::runtime_error("no 16 MB of system RAM from the core");
+    if (const char* s = std::getenv("QILIN_DCREF_SHOT")) {
+        const std::string v = s;
+        const size_t comma = v.rfind(',');
+        g_shot_folder = v.substr(0, comma);
+        g_shot_every = comma == std::string::npos ? 60 : std::max(1, std::atoi(v.c_str() + comma + 1));
+        std::filesystem::create_directories(g_shot_folder);
+    }
+    if (const char* s = std::getenv("QILIN_DCREF_PRESS")) parse_presses(s);
     for (int frame = 1; frame <= frames; ++frame) {
+        g_frame = frame;
         retro_run();
         if (frame % every == 0 || frame == frames) {
             const auto name = dump.string() + "." + std::to_string(frame);
