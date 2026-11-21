@@ -30,8 +30,12 @@ std::unique_ptr<renderer::Renderer> g_renderer;
 std::thread::id g_thread;
 std::string g_shot_folder;
 uint64_t g_shot_every = 60, g_pictures = 0;
+uint32_t g_scale = 2, g_last_drawn = 0;
+bool g_drawn = false;  // a render since the last picture shown
 
 // The registers the renderer reads (the console's names).
+constexpr uint32_t kFbRCtrl = 0x005F8044u, kFbRSof1 = 0x005F8050u, kFbRSize = 0x005F805Cu, kFbWSof1 = 0x005F8060u,
+                   kSpgControl = 0x005F80D0u;
 constexpr uint32_t kParamBase = 0x005F8020u, kFbXClip = 0x005F8068u, kFbYClip = 0x005F806Cu, kIspBackgndD = 0x005F8088u,
                    kIspBackgndT = 0x005F808Cu, kTextControl = 0x005F80E4u, kPalRamCtrl = 0x005F8108u, kPtAlphaRef = 0x005F811Cu;
 
@@ -114,10 +118,9 @@ void start() {
     o.headless = headless && *headless && *headless != '0';
     g_display = std::make_unique<qilin::host::Display>(o);
     g_thread = std::this_thread::get_id();
-    uint32_t scale = 2;
-    if (const char* s = std::getenv("QILIN_SCALE")) scale = static_cast<uint32_t>(std::atoi(s));
-    if (scale < 1 || scale > 8) rt::fatal("QILIN_SCALE must be 1 to 8");
-    g_renderer = std::make_unique<renderer::Renderer>(g_display->gpu(), scale);
+    if (const char* s = std::getenv("QILIN_SCALE")) g_scale = static_cast<uint32_t>(std::atoi(s));
+    if (g_scale < 1 || g_scale > 8) rt::fatal("QILIN_SCALE must be 1 to 8");
+    g_renderer = std::make_unique<renderer::Renderer>(g_display->gpu(), g_scale);
     if (const char* s = std::getenv("QILIN_SHOT")) {
         g_shot_folder = s;
         if (const size_t comma = g_shot_folder.find(','); comma != std::string::npos) {
@@ -133,9 +136,19 @@ void render() {
     if (!g_renderer) return;
     renderer::Source src;
     src.scene = &ta::scene();
-    // The picture's size: the frame buffer clip's (inclusive) ends.
-    const uint32_t x_end = (pvr_register(kFbXClip) >> 16) & 0x7FFu, y_end = (pvr_register(kFbYClip) >> 16) & 0x3FFu;
-    if (x_end && y_end) src.width = x_end + 1, src.height = y_end + 1;
+    src.frame_buffer = pvr_register(kFbWSof1) & 0x00FFFFFCu;
+    // The rectangle written: the frame buffer clip (inclusive).
+    const uint32_t xc = pvr_register(kFbXClip), yc = pvr_register(kFbYClip);
+    src.clip_x0 = xc & 0x7FFu, src.clip_x1 = (xc >> 16) & 0x7FFu;
+    src.clip_y0 = yc & 0x3FFu, src.clip_y1 = (yc >> 16) & 0x3FFu;
+    // The frame buffer's size: what the display reads (FB_R_SIZE, in 32-bit
+    // words a line at FB_R_CTRL's depth, and lines), at least the clip.
+    const uint32_t size = pvr_register(kFbRSize), depth = (pvr_register(kFbRCtrl) >> 2) & 3u;
+    const uint32_t bytes_per_pixel = depth < 2 ? 2u : depth == 2 ? 3u : 4u;
+    const uint32_t interlaced = (pvr_register(kSpgControl) >> 4) & 1u;
+    src.width = std::max(((size & 0x3FFu) + 1u) * 4u / bytes_per_pixel, src.clip_x1 + 1u);
+    src.height = std::max((((size >> 10) & 0x3FFu) + 1u) << interlaced, src.clip_y1 + 1u);
+    if (src.width > 2048 || src.height > 1024) throw rt::Stop{rt::Stop::Unsupported, 0, size};
     src.palette_format = pvr_register(kPalRamCtrl) & 3u;
     src.stride = pvr_register(kTextControl) & 31u;
     src.punch_alpha_ref = pvr_register(kPtAlphaRef);
@@ -143,17 +156,31 @@ void render() {
     src.read = vram64_read;
     src.generation = vram64_generation;
     background(src);
-    const renderer::Picture p = g_renderer->draw(src);
+    g_renderer->draw(src);
+    g_last_drawn = src.frame_buffer;
+    g_drawn = true;
+}
+
+void vblank() {
+    if (!g_renderer) return;
+    poll();
+    if (!g_drawn) return;
+    // The frame buffer the display reads, if the game has drawn it; else the
+    // one drawn last.
+    renderer::Picture p = g_renderer->picture(pvr_register(kFbRSof1) & 0x00FFFFFCu);
+    if (!p.image) p = g_renderer->picture(g_last_drawn);
+    if (!p.image) return;
+    g_drawn = false;
     ++g_pictures;
     if (!g_shot_folder.empty() && g_pictures % g_shot_every == 0) shot(g_renderer->read_back(), p.width, p.height);
-    g_display->present_image(p.image, p.view, p.width, p.height, 4.0f / 3.0f, src.height);
-    poll();
+    g_display->present_image(p.image, p.view, p.width, p.height, 4.0f / 3.0f, p.height / g_scale);
 }
 
 namespace {
 // QILIN_PRESS=<button>@<picture>[,...]: presses a button for ten pictures from
 // the given one (button: a, b, x, y, start, up, down, left, right, lt, rt),
-// for driving a run without a window.
+// for driving a run without a window; <button>@<first>-<last>/<every>
+// presses it every so many pictures.
 struct Press {
     uint16_t button;
     bool lt, rt;
@@ -181,7 +208,19 @@ std::vector<Press> scripted_presses() {
         bool found = false;
         for (const auto& n : kNames)
             if (name == n.name) {
-                out.push_back({n.button, name == "lt", name == "rt", std::strtoull(item.c_str() + sign + 1, nullptr, 10)});
+            {
+                // <picture>, or <first>-<last>/<every>: a press every so many pictures.
+                char* rest = nullptr;
+                const uint64_t first = std::strtoull(item.c_str() + sign + 1, &rest, 10);
+                uint64_t last = first, every = 1;
+                if (*rest == '-') {
+                    last = std::strtoull(rest + 1, &rest, 10);
+                    if (*rest != '/') rt::fatal("QILIN_PRESS: %s: <first>-<last>/<every>", item.c_str());
+                    every = std::strtoull(rest + 1, &rest, 10);
+                    if (every < 20) rt::fatal("QILIN_PRESS: %s: presses at least 20 pictures apart", item.c_str());
+                }
+                for (uint64_t at2 = first; at2 <= last; at2 += every) out.push_back({n.button, name == "lt", name == "rt", at2});
+            }
                 found = true;
             }
         if (!found) rt::fatal("QILIN_PRESS: no button called %s", name.c_str());

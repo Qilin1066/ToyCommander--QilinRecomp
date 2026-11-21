@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -113,7 +114,13 @@ void once(bool& said, const char* what) {
 struct Renderer::Impl {
     Gpu& gpu;
     uint32_t scale;
-    Image colour{}, depth{};
+    struct Target {
+        Image colour;
+        bool ready = false;  // drawn into at least once: its contents are kept
+    };
+    std::map<uint32_t, Target> targets;  // by frame buffer address
+    Target* current = nullptr;
+    Image depth{};
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
@@ -193,14 +200,25 @@ struct Renderer::Impl {
         white.image = Image::create(gpu, 1, 1, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     }
 
-    void size_target(uint32_t width, uint32_t height) {
+    // The frame buffer's image (created, or created again at a new size: the
+    // display may still be showing the old one, so the device goes idle first).
+    Target& target(uint32_t key, uint32_t width, uint32_t height) {
         const uint32_t w = width * scale, h = height * scale;
-        if (colour.image && colour.width == w && colour.height == h) return;
-        wait();
-        colour.destroy(gpu), depth.destroy(gpu);
-        colour = Image::create(gpu, w, h, kColourFormat,
-                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        depth = Image::create(gpu, w, h, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+        Target& t = targets[key];
+        if (!t.colour.image || t.colour.width != w || t.colour.height != h) {
+            check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
+            t.colour.destroy(gpu);
+            t.colour = Image::create(gpu, w, h, kColourFormat,
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            t.ready = false;
+        }
+        if (!depth.image || depth.width < w || depth.height < h) {
+            check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
+            depth.destroy(gpu);
+            depth = Image::create(gpu, std::max(w, depth.width), std::max(h, depth.height), kDepthFormat,
+                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+        }
+        return t;
     }
 
     void wait() { check(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences"); }
@@ -373,6 +391,10 @@ struct Renderer::Impl {
         return t;
     }
 
+    static bool sane(const ta::Vertex& a) {
+        constexpr float kFar = 1e6f;  // pixels: far beyond any picture
+        return std::isfinite(a.z) && std::fabs(a.x) < kFar && std::fabs(a.y) < kFar && std::isfinite(a.u[0]) && std::isfinite(a.v[0]);
+    }
     static float clean_z(float z) { return z > 0.0f && std::isfinite(z) ? z : 1e-12f; }
 
     void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background) {
@@ -393,6 +415,13 @@ struct Renderer::Impl {
         const uint32_t cull = s.sprite || background ? 0u : cull_mode(s.isp);
         for (uint32_t i = 0; i + 2 < s.count; ++i) {
             const ta::Vertex* t[3] = {&v[i], &v[i + 1], &v[i + 2]};
+            // A vertex off in the infinite (or not a number) is the game's
+            // business on the console, where the hardware draws nothing of
+            // it; a GPU's rasteriser may not cope. Such triangles are dropped.
+            if (!sane(*t[0]) || !sane(*t[1]) || !sane(*t[2])) {
+                ++stats.dropped;
+                continue;
+            }
             if (cull >= 2) {
                 // The triangle's signed area on the screen; a strip's odd triangles wind the other way.
                 float area = (t[1]->x - t[0]->x) * (t[2]->y - t[0]->y) - (t[2]->x - t[0]->x) * (t[1]->y - t[0]->y);
@@ -427,8 +456,10 @@ struct Renderer::Impl {
     Picture draw(const Source& src) {
         wait();
         ++frame;
-        stats.draws = stats.triangles = stats.culled = stats.uploads = 0;
-        size_target(src.width, src.height);
+        stats.draws = stats.triangles = stats.culled = stats.uploads = stats.dropped = 0;
+        Target& t = target(src.frame_buffer, src.width, src.height);
+        current = &t;
+        const Image& colour = t.colour;
         vertices.clear(), draws.clear(), uploads.clear(), upload_bytes.clear();
         if (frame == 1) {
             const uint32_t opaque_white = 0xFFFFFFFFu;
@@ -469,12 +500,13 @@ struct Renderer::Impl {
             vkCmdCopyBufferToImage(cmd, staging.buffer, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             qilin::host::transition(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
-        qilin::host::transition(cmd, colour.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        qilin::host::transition(cmd, colour.image, t.ready ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         qilin::host::transition(cmd, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
         VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         ca.imageView = colour.view;
         ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        ca.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        ca.loadOp = t.ready ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
         ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         ca.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
         VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -485,6 +517,10 @@ struct Renderer::Impl {
         da.clearValue.depthStencil = {0.0f, 0};  // the farthest: z = 1/w
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea = {{0, 0}, {colour.width, colour.height}};
+        // The clip, in the target's pixels.
+        const uint32_t x0 = std::min(src.clip_x0, src.width - 1) * scale, y0 = std::min(src.clip_y0, src.height - 1) * scale;
+        const uint32_t x1 = (std::min(src.clip_x1, src.width - 1) + 1) * scale, y1 = (std::min(src.clip_y1, src.height - 1) + 1) * scale;
+        const VkRect2D clip{{int32_t(x0), int32_t(y0)}, {x1 > x0 ? x1 - x0 : 1, y1 > y0 ? y1 - y0 : 1}};
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &ca;
@@ -492,7 +528,14 @@ struct Renderer::Impl {
         vkCmdBeginRendering(cmd, &ri);
         const VkViewport viewport{0.0f, 0.0f, float(colour.width), float(colour.height), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &ri.renderArea);
+        vkCmdSetScissor(cmd, 0, 1, &clip);
+        {
+            // The tiles this render covers start black (then the background plane).
+            VkClearAttachment clear{VK_IMAGE_ASPECT_COLOR_BIT, 0, {}};
+            clear.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            const VkClearRect rect{clip, 0, 1};
+            vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
+        }
         if (!draws.empty()) {
             const VkDeviceSize zero = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &zero);
@@ -516,11 +559,21 @@ struct Renderer::Impl {
         si.commandBufferInfoCount = 1;
         si.pCommandBufferInfos = &cbi;
         check(vkQueueSubmit2(gpu.queue, 1, &si, fence), "vkQueueSubmit2");
+        t.ready = true;
         return {colour.image, colour.view, colour.width, colour.height};
+    }
+
+    Picture picture(uint32_t key) const {
+        const auto it = targets.find(key);
+        if (it == targets.end() || !it->second.ready) return {};
+        const Image& c = it->second.colour;
+        return {c.image, c.view, c.width, c.height};
     }
 
     std::vector<uint8_t> read_back() {
         wait();
+        if (!current) return {};
+        const Image& colour = current->colour;
         Buffer out = Buffer::host_visible(gpu, VkDeviceSize{colour.width} * colour.height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         check(vkResetFences(gpu.device, 1, &fence), "vkResetFences");
         check(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer");
@@ -557,7 +610,8 @@ struct Renderer::Impl {
         vkDestroyPipelineLayout(gpu.device, layout, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, set_layout, nullptr);
         vertex_buffer.destroy(gpu), staging.destroy(gpu);
-        colour.destroy(gpu), depth.destroy(gpu);
+        for (auto& [k, t] : targets) t.colour.destroy(gpu);
+        depth.destroy(gpu);
         vkDestroyFence(gpu.device, fence, nullptr);
         vkDestroyCommandPool(gpu.device, pool, nullptr);
     }
@@ -567,6 +621,7 @@ Renderer::Renderer(Gpu& gpu, uint32_t scale) : impl_(std::make_unique<Impl>(gpu,
 Renderer::~Renderer() { impl_->destroy(); }
 Picture Renderer::draw(const Source& source) { return impl_->draw(source); }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
+Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }
 const Renderer::Stats& Renderer::stats() const { return impl_->stats; }
 
 }  // namespace toycommander::renderer

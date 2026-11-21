@@ -1,6 +1,7 @@
 // The port's screen: the window (or, headless, an image), the renderer, and
 // what joins them to the PowerVR2's registers. STARTRENDER draws the scene
-// the tile accelerator has taken and shows it.
+// the tile accelerator has taken into its frame buffer; the vertical blank
+// shows the frame buffer the display reads.
 #pragma once
 
 #include "maple.hpp"
@@ -13,8 +14,12 @@ namespace toycommander::video {
 // picture (default 60) there as frame_<number>.ppm.
 void start();
 
-// STARTRENDER: draws the scene and presents it.
+// STARTRENDER: draws the scene into its frame buffer.
 void render();
+
+// The vertical blank: shows the frame buffer the display reads, if anything
+// was drawn since the last one shown; and polls the window.
+void vblank();
 
 // The controls on a Maple port (0-3): port A is the host's first pad and the
 // keyboard (arrows the d-pad, Enter Start, Z A, X B, A X, S Y, Q and W the

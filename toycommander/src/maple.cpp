@@ -13,7 +13,7 @@
 // a word per function saying which of its controls exist, the region, the
 // connector's direction, a name, a licence string and its power draw. The
 // controller's word lists the standard pad's controls: A, B, X, Y, Start,
-// the d-pad, both triggers and the stick.
+// the d-pad, both triggers and the stick; its name is the standard pad's.
 #include "maple.hpp"
 
 #include <cstdio>
@@ -64,7 +64,10 @@ void device_info(uint32_t to, uint32_t recipient, uint32_t sender) {
     std::memcpy(info, words, 16);
     info[16] = 0xFF;  // every region
     info[17] = 0;     // the connector faces the cable's end
-    const char name[] = "Qilin port controller";
+    // The product name: games tell devices apart by it (Toy Racer compares it
+    // with "Dreamcast Controller" and "Racing Controller", the names its own
+    // boot file holds, and takes no input from a pad it doesn't recognise).
+    const char name[] = "Dreamcast Controller";
     std::memset(info + 18, ' ', 30 + 60);
     std::memcpy(info + 18, name, sizeof name - 1);
     const uint16_t standby = 430, max = 500;  // in 0.1 mA
@@ -78,7 +81,9 @@ void device_info(uint32_t to, uint32_t recipient, uint32_t sender) {
 void frame(uint32_t port, uint32_t header, uint32_t data_at, uint32_t to) {
     const uint32_t command = header & 0xFFu, recipient = (header >> 8) & 0xFFu, sender = (header >> 16) & 0xFFu;
     const Controls in = video::controls(port);
-    if (g_trace) std::fprintf(stderr, "maple: port %u command %u to %02X from %02X, %u words\n", port, command, recipient, sender, header >> 24);
+    if (g_trace)
+        std::fprintf(stderr, "maple: port %u command %u to %02X from %02X, %u words, reply at %08X, buttons %04X\n", port, command, recipient, sender,
+                     header >> 24, to, in.buttons);
     // Only the main unit (0x20 | the port's bits) is there, and only on a port with a pad.
     if (!in.connected || (recipient & 0x3Fu) != 0x20u) {
         rt::st32(to, 0xFFFFFFFFu);

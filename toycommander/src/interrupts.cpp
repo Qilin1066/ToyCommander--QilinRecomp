@@ -41,6 +41,7 @@ void raise_blanks() {
         raise_event(3);
         raise_event(4);
         maple::vblank();
+        video::vblank();
     }
 }
 
@@ -64,7 +65,6 @@ bool level4(rt::Context& c) {
 
 void service(rt::Context& c) {
     raise_blanks();
-    video::poll();
     rt::g_irq_waiting = false;
     const uint32_t handler = interrupt_handler(0x224u);
     for (int n = 0; n < 64 && level6_pending(); ++n) {

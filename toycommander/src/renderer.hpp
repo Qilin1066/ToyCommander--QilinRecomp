@@ -26,7 +26,14 @@ namespace toycommander::renderer {
 
 struct Source {
     const ta::Scene* scene = nullptr;
-    uint32_t width = 640, height = 480;  // the scene's size in the game's pixels
+    // The frame buffer drawn into: kept from render to render, as video
+    // memory is (a frame can be rendered in parts, each into its own
+    // rectangle), and known by its address in video memory.
+    uint32_t frame_buffer = 0;
+    uint32_t width = 640, height = 480;  // its size in the game's pixels
+    // The rectangle this render writes (the frame buffer clip, inclusive):
+    // cleared, then drawn; the rest of the frame buffer is kept.
+    uint32_t clip_x0 = 0, clip_y0 = 0, clip_x1 = 639, clip_y1 = 479;
     // The background plane, as a strip of four vertices (count 0: none; the
     // picture is cleared to black).
     ta::Strip background{};
@@ -58,11 +65,15 @@ public:
 
     Picture draw(const Source& source);
 
-    // For tests: the last picture's pixels, RGBA8.
+    // The frame buffer at an address as last drawn: null image if none has
+    // been drawn there.
+    Picture picture(uint32_t frame_buffer) const;
+
+    // The last frame buffer drawn, RGBA8 (tests, screenshots).
     std::vector<uint8_t> read_back();
 
     struct Stats {
-        uint32_t draws = 0, triangles = 0, culled = 0, textures = 0, uploads = 0;
+        uint32_t draws = 0, triangles = 0, culled = 0, textures = 0, uploads = 0, dropped = 0;
     };
     const Stats& stats() const;
 
