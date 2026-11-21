@@ -149,9 +149,13 @@ void gd_send_command(rt::Context& c) {
         if (command == kDmaRead) g_dma_end_pending = true;
         break;
     case kVersion: {
-        // gdFs reads the digits at 12, 14 and 15 of "GDC Version x.yz" into a
-        // word nothing else reads.
-        static constexpr char kText[] = "GDC Version 1.10";
+        // gdFs reads the digits at 12, 14 and 15 of "GDC Version x.yz" into
+        // its handle's word 11 as x << 16 | y << 8 | z. Above 0x10001 its
+        // multi-sector reads (0x8C0B21A4, 0x8C0B22B0, ...) take a second path
+        // that asks command 36 for the drive's state first; 1.00 keeps them on
+        // the first path, through the commands this file answers. Both are
+        // drives the library was written for.
+        static constexpr char kText[] = "GDC Version 1.00";
         const uint32_t to = rt::ld32(c.r[5]);
         for (uint32_t k = 0; k + 1 < sizeof kText; ++k) rt::st8(to + k, static_cast<uint8_t>(kText[k]));
         break;

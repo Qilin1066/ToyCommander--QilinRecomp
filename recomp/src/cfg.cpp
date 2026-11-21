@@ -63,6 +63,8 @@ bool meet(Regs& into, const Regs& from) {
     if (into.pr && into.pr != from.pr) into.pr.reset(), changed = true;
     if (const uint16_t e = into.entry_pr & from.entry_pr; e != into.entry_pr) into.entry_pr = e, changed = true;
     if (into.pr_is_entry && !from.pr_is_entry) into.pr_is_entry = false, changed = true;
+    if (into.sp && into.sp != from.sp) into.sp.reset(), into.pr_slot.reset(), changed = true;
+    if (into.pr_slot && into.pr_slot != from.pr_slot) into.pr_slot.reset(), changed = true;
     return changed;
 }
 
@@ -71,7 +73,56 @@ Regs cleared(const Regs& r) {
     Regs out;
     out.pr = r.pr;
     out.pr_is_entry = r.pr_is_entry;
+    out.sp = r.sp;
+    out.pr_slot = r.pr_slot;
     return out;
+}
+
+// The stack's part of an instruction: r15's offset from entry and the slot
+// holding the entry return address. Only pushes, pops, add #imm,r15 and
+// stores at a known offset are followed; anything else writing r15 forgets
+// both, and any other store through r15 forgets the slot. Returns whether
+// the instruction is lds.l @r15+,pr popping that slot.
+bool track_stack(const Insn& i, Regs& r) {
+    const sh4::Spec& s = sh4::spec(i.op);
+    const bool fpu_sized = (s.flags & sh4::kFpSz) != 0;
+    const uint32_t size = fpu_sized ? 0 : sh4::access_size(i);
+    auto forget = [&] { r.sp.reset(), r.pr_slot.reset(); };
+    auto store_at = [&](std::optional<int32_t> at, uint32_t bytes) {
+        if (!r.pr_slot) return;
+        if (!at || bytes == 0 || (*r.pr_slot < *at + int32_t(bytes) && *at < *r.pr_slot + 4)) r.pr_slot.reset();
+    };
+    bool restores = false;
+    for (sh4::Opnd o : s.operands) {
+        using enum sh4::Opnd;
+        if (o == at_dec_N && i.n() == 15) {
+            if (!r.sp || size == 0) return forget(), false;
+            *r.sp -= int32_t(size);
+            store_at(r.sp, size);
+            if (i.op == Op::stsl_pr && r.pr_is_entry) r.pr_slot = r.sp;
+            return false;
+        }
+        if ((o == at_inc_N && i.n() == 15) || (o == at_inc_M && i.m() == 15)) {
+            if (!r.sp || size == 0) return forget(), false;
+            restores = i.op == Op::ldsl_pr && r.pr_slot == r.sp;
+            *r.sp += int32_t(size);
+            if (r.pr_slot && *r.pr_slot < *r.sp) r.pr_slot.reset();  // popped: no longer on the stack
+            return restores;
+        }
+        if ((s.flags & sh4::kStore) && i.n() == 15 && (o == at_N || o == at_disp_N4 || o == at_r0_N)) {
+            std::optional<int32_t> at;
+            if (r.sp && o == at_N) at = *r.sp;
+            if (r.sp && o == at_disp_N4) at = *r.sp + int32_t(i.disp4() * 4);
+            store_at(at, size);
+        }
+    }
+    if (i.op == Op::add_imm && i.n() == 15) {
+        if (r.sp) *r.sp += i.imm_s();
+        if (r.sp && r.pr_slot && *r.pr_slot < *r.sp) r.pr_slot.reset();
+        return false;
+    }
+    if (gpr_written(i) & 0x8000u) forget();
+    return false;
 }
 
 // The result of a register-to-register or immediate integer operation whose
@@ -243,6 +294,7 @@ private:
     }
 
     void transfer(const Insn& i, uint32_t pc, Regs& r) {
+        const bool restores_entry_pr = track_stack(i, r);
         switch (i.op) {
         case Op::mov_imm:
             r[i.n()] = static_cast<uint32_t>(i.imm_s());
@@ -271,9 +323,10 @@ private:
             r.pr_is_entry = (r.entry_pr >> i.n()) & 1u;
             return;
         case Op::ldsl_pr:
-            // The epilogue's restore: what was saved isn't tracked.
+            // The epilogue's restore: the entry return address if it pops the
+            // slot the prologue pushed it to, otherwise not tracked.
             r.pr.reset();
-            r.pr_is_entry = false;
+            r.pr_is_entry = restores_entry_pr;
             r[i.n()].reset();
             r.entry_pr &= static_cast<uint16_t>(~(1u << i.n()));
             return;

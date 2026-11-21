@@ -136,6 +136,11 @@ struct RegConstants {
     std::optional<uint32_t> pr;  // a constant loaded into PR with lds
     uint16_t entry_pr = 0;       // registers holding the return address the function was entered with
     bool pr_is_entry = true;     // PR still holds that return address
+    // The stack: r15 as an offset from its value at entry, and where the
+    // entry return address was pushed (sts.l pr,@-r15), so that the
+    // epilogue's lds.l @r15+,pr is known to restore it.
+    std::optional<int32_t> sp = 0;
+    std::optional<int32_t> pr_slot;
     std::optional<uint32_t>& operator[](size_t i) { return r[i]; }
     const std::optional<uint32_t>& operator[](size_t i) const { return r[i]; }
     bool operator==(const RegConstants&) const = default;

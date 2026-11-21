@@ -635,6 +635,38 @@ void test_cfg_pr() {
     CHECK(successors(boot, f, kB + 0x0A) == std::vector<uint32_t>({kB + 0x0C}));
     CHECK(successors(boot, f, kB + 0x0E).empty());
 
+    // The entry PR pushed, a call, the push popped back, then a return
+    // through a copy (the engine's matrix code: 0x8C061AA0):
+    //   sts.l pr,@-r15 ; bsr g ; nop ; lds.l @r15+,pr ; sts pr,r2 ; jmp @r2 ; nop
+    // With the slot overwritten before the pop (mov.l r3,@r15), it is not.
+    const auto popped = [](uint16_t overwrite) {
+        return program({
+            0x4F22,     // 00  sts.l pr,@-r15
+            0xB005,     // 02  bsr 0x10
+            0x0009,     // 04   nop
+            overwrite,  // 06
+            0x4F26,     // 08  lds.l @r15+,pr
+            0x022A,     // 0A  sts pr,r2
+            0x422B,     // 0C  jmp @r2
+            0x0009,     // 0E   nop
+            0x000B, 0x0009,  // 10  g: rts ; nop
+        });
+    };
+    {
+        const BootFile b = popped(0x0009);
+        const Cfg cb = analyse(b);
+        const Function& h = cb.functions.at(kB);
+        CHECK(h.jmp_returns == std::vector<uint32_t>({kB + 0x0C}));
+        CHECK(h.indirect_jumps.empty());
+    }
+    {
+        const BootFile b = popped(0x2F32);  // mov.l r3,@r15
+        const Cfg cb = analyse(b);
+        const Function& h = cb.functions.at(kB);
+        CHECK(h.jmp_returns.empty());
+        CHECK(h.indirect_jumps == std::vector<uint32_t>({kB + 0x0C}));
+    }
+
     // A scratch register survives a call to a callee that doesn't write it.
     const auto with_leaf = [](uint16_t slot) {
         return program({
