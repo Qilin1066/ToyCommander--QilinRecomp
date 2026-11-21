@@ -14,6 +14,10 @@ Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `C
 ### Changed
 - **Graphics: Kamui 2 is lifted and the port replaces the hardware under it** (the PowerVR2's registers, the tile accelerator's parameter stream, video memory) rather than Kamui 2's API. Without symbols, telling Kamui 2's functions apart inside the interleaved middleware proved unreliable, and Kamui 2 is the code that knows how its own calls become hardware commands: the parameter stream it writes is a small, documented format to decode into Vulkan 1.3 draws. The interrupt registration (`0x8C085E16`) is the one Kamui 2 function replaced.
 - **The stop report ends with the guest call chain**, read from the return addresses saved on the stack; `QILIN_STACK=1` dumps the stack too.
+- **Three rules from ToyRacer--QilinRecomp's core**, which started from this one and found them on its boot file (`docs/recompiler-core.md`), each with unit and end-to-end tests:
+  - a `jmp` to a constant address that the function's other paths reach too is a far branch inside the function, lifted as a `goto`, not a tail call. `0x8C090B1C` has 6; two of its labels had been taken for functions, so the build has 4,305 functions and 2,932 lifted. Nothing else in the lifted code changes, and `qilin_run` stops where it did;
+  - a pointer guess is thrown out when a function with a compiled prologue contains it and nothing else supports it (none in this build);
+  - `bra` to itself, the code's fatal-error stop, is lifted as `rt::hang`, a stop of its own kind, not as an empty loop (one, at `0x8C087AD0`). `qilin cfg` counts branches by register, and its JSON lists them.
 
 ## [0.9.0] - 2026-11-21
 The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.

@@ -646,6 +646,72 @@ void test_cfg_pr() {
     CHECK(cc.functions.at(kB).indirect_calls == std::vector<uint32_t>({kB + 6}));
 }
 
+void test_cfg_long_functions() {
+    // A function too long for bra branches inside itself through a register:
+    //   mov.l label,r1 ; jmp @r1
+    // The label is reached by the function's other paths too, so the jmp is a
+    // branch, not a tail call, and the label's address in the literal pool
+    // (a pointer candidate until the function is known) is not a function.
+    const BootFile boot = program({
+        0x000B, 0x0009,                // 00  rts ; nop
+        lo(kB + 0x08), hi(kB + 0x08),  // 04  .long g
+        0x4F22,                        // 08  g: sts.l pr,@-r15
+        0x2448,                        // 0A  tst r4,r4
+        0x8902,                        // 0C  bt 0x14
+        0xD103,                        // 0E  mov.l 0x1C,r1
+        0x412B,                        // 10  jmp @r1
+        0x0009,                        // 12   nop
+        0xE001,                        // 14  mov #1,r0
+        0x4F26,                        // 16  label: lds.l @r15+,pr
+        0x000B, 0x0009,                // 18  rts ; nop
+        lo(kB + 0x16), hi(kB + 0x16),  // 1C  .long label
+    });
+    const Cfg cfg = analyse(boot);
+    CHECK(cfg.functions.size() == 2 && cfg.functions.contains(kB + 8) && !cfg.functions.contains(kB + 0x16));
+    if (cfg.functions.contains(kB + 8)) {
+        const Function& g = cfg.functions.at(kB + 8);
+        CHECK(g.tail_jumps.empty() && g.indirect_jumps.empty());
+        CHECK(g.computed_branches.size() == 1 && g.computed_branches.contains(kB + 0x10) &&
+              g.computed_branches.at(kB + 0x10) == kB + 0x16);
+        CHECK(std::ranges::binary_search(g.leaders, kB + 0x16));
+        CHECK(successors(boot, g, kB + 0x12) == std::vector<uint32_t>({kB + 0x16}));
+    }
+    CHECK(cfg.at(kB + 0x1C) == Kind::literal && cfg.at(kB + 0x16) == Kind::code);
+
+    // The same code where nothing jumps to the label, only a data word holds
+    // its address: the function still isn't allowed to run on into a
+    // candidate, so the guess at the label is tried, and then thrown out
+    // because the function with the prologue contains it.
+    const BootFile coincidence = program({
+        0x000B, 0x0009,                // 00  rts ; nop
+        lo(kB + 0x0E), hi(kB + 0x0E),  // 04  a data word that happens to hold 0x0E
+        0x4F22,                        // 08  g: sts.l pr,@-r15 (nothing refers to it)
+        0xE001,                        // 0A  mov #1,r0
+        0xE102,                        // 0C  mov #2,r1
+        0x4F26,                        // 0E  lds.l @r15+,pr
+        0x000B, 0x0009,                // 10  rts ; nop
+    });
+    const Cfg cc = analyse(coincidence);
+    CHECK(cc.functions.size() == 2 && cc.functions.contains(kB + 8) && !cc.functions.contains(kB + 0x0E));
+    CHECK(cc.functions.contains(kB + 8) && cc.functions.at(kB + 8).origin == Origin::orphan);
+    CHECK(has_rejected(cc, kB + 0x0E, Origin::pointer));
+    CHECK(cc.at(kB + 0x0E) == Kind::code && cc.owner[(0x0E) / 2] == kB + 8);
+
+    // A guess with a prologue of its own, or one something calls, stays.
+    const BootFile called = program({
+        0xB006, 0x0009,                // 00  bsr 0x10 ; nop
+        0x000B, 0x0009,                // 04  rts ; nop
+        0x4F22,                        // 08  g: sts.l pr,@-r15
+        0xE001,                        // 0A  mov #1,r0
+        0xE102,                        // 0C  mov #2,r1
+        0x0009,                        // 0E  nop
+        0x4F26,                        // 10  h: lds.l @r15+,pr (called from the entry)
+        0x000B, 0x0009,                // 12  rts ; nop
+    });
+    const Cfg kc = analyse(called);
+    CHECK(kc.functions.contains(kB + 0x10) && kc.functions.at(kB + 0x10).origin == Origin::call);
+}
+
 void test_fpmode() {
     using namespace fpscr;
     const auto sz = [](const KnownBits& b) { return b.known(kSZ) ? int((b.value & kSZ) != 0) : -1; };
@@ -987,6 +1053,7 @@ int main() {
     test_cfg_v03();
     test_hwaccess();
     test_cfg_pr();
+    test_cfg_long_functions();
     test_fpmode();
     test_gdrom();
     if (failures) {

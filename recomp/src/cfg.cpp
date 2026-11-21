@@ -124,6 +124,7 @@ bool is_prologue(uint16_t w) {
 
 struct Reject {
     std::string reason;
+    uint32_t ran_into = 0;  // where a guess ran on into known code or another candidate, if that is the reason
 };
 
 bool is_branch(const Insn& i) { return i.valid() && (sh4::spec(i.op).flags & sh4::kBranch); }
@@ -179,6 +180,31 @@ public:
             auto [pc, regs] = todo_.back();
             todo_.pop_back();
             walk(f, pc, regs);
+        }
+        // A jmp to a constant address that the function's other paths reach
+        // too is a far branch inside it, not a tail call: a function too long
+        // for `bra` to span branches with `mov.l label,rN ; jmp @rN`. (The
+        // label's address in the literal pool is a pointer candidate while
+        // the function is unknown: Analysis::find_evictions deals with that.)
+        for (bool again = true; again;) {
+            again = false;
+            for (auto it = f.tail_jumps.begin(); it != f.tail_jumps.end();) {
+                const auto [site, target] = *it;
+                if (sh4::decode(boot_.u16(site)).op != Op::jmp || target == entry || !state_.contains(target) ||
+                    unstable_.contains(site)) {
+                    ++it;
+                    continue;
+                }
+                it = f.tail_jumps.erase(it);
+                f.computed_branches[site] = target;
+                branch_to(target, cleared(state_.at(site)));
+                again = true;
+            }
+            while (!todo_.empty()) {
+                auto [pc, regs] = todo_.back();
+                todo_.pop_back();
+                walk(f, pc, regs);
+            }
         }
         for (const auto& [pc, st] : state_) f.insns.push_back(pc);
         for (const auto& [a, n] : literals_) f.literals.emplace_back(a, n);
@@ -331,9 +357,10 @@ private:
                 // can, which is why this only tests guesses.)
                 // (Following a branch into known code and on through it is fine.)
                 if (guess_ && sequential && cfg_.at(pc - 2) != Kind::code) {
-                    if (cfg_.at(pc) == Kind::code) throw Reject{std::format("it runs on into known code at {:08X}", pc)};
+                    if (cfg_.at(pc) == Kind::code)
+                        throw Reject{std::format("it runs on into known code at {:08X}", pc), pc};
                     if (cfg_.functions.contains(pc) || candidates_.contains(pc))
-                        throw Reject{std::format("it runs on into the start of another function at {:08X}", pc)};
+                        throw Reject{std::format("it runs on into the start of another function at {:08X}", pc), pc};
                 }
                 state_.emplace(pc, r);
             }
@@ -447,6 +474,12 @@ private:
                     return;
                 }
             }
+            // A jmp already found to be a far branch inside the function.
+            if (i.op == Op::jmp && f.computed_branches.contains(pc)) {
+                if (!target || *target != f.computed_branches.at(pc)) unstable_.insert(pc);
+                else branch_to(*target, r);
+                return;
+            }
             // jmp, or a braf with no table: a tail jump if the target is a constant.
             if (i.op == Op::jmp && resolved(f.tail_jumps)) return;
             if (std::ranges::find(f.indirect_jumps, pc) == f.indirect_jumps.end()) f.indirect_jumps.push_back(pc);
@@ -469,8 +502,9 @@ private:
 
 class Analysis {
 public:
-    Analysis(const BootFile& boot, std::span<const Region> regions, std::set<uint32_t> entries)
-        : boot_(boot), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_, scratch_) {
+    Analysis(const BootFile& boot, std::span<const Region> regions, std::set<uint32_t> entries,
+             const std::map<uint32_t, uint32_t>& banned)
+        : boot_(boot), banned_(banned), entries_(std::move(entries)), explorer_(boot, cfg_, candidates_, entries_, scratch_) {
         cfg_.base = boot.base();
         cfg_.kind.assign(boot.size() / 2, Kind::unknown);
         cfg_.owner.assign(boot.size() / 2, 0);
@@ -485,7 +519,15 @@ public:
         // Function pointers, until no new function turns up.
         for (;;) {
             const auto candidate = [&](uint32_t c) {
-                if (c % 2 == 0 && boot_.mapped(c, 2)) candidates_.insert(c);
+                if (c % 2 != 0 || !boot_.mapped(c, 2)) return;
+                if (const auto it = banned_.find(c); it != banned_.end()) {
+                    if (rejected_.insert(c).second)
+                        cfg_.rejected.push_back(
+                            {c, Origin::pointer,
+                             std::format("only a data word holds this address, and it is inside the function at {:08X}", it->second)});
+                    return;
+                }
+                candidates_.insert(c);
             };
             for (const auto& [entry, f] : cfg_.functions)
                 for (const auto& [a, n] : f.literals)
@@ -526,6 +568,7 @@ public:
                 added |= cfg_.functions.size() != before;
             }
         }
+        find_evictions();
         // Padding: zero or nop words between classified things, up to 16 bytes
         // of them (alignment), or any run of them that ends the image.
         for (uint32_t a = boot_.base(); a < boot_.end();) {
@@ -544,10 +587,40 @@ public:
         return std::move(cfg_);
     }
 
+    // Pointer guesses this pass showed to be wrong: entry -> the function it is inside.
+    const std::map<uint32_t, uint32_t>& evicted() const { return evicted_; }
+
 private:
     static bool is_padding(uint16_t w) { return w == 0x0000 || w == 0x0009; }
     size_t index(uint32_t a) const { return (a - boot_.base()) / 2; }
     Kind kind(uint32_t a) const { return cfg_.kind[index(a)]; }
+
+    // A data word can hold a code address by coincidence, and the code there
+    // can decode up to a return: the middle of a function nothing refers to,
+    // taken for a function. It shows when the real function is tried as a
+    // guess itself: it starts with a compiled prologue and runs straight on
+    // into the first guess, which compiled code never does into another function. Then
+    // the guess is the mistake, provided nothing else supports it: it has no
+    // prologue of its own, no literal pool holds its address, and nothing
+    // calls or jumps to it. The analysis is run again without it. (The
+    // commonest such word is a long function's own literal: the label of a
+    // far branch inside it.)
+    void find_evictions() {
+        if (ran_into_.empty()) return;
+        std::set<uint32_t> referenced;
+        for (const auto& [entry, f] : cfg_.functions) {
+            for (const auto& [a, n] : f.literals)
+                if (n == 4) referenced.insert(boot_.u32(a));
+            for (const auto& [site, target] : f.calls) referenced.insert(target);
+            for (const auto& [site, target] : f.tail_jumps) referenced.insert(target);
+        }
+        for (const auto& [guess, into] : ran_into_) {
+            const auto it = cfg_.functions.find(into);
+            if (it == cfg_.functions.end() || it->second.origin != Origin::pointer) continue;
+            if (!is_prologue(boot_.u16(guess)) || is_prologue(boot_.u16(into)) || referenced.contains(into)) continue;
+            evicted_.emplace(into, guess);
+        }
+    }
 
     void add(uint32_t entry, Origin origin) {
         // A guess that failed once fails again: try each only once.
@@ -576,6 +649,7 @@ private:
                 commit(std::move(f));
             } catch (const Reject& r) {
                 if (rejected_.insert(entry).second) cfg_.rejected.push_back({entry, origin, r.reason});
+                if ((origin == Origin::orphan || origin == Origin::pointer) && r.ran_into) ran_into_.emplace_back(entry, r.ran_into);
             }
         }
     }
@@ -638,6 +712,9 @@ private:
     }
 
     const BootFile& boot_;
+    const std::map<uint32_t, uint32_t>& banned_;
+    std::map<uint32_t, uint32_t> evicted_;
+    std::vector<std::pair<uint32_t, uint32_t>> ran_into_;  // a rejected guess, the address it ran on into
     Cfg cfg_;
     std::set<uint32_t> candidates_;
     std::set<uint32_t> entries_;
@@ -652,10 +729,18 @@ private:
 // Tail calls found in one pass (a branch to a function found later) change
 // what the functions before them contain, so the analysis runs again with
 // every entry found so far until the set of entries no longer changes.
+// A pass that shows a pointer guess to be wrong (find_evictions) is run again
+// without it.
 Cfg analyse(const BootFile& boot, std::span<const Region> regions) {
     std::set<uint32_t> entries;
+    std::map<uint32_t, uint32_t> banned;
     for (int pass = 0;; ++pass) {
-        Cfg cfg = Analysis(boot, regions, entries).run();
+        Analysis analysis(boot, regions, entries, banned);
+        Cfg cfg = analysis.run();
+        if (!analysis.evicted().empty() && pass < 8) {
+            for (const auto& [guess, inside] : analysis.evicted()) banned.emplace(guess, inside), entries.erase(guess);
+            continue;
+        }
         // Keep every entry seen: one dropped in a later pass would make it oscillate.
         const size_t before = entries.size();
         for (const auto& [entry, f] : cfg.functions) entries.insert(entry);
@@ -712,6 +797,8 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
         // A call made by loading PR by hand continues where PR points; any
         // other jmp (a tail call, an indirect jump, a return) leaves.
         if (auto it = f.call_returns.find(at); it != f.call_returns.end()) add(it->second);
+        // A far branch inside the function.
+        if (auto it = f.computed_branches.find(at); it != f.computed_branches.end()) add(it->second);
         break;
     default: break;  // trapa never reaches here
     }

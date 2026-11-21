@@ -49,7 +49,9 @@ struct Context {
 struct Stop {
     // Unregistered: a replaced function the runtime has no native code for
     // yet (pc: the function, value: where it was called from).
-    enum Kind : uint32_t { Memory, BadJump, BadReturn, Trap, NotLifted, Unsupported, Unregistered } kind;
+    // Hang: the guest code stops itself on purpose, with a branch to itself
+    // (how the game ends on a fatal error): reported, not spun on.
+    enum Kind : uint32_t { Memory, BadJump, BadReturn, Trap, NotLifted, Unsupported, Unregistered, Hang } kind;
     uint32_t pc;     // guest address of the instruction (or function)
     uint32_t value;  // the address or value involved
 };
@@ -61,6 +63,11 @@ struct Stop {
 [[noreturn]] inline void unsupported(uint32_t pc, uint32_t value) { throw Stop{Stop::Unsupported, pc, value}; }
 // A function of a replaced library with no native code yet; `from`: the return address it was called with.
 [[noreturn]] inline void unregistered(uint32_t fn, uint32_t from) { throw Stop{Stop::Unregistered, fn, from}; }
+// `bra` to itself: an endless loop with nothing in it but its delay slot.
+// Always throws, but is defined out of line (dispatch.cpp) and not marked
+// noreturn: a compiler that saw that would call everything after a call to
+// the lifted function unreachable, which warnings-as-errors rejects (MSVC).
+void hang(uint32_t pc);
 
 // Guest memory: the 4 GB guest address space at a host base, `base + addr`.
 // The runtime maps RAM at each address the game uses for it (0x8C000000 and

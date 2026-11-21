@@ -27,6 +27,7 @@ const char* kind_name(Stop::Kind k) {
     case Stop::NotLifted: return "a function that isn't lifted";
     case Stop::Unsupported: return "an operation the port doesn't support";
     case Stop::Unregistered: return "a replaced function with no native code yet";
+    case Stop::Hang: return "the game's own stop: a branch to itself (its fatal-error loop)";
     }
     return "?";
 }

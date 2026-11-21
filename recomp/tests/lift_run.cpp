@@ -181,6 +181,11 @@ void test_control() {
         c.r[4] = 40;
         if (run(c, "prcall")) eq("prcall", c.r[4], 42);
     }
+    for (uint32_t x : {0u, 7u}) {
+        Context c = fresh();
+        c.r[4] = x;
+        if (run(c, "farjmp")) eq("far branch inside a function", c.r[0], x == 0 ? 41u : 42u);
+    }
 }
 
 void expect_stop(const char* name, Stop::Kind kind, uint32_t pc, uint32_t value) {
@@ -200,6 +205,7 @@ void test_stops() {
     // badjump: its jsr is the instruction after sts.l and mov.l.
     expect_stop("badjump", Stop::BadJump, g_p.entry.at("badjump") + 4, T::kBase + 0x4000);
     expect_stop("fpu", Stop::NotLifted, g_p.entry.at("fpu"), 0);
+    expect_stop("hang", Stop::Hang, g_p.entry.at("hang"), 0);
     // An indirect call to an address with no function.
     Context c = fresh();
     try {

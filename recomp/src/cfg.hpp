@@ -76,7 +76,10 @@ struct Function {
     std::vector<uint32_t> indirect_calls;     // jsr/bsrf sites with no constant target
     std::vector<uint32_t> indirect_jumps;     // jmp/braf sites with no constant target and no table
     std::vector<Switch> switches;
-    std::map<uint32_t, uint32_t> computed_branches;  // braf site -> target, where the offset is a constant
+    // Branches inside the function through a register that holds a constant:
+    // braf site -> target, and jmp site -> target where the function is too
+    // long for bra to span (`mov.l label,rN ; jmp @rN`).
+    std::map<uint32_t, uint32_t> computed_branches;
     std::map<uint32_t, uint32_t> call_returns;       // jmp site that is a call (PR loaded by hand) -> where it returns
     std::vector<uint32_t> jmp_returns;               // jmp sites that return (through the saved return address), sorted
     std::vector<std::string> problems;        // for `qilin suspects`

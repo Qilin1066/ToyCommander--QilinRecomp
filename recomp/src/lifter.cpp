@@ -577,6 +577,16 @@ private:
         }
         case Op::bra:
             with_slot();
+            if (tail == f_.tail_jumps.end() && i.branch_target(pc) == pc) {
+                // A branch to itself: the code stops here for good (the
+                // game's fatal-error stop). An empty endless loop is also
+                // not something C++ lets a compiler keep: stop, loudly.
+                line("@OUT@");
+                line("(void)c;");
+                line(std::format("rt::hang({});", hex(pc)));
+                line("return;");
+                break;
+            }
             jump_to(i.branch_target(pc));
             break;
         case Op::braf: {
@@ -623,10 +633,15 @@ private:
             const bool to_return = std::ranges::binary_search(f_.jmp_returns, pc);
             const auto back = f_.call_returns.find(pc);
             const auto direct = f_.calls.find(pc);
-            if (tail == f_.tail_jumps.end() && !(back != f_.call_returns.end() && direct != f_.calls.end()))
+            const auto far_branch = f_.computed_branches.find(pc);
+            if (tail == f_.tail_jumps.end() && far_branch == f_.computed_branches.end() &&
+                !(back != f_.call_returns.end() && direct != f_.calls.end()))
                 line(std::format("const uint32_t target = {};", R(i.n())));
             with_slot();
-            if (to_return) {
+            if (far_branch != f_.computed_branches.end()) {
+                // A far branch inside the function (`mov.l label,rN ; jmp @rN`).
+                line(go(far_branch->second));
+            } else if (to_return) {
                 line("c.ret = target;");
                 line("@OUT@");
                 line("return;");

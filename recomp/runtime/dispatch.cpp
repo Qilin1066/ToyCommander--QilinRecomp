@@ -18,4 +18,6 @@ void call(Context& c, uint32_t target, uint32_t from) {
     it->fn(c);
 }
 
+void hang(uint32_t pc) { throw Stop{Stop::Hang, pc, 0}; }
+
 }  // namespace qilin::rt

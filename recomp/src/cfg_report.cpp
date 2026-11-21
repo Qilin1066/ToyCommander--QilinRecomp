@@ -10,7 +10,7 @@ namespace qilin {
 
 std::string summary(const Cfg& cfg) {
     std::array<size_t, 5> by_origin{};
-    size_t insns = 0, calls = 0, tails = 0, ind_calls = 0, ind_jumps = 0, problems = 0, pr_calls = 0, jmp_returns = 0;
+    size_t insns = 0, calls = 0, tails = 0, ind_calls = 0, ind_jumps = 0, problems = 0, pr_calls = 0, jmp_returns = 0, computed = 0;
     std::map<uint32_t, size_t> switches;  // braf -> cases: shared code reaches a switch from several functions
     for (const auto& [entry, f] : cfg.functions) {
         ++by_origin[static_cast<size_t>(f.origin)];
@@ -20,6 +20,7 @@ std::string summary(const Cfg& cfg) {
         ind_calls += f.indirect_calls.size();
         ind_jumps += f.indirect_jumps.size();
         pr_calls += f.call_returns.size();
+        computed += f.computed_branches.size();
         jmp_returns += f.jmp_returns.size();
         for (const Switch& sw : f.switches) switches[sw.braf] = sw.targets.size();
         problems += !f.problems.empty();
@@ -40,6 +41,7 @@ std::string summary(const Cfg& cfg) {
     s += std::format("data bytes           {} (the layout's data regions)\n", words[5] * 2);
     s += std::format("direct calls         {}\n", calls);
     s += std::format("constant tail jumps  {}\n", tails);
+    s += std::format("branches by register {} (a constant in the register: braf, or jmp inside a long function)\n", computed);
     s += std::format("calls by loaded PR   {} (jmp with PR set by hand; returns where PR points)\n", pr_calls);
     s += std::format("returns by jmp       {} (through the saved return address)\n", jmp_returns);
     s += std::format("indirect calls       {}\n", ind_calls);
@@ -70,6 +72,8 @@ std::string to_json(const Cfg& cfg) {
                          f.insns.size());
         s += ",\"calls\":" + list(f.calls, [&](const auto& c) { return std::format("[{},{}]", hex(c.first), hex(c.second)); });
         s += ",\"tail_jumps\":" + list(f.tail_jumps, [&](const auto& c) { return std::format("[{},{}]", hex(c.first), hex(c.second)); });
+        s += ",\"computed_branches\":" +
+             list(f.computed_branches, [&](const auto& c) { return std::format("[{},{}]", hex(c.first), hex(c.second)); });
         s += ",\"call_returns\":" + list(f.call_returns, [&](const auto& c) { return std::format("[{},{}]", hex(c.first), hex(c.second)); });
         s += ",\"jmp_returns\":" + list(f.jmp_returns, hex);
         s += ",\"indirect_calls\":" + list(f.indirect_calls, hex);
