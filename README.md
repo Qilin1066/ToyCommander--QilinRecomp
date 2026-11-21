@@ -8,14 +8,15 @@ It has the same requirements and scope as its sister projects, [GBTGhoulies-Qili
 
 ## Status
 
-**It doesn't run the game yet.** v0.1.0 is the start of the recompiler core (roadmap steps 1 and 2).
+**It doesn't run the game yet.** The recompiler core is being built (roadmap steps 1 and 2).
 
 | Piece | State |
 |---|---|
 | GD-ROM reader (Redump-style `.cue` + `.bin` dumps: tracks, bootstrap, files) | ✅ reads the supported disc; `qilin disc`, `qilin extract` |
 | Boot file loader (`1GUTH.BIN`, recognised by SHA-256) | ✅ |
 | SH-4 decoder (all 209 instruction forms, table-driven) | ✅ agrees with Capstone on every word of the 16-bit encoding space, the reviewed differences listed |
-| Function discovery, control flow, coverage of every byte | to do (next) |
+| Function discovery and control flow (recursive descent, constants through literal pools, switch tables, function pointers, unreferenced code) | ✅ 4,234 functions, 21 switch tables; 86.7% of the boot file classified as code, literal pool, jump table or padding. The rest is data still to be described (`qilin coverage`) |
+| Library boundaries, data segments, FPSCR modes | to do (next) |
 | Lifter, SH-4 → C++ | to do |
 | Differential test of every lifted function | to do |
 | Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | to do |
@@ -56,6 +57,9 @@ build/qilin extract path/to/game.cue --out extracted # its files and IP.BIN, to 
 build/qilin info    extracted/files/1GUTH.BIN        # SHA-256, supported build, load address (JSON); exit 3 if unsupported
 build/qilin insns   extracted/files/1GUTH.BIN -o listing.txt   # every word decoded (a linear sweep)
 build/qilin profile extracted/files/1GUTH.BIN        # instruction counts
+build/qilin cfg      extracted/files/1GUTH.BIN --json cfg.json  # function discovery and control flow
+build/qilin coverage extracted/files/1GUTH.BIN [--list]         # every byte: code, literal, jump table, padding or unknown (exit 3 while any is unknown)
+build/qilin suspects extracted/files/1GUTH.BIN        # functions with problems, for review
 ```
 
 The dump is a Redump-style one: a `.cue` beside one `.bin` per track.
@@ -71,7 +75,7 @@ python3 tools/check/verify_decoder.py --qilin build/qilin
 
 | Path | What |
 |---|---|
-| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `main` (the `qilin` CLI) |
+| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `main` (the `qilin` CLI) |
 | `recomp/tests/` | Unit tests on synthetic data, so they need no game files |
 | `tools/check/` | The decoder cross-check against Capstone |
 | `docs/` | Design notes: the roadmap and targets, the disc, the recompiler core, prior art, naming |

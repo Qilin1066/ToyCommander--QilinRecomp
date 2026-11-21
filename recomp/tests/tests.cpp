@@ -1,10 +1,12 @@
-// Self-contained tests: SHA-256, the boot file loader, the SH-4 decoder and
-// the GD-ROM reader on a synthetic disc. No game files required (runs in CI).
+// Self-contained tests: SHA-256, the boot file loader, the SH-4 decoder,
+// function discovery on synthetic programs and the GD-ROM reader on a
+// synthetic disc. No game files required (runs in CI).
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <print>
 #include <span>
 #include <stdexcept>
@@ -13,6 +15,7 @@
 #include <vector>
 
 #include "bootfile.hpp"
+#include "cfg.hpp"
 #include "decoder.hpp"
 #include "gdrom.hpp"
 #include "sha256.hpp"
@@ -231,6 +234,240 @@ void test_decoder() {
     CHECK(threw);
 }
 
+// ---------------------------------------------------------------- function discovery
+
+constexpr uint32_t kB = kBootFileBase;
+
+// A boot file from 16-bit words (a 32-bit value is two: low half first).
+BootFile program(std::initializer_list<uint16_t> words) {
+    std::vector<uint8_t> file;
+    for (uint16_t w : words) {
+        file.push_back(static_cast<uint8_t>(w));
+        file.push_back(static_cast<uint8_t>(w >> 8));
+    }
+    return *BootFile::parse(file);
+}
+constexpr uint16_t lo(uint32_t v) { return static_cast<uint16_t>(v); }
+constexpr uint16_t hi(uint32_t v) { return static_cast<uint16_t>(v >> 16); }
+
+bool has_rejected(const Cfg& cfg, uint32_t address, Origin origin) {
+    return std::ranges::any_of(cfg.rejected, [&](const Rejected& r) { return r.address == address && r.origin == origin; });
+}
+
+void test_gpr_written() {
+    const auto w = [](uint16_t word) { return gpr_written(sh4::decode(word)); };
+    CHECK(w(0x68F6) == ((1u << 15) | (1u << 8)));  // mov.l @r15+,r8
+    CHECK(w(0x2F86) == (1u << 15));                // mov.l r8,@-r15
+    CHECK(w(0x3210) == 0);                         // cmp/eq r1,r2
+    CHECK(w(0x321C) == (1u << 2));                 // add r1,r2
+    CHECK(w(0x430B) == 0);                         // jsr @r3
+    CHECK(w(0x8424) == 1);                         // mov.b @(4,r2),r0
+    CHECK(w(0x4510) == (1u << 5));                 // dt r5
+    CHECK(w(0xF129) == (1u << 2));                 // fmov @r2+,fr1
+    CHECK(w(0x0302) == (1u << 3));                 // stc sr,r3
+    CHECK(w(0xC801) == 0);                         // tst #1,r0
+    CHECK(w(0xC901) == 1);                         // and #1,r0
+    CHECK(w(0x012F) == ((1u << 1) | (1u << 2)));   // mac.l @r2+,@r1+
+    CHECK(w(0x0429) == (1u << 4));                 // movt r4
+    CHECK(w(0x2122) == 0);                         // mov.l r2,@r1
+    CHECK(w(0x0323) == 0);                         // braf r3
+    CHECK(w(0xC701) == 1);                         // mova
+}
+
+void test_cfg_calls() {
+    // A call through a literal-pool address and a bsr.
+    const BootFile boot = program({
+        0xD103,  // 00  mov.l 0x10,r1
+        0x410B,  // 02  jsr @r1
+        0x0009,  // 04   nop
+        0xB007,  // 06  bsr 0x18
+        0x0009,  // 08   nop
+        0x000B,  // 0A  rts
+        0x0009,  // 0C   nop
+        0x0009,  // 0E  (alignment)
+        lo(kB + 0x14), hi(kB + 0x14),  // 10  .long f1
+        0x000B,  // 14  f1: rts
+        0x0009,  // 16   nop
+        0xE005,  // 18  f2: mov #5,r0
+        0x000B,  // 1A  rts
+        0x0009,  // 1C   nop
+    });
+    const Cfg cfg = analyse(boot);
+    CHECK(cfg.functions.size() == 3);
+    CHECK(cfg.functions.contains(kB) && cfg.functions.contains(kB + 0x14) && cfg.functions.contains(kB + 0x18));
+    if (cfg.functions.size() != 3) return;
+    const Function& f = cfg.functions.at(kB);
+    CHECK(f.origin == Origin::entry && f.insns.size() == 7 && f.end() == kB + 0x0E);
+    CHECK(f.calls.size() == 2 && f.calls.at(kB + 2) == kB + 0x14 && f.calls.at(kB + 6) == kB + 0x18);
+    CHECK(f.indirect_calls.empty() && f.problems.empty());
+    CHECK(f.literals.size() == 1 && f.literals[0] == std::pair(kB + 0x10, 4u));
+    CHECK(cfg.functions.at(kB + 0x14).origin == Origin::call);
+    CHECK(cfg.at(kB + 0x0E) == Kind::padding && cfg.at(kB + 0x10) == Kind::literal && cfg.at(kB + 0x12) == Kind::literal);
+    CHECK(cfg.at(kB + 0x0C) == Kind::code && cfg.at(kB + 0x18) == Kind::code);
+    CHECK(cfg.owner[0x18 / 2] == kB + 0x18 && cfg.rejected.empty());
+    uint32_t unknown = 1;
+    CHECK(coverage(cfg, boot, true, unknown).contains("code") && unknown == 0);
+    CHECK(summary(cfg).contains("functions            3"));
+    CHECK(to_json(cfg).contains("\"entry\":\"8C010018\",\"origin\":\"call\""));
+    CHECK(suspects(cfg) == "0 suspects\n");
+}
+
+void test_cfg_switch() {
+    // SHC's switch: a bound, a table of 16-bit offsets, braf.
+    const BootFile boot = program({
+        0xE103,  // 00  mov #3,r1
+        0x3012,  // 02  cmp/hs r1,r0
+        0x890B,  // 04  bt 0x1E
+        0x4000,  // 06  shll r0
+        0x6103,  // 08  mov r0,r1
+        0xC702,  // 0A  mova 0x14,r0
+        0x001D,  // 0C  mov.w @(r0,r1),r0
+        0x0023,  // 0E  braf r0
+        0x0009,  // 10   nop
+        0x0000,  // 12  (alignment)
+        0x0008, 0x000C, 0x0008,  // 14  .word 0x1A-0x12, 0x1E-0x12, 0x1A-0x12
+        0x000B,  // 1A  rts
+        0xE001,  // 1C   mov #1,r0
+        0x000B,  // 1E  rts
+        0xE002,  // 20   mov #2,r0
+    });
+    const Cfg cfg = analyse(boot);
+    CHECK(cfg.functions.size() == 1 && cfg.rejected.empty());
+    const Function& f = cfg.functions.at(kB);
+    CHECK(f.switches.size() == 1 && f.indirect_jumps.empty() && f.problems.empty());
+    if (f.switches.size() == 1) {
+        const Switch& sw = f.switches[0];
+        CHECK(sw.braf == kB + 0x0E && sw.table == kB + 0x14);
+        CHECK(sw.targets == std::vector<uint32_t>({kB + 0x1A, kB + 0x1E, kB + 0x1A}));
+    }
+    CHECK(f.leaders == std::vector<uint32_t>({kB + 0x1A, kB + 0x1E}));
+    CHECK(cfg.at(kB + 0x12) == Kind::padding && cfg.at(kB + 0x14) == Kind::jump_table && cfg.at(kB + 0x18) == Kind::jump_table);
+    CHECK(cfg.at(kB + 0x20) == Kind::code);
+
+    // Without the bound there is no table to trust: an indirect jump, reported.
+    const BootFile loose = program({0xC701, 0x001D, 0x0023, 0x0009, 0x0008, 0x0008});
+    const Cfg lc = analyse(loose);
+    CHECK(lc.functions.at(kB).switches.empty() && lc.functions.at(kB).indirect_jumps == std::vector<uint32_t>({kB + 4}));
+    CHECK(suspects(lc).contains("an indirect jump"));
+}
+
+void test_cfg_join() {
+    // r1 holds one function on one path and another on the other: the call
+    // through it is not resolved.
+    const BootFile boot = program({
+        0x8902,  // 00  bt 0x08
+        0xD104,  // 02  mov.l 0x14,r1
+        0xA001,  // 04  bra 0x0A
+        0x0009,  // 06   nop
+        0xD103,  // 08  mov.l 0x18,r1
+        0x410B,  // 0A  jsr @r1
+        0x0009,  // 0C   nop
+        0x000B,  // 0E  rts
+        0x0009,  // 10   nop
+        0x0009,  // 12  (alignment)
+        lo(kB + 0x20), hi(kB + 0x20),  // 14
+        lo(kB + 0x24), hi(kB + 0x24),  // 18
+        0x0009, 0x0009,  // 1C
+        0x000B, 0x0009,  // 20  A: rts
+        0x000B, 0x0009,  // 24  B: rts
+    });
+    const Cfg cfg = analyse(boot);
+    const Function& f = cfg.functions.at(kB);
+    CHECK(f.calls.empty() && f.indirect_calls == std::vector<uint32_t>({kB + 0x0A}));
+    // Both are still found, as addresses in the literal pool.
+    CHECK(cfg.functions.size() == 3);
+    CHECK(cfg.functions.contains(kB + 0x20) && cfg.functions.at(kB + 0x20).origin == Origin::pointer);
+    CHECK(cfg.functions.contains(kB + 0x24));
+
+    // The same constant on both paths is resolved.
+    const BootFile same = program({
+        0x8902, 0xD104, 0xA001, 0x0009, 0xD103, 0x410B, 0x0009, 0x000B, 0x0009, 0x0009,
+        lo(kB + 0x20), hi(kB + 0x20), lo(kB + 0x20), hi(kB + 0x20), 0x0009, 0x0009, 0x000B, 0x0009,
+    });
+    const Cfg sc = analyse(same);
+    CHECK(sc.functions.at(kB).calls.size() == 1 && sc.functions.at(kB).calls.at(kB + 0x0A) == kB + 0x20);
+    CHECK(sc.functions.at(kB + 0x20).origin == Origin::call);
+}
+
+void test_cfg_guesses() {
+    // Data holding a function's address, the address of something that isn't
+    // code, and a value that isn't an address.
+    const BootFile boot = program({
+        0x000B, 0x0009,                // 00  rts
+        lo(kB + 0x10), hi(kB + 0x10),  // 04  .long f
+        lo(kB + 0x18), hi(kB + 0x18),  // 08  .long (zeros)
+        0x5678, 0x1234,                // 0C
+        0xE001, 0x000B, 0x0009,        // 10  f: mov #1,r0 ; rts ; nop
+        0x0009,                        // 16
+        0x0000, 0x0000,                // 18
+    });
+    const Cfg cfg = analyse(boot);
+    CHECK(cfg.functions.size() == 2 && cfg.functions.contains(kB + 0x10));
+    CHECK(cfg.functions.at(kB + 0x10).origin == Origin::pointer);
+    CHECK(has_rejected(cfg, kB + 0x18, Origin::pointer));
+    CHECK(cfg.at(kB + 0x04) == Kind::unknown && cfg.at(kB + 0x0E) == Kind::unknown);
+    CHECK(cfg.at(kB + 0x16) == Kind::padding && cfg.at(kB + 0x1A) == Kind::padding);
+    uint32_t unknown = 0;
+    (void)coverage(cfg, boot, false, unknown);
+    CHECK(unknown == 12);
+
+    // Bytes a branch skips that happen to decode are not a function: they
+    // would run on into the code after them.
+    const BootFile island = program({
+        0xA002, 0x0009,  // 00  bra 0x08
+        0xE000, 0xE000,  // 04  (data: decodes as mov #0,r0)
+        0x000B, 0x0009,  // 08  rts
+    });
+    const Cfg ic = analyse(island);
+    CHECK(ic.functions.size() == 1 && ic.at(kB + 4) == Kind::unknown && has_rejected(ic, kB + 4, Origin::orphan));
+
+    // Unreferenced code after a function is kept, marked as an orphan.
+    const BootFile orphan = program({0x000B, 0x0009, 0xE001, 0x000B, 0x0009});
+    const Cfg oc = analyse(orphan);
+    CHECK(oc.functions.size() == 2 && oc.functions.at(kB + 4).origin == Origin::orphan);
+
+    // A guess that calls something that isn't code is not kept either.
+    const BootFile caller = program({
+        0x000B, 0x0009,  // 00  rts
+        0xB002, 0x0009,  // 04  bsr 0x0C
+        0x000B, 0x0009,  // 08  rts
+        0x0000, 0x0000,  // 0C
+    });
+    const Cfg cc = analyse(caller);
+    CHECK(cc.functions.size() == 1 && has_rejected(cc, kB + 4, Origin::orphan));
+}
+
+void test_cfg_rejects() {
+    // A call to something with a branch in a delay slot: not kept, and reported.
+    const BootFile boot = program({
+        0xB002, 0x0009,  // 00  bsr 0x08
+        0x000B, 0x0009,  // 04  rts
+        0x000B, 0xA000,  // 08  rts ; bra (in the slot)
+    });
+    const Cfg cfg = analyse(boot);
+    CHECK(cfg.functions.size() == 1 && has_rejected(cfg, kB + 8, Origin::call));
+    CHECK(cfg.rejected.size() == 1);
+    CHECK(suspects(cfg).contains("8C010008 (call target, not kept)") && suspects(cfg).contains("1 suspects"));
+
+    // An entry point that isn't code leaves nothing, and says why.
+    const Cfg none = analyse(program({0x0000, 0x0000}));
+    CHECK(none.functions.empty() && has_rejected(none, kB, Origin::entry));
+    // Running off the end of the image.
+    const Cfg off = analyse(program({0xE001, 0xE002}));
+    CHECK(off.functions.empty() && off.rejected.size() == 1 && off.rejected[0].reason.contains("outside the image"));
+    // A branch landing in a delay slot is kept and reported.
+    const Cfg slot = analyse(program({
+        0x8901,  // 00  bt 0x06
+        0x0009,  // 02  nop
+        0x000B,  // 04  rts
+        0xE001,  // 06   mov #1,r0   (the slot, and a branch target)
+        0x000B,  // 08  rts
+        0x0009,  // 0A   nop
+    }));
+    CHECK(slot.functions.size() == 1 && slot.functions.at(kB).insns.size() == 6);
+    CHECK(slot.functions.at(kB).problems.size() == 1 && suspects(slot).contains("lands in a delay slot"));
+}
+
 // ---------------------------------------------------------------- GD-ROM
 
 // A synthetic GD-ROM dump in a scratch folder: tracks 1 (data) and 2 (audio)
@@ -441,6 +678,12 @@ int main() {
     test_sha256();
     test_bootfile();
     test_decoder();
+    test_gpr_written();
+    test_cfg_calls();
+    test_cfg_switch();
+    test_cfg_join();
+    test_cfg_guesses();
+    test_cfg_rejects();
     test_gdrom();
     if (failures) {
         std::println(stderr, "{} check(s) failed", failures);

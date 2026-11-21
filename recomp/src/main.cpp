@@ -9,6 +9,11 @@
 //   qilin disasm  [--pc addr] [-o out.txt]    all 65,536 words decoded at one address
 //                                             (for the cross-check of the whole encoding space)
 //   qilin profile <1GUTH.BIN>                 instruction counts of the linear sweep
+//   qilin cfg     <1GUTH.BIN> [--json out.json]
+//                                             function discovery and control flow, summary
+//   qilin coverage <1GUTH.BIN> [--list]       every byte: code, literal pool, jump table, padding
+//                                             or unknown (exit 3 while any byte is unknown)
+//   qilin suspects <1GUTH.BIN>                functions with problems, for review
 //
 // Listings are one line per word: address, word, text ("8c010014 d005 mov.l 0x8c01002c,r0").
 // Exit status is non-zero on any error; nothing fails silently.
@@ -27,6 +32,7 @@
 #include <vector>
 
 #include "bootfile.hpp"
+#include "cfg.hpp"
 #include "decoder.hpp"
 #include "gdrom.hpp"
 
@@ -52,6 +58,9 @@ int usage() {
                "  qilin insns   <1GUTH.BIN> [-o out.txt]\n"
                "  qilin disasm  [--pc addr] [-o out.txt]\n"
                "  qilin profile <1GUTH.BIN>\n"
+               "  qilin cfg     <1GUTH.BIN> [--json out.json]\n"
+               "  qilin coverage <1GUTH.BIN> [--list]\n"
+               "  qilin suspects <1GUTH.BIN>\n"
                "  qilin --version\n");
     return 2;
 }
@@ -210,9 +219,34 @@ int cmd_profile(const std::string& path) {
     return 0;
 }
 
+int cmd_cfg(const std::string& path, const std::optional<std::string>& json) {
+    const BootFile boot = load_boot(path);
+    const Cfg cfg = analyse(boot);
+    if (json) {
+        Out out(json);
+        std::print(out.get(), "{}", to_json(cfg));
+        out.close();
+    }
+    std::print("{}", summary(cfg));
+    return 0;
+}
+
+int cmd_coverage(const std::string& path, bool list) {
+    const BootFile boot = load_boot(path);
+    uint32_t unknown = 0;
+    std::print("{}", coverage(analyse(boot), boot, list, unknown));
+    return unknown ? 3 : 0;
+}
+
+int cmd_suspects(const std::string& path) {
+    std::print("{}", suspects(analyse(load_boot(path))));
+    return 0;
+}
+
 int run(int argc, char** argv) {
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
+    bool list = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         const auto value = [&](std::optional<std::string>& into) {
@@ -226,6 +260,7 @@ int run(int argc, char** argv) {
         else if (a == "--json") value(json);
         else if (a == "--out") value(out_dir);
         else if (a == "--pc") value(pc);
+        else if (a == "--list") list = true;
         else if (a.starts_with("-")) throw Failure{std::format("unknown option {}", a)};
         else pos.emplace_back(a);
     }
@@ -243,6 +278,9 @@ int run(int argc, char** argv) {
     if (command == "info") return cmd_info(input(), json);
     if (command == "insns") return cmd_insns(input(), out);
     if (command == "profile") return cmd_profile(input());
+    if (command == "cfg") return cmd_cfg(input(), json);
+    if (command == "coverage") return cmd_coverage(input(), list);
+    if (command == "suspects") return cmd_suspects(input());
     if (command == "disasm") {
         if (pos.size() != 1) throw Failure{"disasm takes no file"};
         return cmd_disasm(pc ? parse_address(*pc) : kBootFileBase, out);

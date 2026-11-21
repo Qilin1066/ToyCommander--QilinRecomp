@@ -4,6 +4,18 @@ All notable changes to this project are recorded here, in the format of [Keep a 
 
 Versions are `vX.Y.Z`; the number lives only in `project(... VERSION ...)` in `CMakeLists.txt`. While the recompiler and runtime are being built, a minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be the first build that plays the game.
 
+## [0.2.0] - 2026-11-21
+Function discovery: the boot file's code found and every byte of it classified.
+
+### Added
+- **Function discovery and control flow** (`recomp/src/cfg.*`, `qilin cfg`): recursive descent from the entry point with register constants tracked through literal pools, `mova`, immediates and copies, as a dataflow that keeps a constant across a join only if every path agrees; SHC's `braf` switch tables with their bounds; delay slots; function pointers from literal pools and data; unreferenced code in the gaps ("orphans"). Guessed entries are kept only if all they reach decodes, all they call does too, and they don't run on into known code. On the supported build: 4,234 functions (1 entry, 2,341 call targets, 208 tail-jump targets, 900 from pointers, 784 orphans), 11,911 direct calls resolved, 21 switch tables with 718 cases.
+- **`qilin coverage`:** every 16-bit word as code, literal, jump table, padding or unknown; exits 3 while anything is unknown. Today 86.7% is classified (code 77.18%, literal pools 9.05%); the rest is data still to be described, 69,002 bytes of it one block between the code and the libraries.
+- **`qilin suspects`:** functions with problems and call targets that aren't code. Its first findings are in `docs/recompiler-core.md`: the development system's debugger hooks (a word outside the decoder's instruction set, called from two functions), two hand-written copy routines that branch into a delay slot, and the 146 indirect jumps without a table.
+- **Tests:** function discovery on thirteen synthetic programs, and the registers instructions write.
+
+### Changed
+- `docs/disc-analysis.md`: the boot file's layout from function discovery replaces the guess from invalid-word density.
+
 ## [0.1.0] - 2026-11-21
 The project starts, on the sister projects' architecture and requirements: our own SH-4 → C++23 recompiler, Sega's libraries replaced natively, Vulkan 1.3 only. The first pieces are the disc reader, the boot file loader and an SH-4 decoder checked against Capstone over the whole encoding space.
 
