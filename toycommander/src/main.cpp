@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 
+#include "aica.hpp"
 #include "boot.hpp"
 #include "chain.hpp"
 #include "bootfile.hpp"
@@ -72,6 +73,7 @@ int main(int argc, char** argv) {
     toycommander::insert_disc(*disc);
     toycommander::map_pvr();
     toycommander::ta::map();
+    toycommander::map_aica();
     toycommander::map_sh4_peripherals();
     toycommander::start_interrupts();
 
