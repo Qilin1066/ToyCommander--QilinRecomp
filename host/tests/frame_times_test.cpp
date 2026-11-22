@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 using qilin::host::FrameTimes;
 
@@ -55,6 +56,43 @@ int main() {
     check(audio_rate_ratio(80, 40) > 1.0 && near(audio_rate_ratio(80, 40), 1.004), "sound over target");
     check(audio_rate_ratio(0, 40) < 1.0 && near(audio_rate_ratio(0, 40), 0.996), "sound under target");
     check(near(audio_rate_ratio(1000, 40), 1.005) && near(audio_rate_ratio(-1000, 40), 0.995), "sound speed bounded");
+
+    // The sound queue itself (frames of left and right; 40 aimed for, 80 the cap).
+    {
+        using qilin::host::AudioQueue;
+        AudioQueue q(40, 80);
+        std::vector<int16_t> in(400), out(400);
+        for (size_t i = 0; i < in.size(); ++i) in[i] = static_cast<int16_t>(i);
+        bool dry = false;
+        // Nothing plays until the target's worth has gathered.
+        check(q.push(in.data(), 30) == 0 && q.pull(out.data(), 10, dry) == 0 && !dry && !q.playing(), "sound waits for its cushion");
+        check(q.push(in.data() + 60, 10) == 0 && q.pull(out.data(), 10, dry) == 10 && !dry && q.playing(), "sound starts at the target");
+        check(out[0] == 0 && out[1] == 1 && out[19] == 19 && q.size() == 30, "sound comes out oldest first");
+        // Steady: 5 in, 5 out, nothing lost and nothing dry.
+        size_t dropped = 0, dries = 0;
+        for (int i = 0; i < 1000; ++i) {
+            dropped += q.push(in.data(), 5);
+            q.pull(out.data(), 5, dry);
+            dries += dry;
+        }
+        check(dropped == 0 && dries == 0 && q.size() == 30, "a steady sound queue keeps its length");
+        // The device stops for a while (a dropout): the queue passes the cap once and comes back
+        // to the target, instead of staying that much longer.
+        dropped = 0;
+        for (int i = 0; i < 20; ++i) dropped += q.push(in.data(), 5);
+        check(dropped == 90 && q.size() == 40, "sound over the cap is dropped to the target");
+        // The game stops for a while: the queue runs dry once, plays nothing until the cushion is
+        // back, and a burst that catches up is cut to the target.
+        size_t got = 0;
+        dries = 0;
+        for (int i = 0; i < 20; ++i) got += q.pull(out.data(), 5, dry), dries += dry;
+        check(dries == 1 && !q.playing() && q.size() == 0, "the sound queue runs dry once");
+        check(q.push(in.data(), 20) == 0 && q.pull(out.data(), 5, dry) == 0 && !dry, "after a gap, the cushion first");
+        dropped = 0;
+        for (int i = 0; i < 20; ++i) dropped += q.push(in.data(), 5);
+        check(q.size() <= 80 && dropped > 0 && q.pull(out.data(), 5, dry) == 5, "a catching-up burst is cut to the target");
+        (void)got;
+    }
 
     if (failures) return EXIT_FAILURE;
     std::puts("frame_times_test: ok");

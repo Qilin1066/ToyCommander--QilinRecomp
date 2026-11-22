@@ -121,6 +121,12 @@ bool Menu::take_controls_changed() {
 bool Menu::handle(const void* event) {
     const SDL_Event& e = *static_cast<const SDL_Event*>(event);
     if (!ok_) return false;
+    // Another window has the keyboard: what it types isn't the menu's.
+    if (!display_.focused() && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                                e.type == SDL_EVENT_MOUSE_BUTTON_UP || e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_WHEEL ||
+                                e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP ||
+                                e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION || e.type == SDL_EVENT_TEXT_INPUT))
+        return false;
     // Looking at the picture: any key or button brings the menu back.
     if (peek_ && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)) {
         peek_ = false;
@@ -361,6 +367,10 @@ void Menu::controls_page() {
     }
     SDL_free(ids);
     ImGui::Checkbox("Rumble", &s_.rumble);
+    int strength = int(s_.rumble_strength);
+    ImGui::BeginDisabled(!s_.rumble);
+    if (ImGui::SliderInt("Rumble strength", &strength, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) s_.rumble_strength = unsigned(strength);
+    ImGui::EndDisabled();
 
     ImGui::SeparatorText("The Dreamcast controller (a pad's left stick and triggers work its own in full)");
     ImGuiIO& io = ImGui::GetIO();
@@ -501,6 +511,21 @@ void Menu::display_page() {
     ImGui::TextDisabled("The GPU's work grows with the square: 8x is 64 times the pixels of 1x, 4x 16 times.");
     if (s_.scale != 0 && s_.scale != running_scale_)
         ImGui::TextDisabled("The game runs at %ux now: %ux from the next start.", running_scale_, s_.scale);
+    const float limit = display_.gpu().max_anisotropy;
+    ImGui::BeginDisabled(limit <= 1.0f);
+    static constexpr unsigned kAniso[] = {1, 2, 4, 8, 16};
+    std::snprintf(label, sizeof label, s_.anisotropy == 1 ? "%ux (the console's)" : "%ux", s_.anisotropy);
+    if (ImGui::BeginCombo("Anisotropic filtering", label)) {
+        for (unsigned a : kAniso) {
+            if (float(a) > limit && a > 1) continue;
+            std::snprintf(label, sizeof label, a == 1 ? "%ux (the console's)" : "%ux", a);
+            if (ImGui::Selectable(label, s_.anisotropy == a)) s_.anisotropy = a;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (limit <= 1.0f) ImGui::TextDisabled("This GPU has no anisotropic filtering.");
+    else ImGui::TextDisabled("For the textures the game filters; its unfiltered ones stay as they are.");
 
     ImGui::SeparatorText("Graphics device");
     const std::string chosen = s_.gpu.empty() ? "The best one" : s_.gpu;
@@ -524,6 +549,11 @@ void Menu::game_page() {
     static constexpr const char* kSound[] = {"Mono", "Stereo"};
     int sound = s_.stereo ? 1 : 0;
     if (ImGui::Combo("Sound", &sound, kSound, 2)) s_.stereo = sound == 1;
+
+    ImGui::SeparatorText("Sound");
+    int volume = int(s_.volume);
+    if (ImGui::SliderInt("Volume", &volume, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) s_.volume = unsigned(volume);
+    ImGui::Checkbox("Mute when another window has the keyboard", &s_.mute_unfocused);
 
     ImGui::SeparatorText("About");
     ImGui::TextWrapped(QILIN_APP_TITLE " QilinRecomp %s: a static recompilation, the game's own code compiled for this computer.",

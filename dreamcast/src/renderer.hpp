@@ -91,6 +91,10 @@ public:
 
     Picture draw(const Source& source);
 
+    // Anisotropic filtering for the textures the game filters (bilinear or
+    // trilinear): 1 (none, the console's) to the device's limit.
+    void set_anisotropy(unsigned level);
+
     // The frame buffer at an address as last drawn: null image if none has
     // been drawn there.
     Picture picture(uint32_t frame_buffer) const;

@@ -56,5 +56,7 @@ void set_tick(void (*tick)());
 
 // The mixer thread and the host's output; after attach.
 void start();
+// The output's volume, 0 to 100, or muted (the settings).
+void set_volume(unsigned percent, bool muted);
 
 }  // namespace dreamcast::sound

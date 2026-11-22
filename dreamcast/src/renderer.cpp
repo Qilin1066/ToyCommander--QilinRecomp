@@ -195,6 +195,7 @@ struct Renderer::Impl {
     uint64_t frame = 0;
     Stats stats{};
     bool said_modifier_clip = false;
+    float anisotropy = 1.0f;  // for filtered textures (set_anisotropy)
     bool cheap = false;    // SHADOW_SCALE's bit 8: cheap shadows; clear, the two-volume mode
     bool opaque_volumes = false;  // this scene has opaque modifier volumes, drawn into the stencil
     bool translucent_volumes = false;  // and translucent modifier volumes for translucent polygons
@@ -410,6 +411,9 @@ struct Renderer::Impl {
         sci.addressModeU = mode(bits & 8u, bits & 32u);
         sci.addressModeV = mode(bits & 4u, bits & 16u);
         sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        // Anisotropic filtering, an enhancement: only where the game filters
+        // (a point-sampled texture keeps its hard texels).
+        if ((bits & 3u) && anisotropy > 1.0f) sci.anisotropyEnable = VK_TRUE, sci.maxAnisotropy = anisotropy;
         VkSampler s;
         check(vkCreateSampler(gpu.device, &sci, nullptr, &s), "vkCreateSampler");
         samplers.emplace(bits, s);
@@ -933,6 +937,19 @@ struct Renderer::Impl {
         return {colour.image, colour.view, colour.width, colour.height};
     }
 
+    void set_anisotropy(unsigned level) {
+        const float a = std::clamp(float(level), 1.0f, std::max(gpu.max_anisotropy, 1.0f));
+        if (a == anisotropy) return;
+        // The samplers, and the texture descriptor sets that name them, are made again as they're used.
+        wait();
+        for (auto& [k, s] : samplers) vkDestroySampler(gpu.device, s, nullptr);
+        samplers.clear();
+        for (auto& [k, t] : textures) t.sets.clear();
+        white.sets.clear();
+        for (VkDescriptorPool p : set_pools) check(vkResetDescriptorPool(gpu.device, p, 0), "vkResetDescriptorPool");
+        anisotropy = a;
+    }
+
     Picture picture(uint32_t key) const {
         const auto it = targets.find(key);
         if (it == targets.end() || !it->second.ready) return {};
@@ -992,6 +1009,7 @@ struct Renderer::Impl {
 Renderer::Renderer(Gpu& gpu, uint32_t scale) : impl_(std::make_unique<Impl>(gpu, std::max(scale, 1u))) { impl_->create(); }
 Renderer::~Renderer() { impl_->destroy(); }
 Picture Renderer::draw(const Source& source) { return impl_->draw(source); }
+void Renderer::set_anisotropy(unsigned level) { impl_->set_anisotropy(level); }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }
 const Renderer::Stats& Renderer::stats() const { return impl_->stats; }

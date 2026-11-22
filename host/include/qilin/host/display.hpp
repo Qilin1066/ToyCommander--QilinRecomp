@@ -63,6 +63,9 @@ public:
     // gamepad connected is opened, in the order they come. Not connected:
     // all zero.
     PadState pad_state(unsigned player) const;
+    // Whether the window has the keyboard. While another window has it, the
+    // buttons, keys and pads all read as nothing held, and no pad rumbles.
+    bool focused() const;
     // If the mouse moved over the window since the last poll: where, over the
     // picture last presented, -1 to 1 each way (y up; beyond 1 off the picture).
     bool mouse_moved(float& x, float& y) const;

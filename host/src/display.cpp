@@ -569,6 +569,14 @@ bool Display::poll() {
             d.moved = true;
         }
     }
+    // Another window has the keyboard: the game sees nothing held, and no pad rumbles.
+    if (!focused()) {
+        d.buttons = 0, d.stick_x = d.stick_y = 0, d.moved = false;
+        d.raw = {};
+        for (Display::PadState& r : d.more_raw) r = {};
+        for (unsigned k = 0; k <= Impl::kMorePads; ++k) rumble(k, 0.0f);
+        return true;
+    }
     uint32_t b = 0;
     if (SDL_Gamepad* p = d.pad) {
         struct Map {
@@ -653,11 +661,12 @@ int Display::key_code(const char* name) const {
     return sc == SDL_SCANCODE_UNKNOWN ? -1 : static_cast<int>(sc);
 }
 bool Display::key_down(int code) const {
-    if (impl_->window == nullptr || code < 0) return false;
+    if (impl_->window == nullptr || code < 0 || !focused()) return false;
     int n = 0;
     const bool* k = SDL_GetKeyboardState(&n);
     return code < n && k[code];
 }
+bool Display::focused() const { return impl_->window && (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_INPUT_FOCUS); }
 Display::PadState Display::pad_state() const { return impl_->raw; }
 Display::PadState Display::pad_state(unsigned player) const {
     if (player == 0) return impl_->raw;
@@ -685,6 +694,7 @@ void Display::rumble(unsigned player, float strength) {
     Impl& d = *impl_;
     if (player > Impl::kMorePads) return;
     SDL_Gamepad* p = player == 0 ? d.pad : d.more[player - 1];
+    if (!focused()) strength = 0.0f;  // not while another window has the keyboard
     const uint16_t level = static_cast<uint16_t>(std::clamp(strength, 0.0f, 1.0f) * 65535.0f + 0.5f);
     if (!p || level == d.rumble_level[player]) return;
     d.rumble_level[player] = level;

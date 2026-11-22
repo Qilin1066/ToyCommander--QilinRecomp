@@ -208,6 +208,13 @@ int renderer() {
     // Drawn again with nothing changed: no new upload.
     r.draw(src);
     expect(r.stats().uploads == 0, "renderer: a texture unchanged isn't uploaded again");
+    // Anisotropic filtering on: the samplers and the sets naming them are made
+    // again, and the picture is the same (the quad faces the screen).
+    r.set_anisotropy(16);
+    r.draw(src);
+    const std::vector<uint8_t> again = r.read_back();
+    expect(again == px, "renderer: the same picture with anisotropic filtering on");
+    r.set_anisotropy(1);
 
     // Cheap shadows: an opaque red quad over everything and a translucent
     // green one over the left quarter, both taking shadows (PCW bit 7); one

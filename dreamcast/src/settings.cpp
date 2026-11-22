@@ -152,10 +152,10 @@ Settings default_settings() {
 }
 
 bool apply_preset(Settings& s, const std::string& name) {
-    if (name == "original" || name == "low-end") {  // the console's picture: 1x (a Pi 4 does exactly this)
-        s.scale = 1, s.vsync = true;
-    } else if (name == "desktop") {  // a desktop GPU: the screen's height (auto)
-        s.scale = 0, s.vsync = true;
+    if (name == "original" || name == "low-end") {  // the console's picture: 1x, its filtering (a Pi 4 does exactly this)
+        s.scale = 1, s.anisotropy = 1, s.vsync = true;
+    } else if (name == "desktop") {  // a desktop GPU: the screen's height (auto), 16x anisotropic
+        s.scale = 0, s.anisotropy = 16, s.vsync = true;
     } else {
         return false;
     }
@@ -241,6 +241,9 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
             } else if (name == "internal_scale") {
                 if (value == "auto" || value == "0") s.scale = 0;  // auto
                 else if (!number(s.scale, 1, 8)) return false;
+            } else if (name == "anisotropy") {
+                if (!number(s.anisotropy, 1, 16)) return false;
+                if (s.anisotropy & (s.anisotropy - 1)) return fail("anisotropy is 1, 2, 4, 8 or 16");
             } else if (name == "vsync") {
                 if (!boolean(s.vsync)) return false;
             } else if (name == "gpu") {
@@ -253,7 +256,7 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
                 if (!boolean(s.variable_refresh)) return false;
             } else {
                 return fail("[display] has no '" + name +
-                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale vsync gpu "
+                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale anisotropy vsync gpu "
                             "performance_overlay match_refresh variable_refresh)");
             }
             continue;
@@ -275,10 +278,22 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
             if (!boolean(s.rumble)) return false;
             continue;
         }
+        if (name == "rumble_strength") {
+            if (!number(s.rumble_strength, 0, 100)) return false;
+            continue;
+        }
+        if (name == "volume") {
+            if (!number(s.volume, 0, 100)) return false;
+            continue;
+        }
+        if (name == "mute_unfocused") {
+            if (!boolean(s.mute_unfocused)) return false;
+            continue;
+        }
         unsigned c = 0;
         while (c < kControlCount && name != kControlNames[c]) ++c;
         if (c == kControlCount)
-            return fail("'" + name + "' isn't a control (a b x y start up down left right stick_up stick_down stick_left stick_right l r) or rumble");
+            return fail("'" + name + "' isn't a control (a b x y start up down left right stick_up stick_down stick_left stick_right l r), rumble, rumble_strength, volume or mute_unfocused");
         if (seen[c]) return fail("'" + name + "' is set twice");
         seen[c] = true;
         s.controls[c].clear();
@@ -322,6 +337,9 @@ std::string settings_text(const Settings& s) {
         "# fills the screen line for line). Higher is sharper and needs a faster GPU: the GPU's work grows with\n"
         "# the square (8x is 64 times 1x's pixels). QILIN_SCALE in the environment overrides it.\n"
         "internal_scale = " + (s.scale ? std::to_string(s.scale) : std::string("auto")) + "\n"
+        "# Anisotropic filtering of the textures the game filters: 1 (the console's), 2, 4, 8 or 16. Sharper\n"
+        "# textures at a grazing angle (a floor far off); the game's unfiltered textures stay as they are.\n"
+        "anisotropy = " + std::to_string(s.anisotropy) + "\n"
         "# vsync: true, no tearing; false, the lowest latency.\n"
         "vsync = " + b(s.vsync) + "\n"
         "# The graphics device, by name (empty: the best one).\n"
@@ -338,6 +356,11 @@ std::string settings_text(const Settings& s) {
         "[controls]\n"
         "# The Jump Pack's rumble, on the controller.\n"
         "rumble = " + b(s.rumble) + "\n"
+        "# How strong it is, 0 to 100.\n"
+        "rumble_strength = " + std::to_string(s.rumble_strength) + "\n"
+        "# The sound's volume, 0 to 100, and whether it's silent while another window has the keyboard.\n"
+        "volume = " + std::to_string(s.volume) + "\n"
+        "mute_unfocused = " + b(s.mute_unfocused) + "\n"
         "# The Dreamcast controller on port A. A gamepad's left stick and triggers work its stick and triggers\n"
         "# in full; the inputs below press its buttons, its stick all the way or its triggers all the way in.\n"
         "# Each control takes a list of inputs, separated by commas; an empty list leaves it unused. The\n"

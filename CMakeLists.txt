@@ -255,6 +255,13 @@ if(QILIN_HOST)
     target_include_directories(qilin_frame_times_test PRIVATE host/include)
     target_link_libraries(qilin_frame_times_test PRIVATE qilin_warnings)
     add_test(NAME qilin_frame_times_test COMMAND qilin_frame_times_test)
+
+    # The sound queue under SDL's real callbacks (its dummy device), with
+    # pushes, rate changes and volume from other threads (from Punch-Out's).
+    add_executable(qilin_audio_callback_test host/tests/audio_callback_test.cpp)
+    target_link_libraries(qilin_audio_callback_test PRIVATE qilin_host_toycommander SDL3::SDL3-static qilin_warnings)
+    add_test(NAME qilin_audio_callback_test COMMAND qilin_audio_callback_test)
+    set_tests_properties(qilin_audio_callback_test PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy;SDL_AUDIO_DEVICE_SAMPLE_FRAMES=128" TIMEOUT 25)
 endif()
 
 # ---- The games: each built only from the player's own boot file ----
