@@ -275,7 +275,7 @@ option(QILIN_PLAYER_KIT "Build the player kits (tools/player-kit): each game's l
 set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp)
 set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
                             dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
-                            dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp)
+                            dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp dreamcast/src/flash.cpp)
 set(QILIN_GAME_FILES main game boot natives heap gdrom_bios chain rtc threads)
 if(QILIN_HOST)
     find_package(Threads REQUIRED)

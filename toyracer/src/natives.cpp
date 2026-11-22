@@ -4,10 +4,13 @@
 #include "natives.hpp"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <map>
 
+#include "flash.hpp"
 #include "heap.hpp"
 #include "pvr.hpp"
 #include "sh4.hpp"
@@ -292,6 +295,82 @@ void shinobi_set_sound_mode(rt::Context& c) {
     c.r[0] = 0;
 }
 
+// 0x8C0D0AF8, 0x8C0D0B0C, 0x8C0D0B20, 0x8C0D0B34: the boot ROM's flash calls
+// 0 to 3 (each sets r7 to its number and jumps through the vector at
+// 0x8C0000B8): a partition's place and size into r5's two words, a read,
+// a write (programming bits) and a partition's erasure, over the port's
+// flash memory (dreamcast/src/flash.cpp). Shinobi's flash functions above
+// them are lifted; what they expect of the results is read from them: -1
+// for a failed read, the bytes written, 0 for an erasure.
+void flash_info(rt::Context& c) {
+    uint32_t offset = 0, size = 0;
+    if (!flash::info(c.r[4], offset, size)) {
+        c.r[0] = 0xFFFFFFFFu;
+        return;
+    }
+    rt::st32(c.r[5], offset), rt::st32(c.r[5] + 4, size);
+    c.r[0] = 0;
+}
+void flash_read(rt::Context& c) { c.r[0] = static_cast<uint32_t>(flash::read(c.r[4], c.r[5], c.r[6])); }
+void flash_write(rt::Context& c) { c.r[0] = static_cast<uint32_t>(flash::write(c.r[4], c.r[5], c.r[6])); }
+void flash_delete(rt::Context& c) { c.r[0] = static_cast<uint32_t>(flash::erase(c.r[4])); }
+
+// 0x8C0C7D04: loads the disc's Dream Passport loader (sg_dpldr.bin, through
+// gdFs) to 0x8C008300 and jumps to it: the web browser, another program,
+// for the game's online features. The port runs only this game: stop.
+void run_browser(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C7D04u, 0x8C008300u}; }
+
+// 0x8C0D0C80, the boot ROM exit (Shinobi's last step out): with the bytes
+// at 0x8C0080FC and 0x8C0080FE both 1 it jumps to a program loaded at
+// 0x8C008300, else into the boot ROM's menu (the vector at 0x8C0000E0). The
+// port has no other program and no boot ROM: the first stops, the second
+// quits, as Toy Commander's exit does.
+void boot_rom_exit(rt::Context&) {
+    if (rt::ld8(0x8C0080FCu) == 1 && rt::ld8(0x8C0080FEu) == 1) throw rt::Stop{rt::Stop::Unsupported, 0x8C0D0C80u, 0x8C008300u};
+    rt::log("the game exited to the console's menu (the boot ROM exit, 0x8C0D0C80)");
+    std::fflush(nullptr);
+    std::_Exit(0);
+}
+
+// 0x8C0CAB2E, part of Shinobi's shutdown: with interrupts masked, the
+// expansion device's shutdown (0x8C0D0EC8), the Maple driver's (0x8C0D2E92,
+// lifted), then the operand cache cleared. The port has no expansion device
+// and no cache: only the Maple driver's shutdown is run.
+void shinobi_peripherals_exit(rt::Context& c) {
+    const uint32_t sr = c.sr;
+    c.sr |= 0xF0u;
+    rt::call_guest(c, 0x8C0D2E92u);
+    c.sr = sr;
+}
+
+// 0x8C0D0F40: whether the extension check (0x8C0D0DC0) found nothing of
+// kind r4 (1 to 4: the words at 0x8C0FD390, 0x8C0FD394, 0x8C0FD398,
+// 0x8C0FD39C): 0 if that word is -1, else -1; -2 for another kind or before
+// the check ran (0x8C0FD384 not -1). The code's own answer, read from the
+// same words.
+void extension_absent(rt::Context& c) {
+    static constexpr uint32_t kWords[] = {0x8C0FD390u, 0x8C0FD394u, 0x8C0FD398u, 0x8C0FD39Cu};
+    if (rt::ld32(0x8C0FD384u) != 0xFFFFFFFFu || c.r[4] < 1 || c.r[4] > 4) {
+        c.r[0] = 0xFFFFFFFEu;
+        return;
+    }
+    c.r[0] = rt::ld32(kWords[c.r[4] - 1]) == 0xFFFFFFFFu ? 0 : 0xFFFFFFFFu;
+}
+
+// 0x8C0D116C: the modem library's three handlers (0x8C0D11FE, 0x8C0D1348,
+// 0x8C0D13C0) into its table at 0x8C1C7818, which it returns; as the code.
+void modem_handlers(rt::Context& c) {
+    rt::st32(0x8C1C7818u, 0x8C0D11FEu), rt::st32(0x8C1C781Cu, 0x8C0D1348u), rt::st32(0x8C1C7820u, 0x8C0D13C0u);
+    c.r[0] = c.r[4] = 0x8C1C7818u;
+}
+
+// 0x8C0D1184: the modem library's poll, which does nothing while its active
+// byte (0x8C1C7828) is 0. Only the modem's start-up sets it, and the port
+// has no modem: if it is ever set, stop.
+void modem_poll(rt::Context&) {
+    if (rt::ld8(0x8C1C7828u) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0D1184u, 0x8C1C7828u};
+}
+
 // 0x8C0A1DD4: a debugger's break (0x003B), which the engine's checks call
 // when one fails; 0x8C0A1DE0: trapa #2, the C runtime's default handler. On
 // a console without a debugger either ends the game: stop, naming the caller.
@@ -472,6 +551,16 @@ const rt::Provided kNatives[] = {
     {0x8C0C5F5Au, "shinobi_rtc_exit", shinobi_rtc_exit},
     {0x8C0C78F6u, "shinobi_clear_work_area", shinobi_clear_work_area},
     {0x8C0C7900u, "shinobi_set_sound_mode", shinobi_set_sound_mode},
+    {0x8C0D0AF8u, "flash_info", flash_info},
+    {0x8C0D0B0Cu, "flash_read", flash_read},
+    {0x8C0D0B20u, "flash_write", flash_write},
+    {0x8C0D0B34u, "flash_delete", flash_delete},
+    {0x8C0C7D04u, "run_browser", run_browser},
+    {0x8C0D0C80u, "boot_rom_exit", boot_rom_exit},
+    {0x8C0CAB2Eu, "shinobi_peripherals_exit", shinobi_peripherals_exit},
+    {0x8C0D0F40u, "extension_absent", extension_absent},
+    {0x8C0D116Cu, "modem_handlers", modem_handlers},
+    {0x8C0D1184u, "modem_poll", modem_poll},
     {0x8C0A1DD4u, "debug_break", debug_break},
     {0x8C0A1DE0u, "debug_trap", debug_trap},
     {0x8C09A900u, "debug_adapter_check", debug_adapter_check},
