@@ -44,6 +44,8 @@ struct Gpu {
     bool dynamic_blend = false, dynamic_logic = false;
     // Anisotropic texture filtering: the most the device allows, or 1 without it.
     float max_anisotropy = 1.0f;
+    // Stores and atomics in fragment shaders (the renderer's per-pixel lists), where the device has them.
+    bool fragment_atomics = false;
     // Every device here that could draw (the settings menu offers them).
     std::vector<std::string> usable;
 
@@ -68,6 +70,8 @@ struct Buffer {
     void* mapped = nullptr;
     VkDeviceSize size = 0;
     static Buffer host_visible(const Gpu& gpu, VkDeviceSize size, VkBufferUsageFlags usage);
+    // In the GPU's own memory, not mapped (written by the GPU, or by copies).
+    static Buffer device_local(const Gpu& gpu, VkDeviceSize size, VkBufferUsageFlags usage);
     void destroy(const Gpu& gpu);
 };
 struct Image {

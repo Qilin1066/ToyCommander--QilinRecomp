@@ -29,6 +29,9 @@ SHADERS = [
     ("pvr.frag", "kPvrFrag", []),
     # Punch-through polygons: texels under the alpha reference are discarded.
     ("pvr.frag", "kPvrFragPunch", ["-DPUNCH_THROUGH"]),
+    # The translucent list in auto-sort mode: fragments onto per-pixel lists, then sorted and blended.
+    ("pvr.frag", "kPvrFragSorted", ["-DSORTED"]),
+    ("sort.comp", "kSortComp", []),
 ]
 HOST_SHADERS = [
     ("present.vert", "kPresentVert", []),

@@ -165,6 +165,8 @@ Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swap
     f2.features.wideLines = have.wideLines;
     f2.features.largePoints = have.largePoints;
     f2.features.samplerAnisotropy = have.samplerAnisotropy;
+    f2.features.fragmentStoresAndAtomics = have.fragmentStoresAndAtomics;
+    g.fragment_atomics = have.fragmentStoresAndAtomics;
     if (have.samplerAnisotropy) g.max_anisotropy = g.properties.limits.maxSamplerAnisotropy;
     g.logic_op = have.logicOp;
     g.wide_lines = have.wideLines;
@@ -270,6 +272,23 @@ Buffer Buffer::host_visible(const Gpu& gpu, VkDeviceSize size, VkBufferUsageFlag
     check(vkAllocateMemory(gpu.device, &mai, nullptr, &b.memory), "vkAllocateMemory");
     check(vkBindBufferMemory(gpu.device, b.buffer, b.memory, 0), "vkBindBufferMemory");
     check(vkMapMemory(gpu.device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "vkMapMemory");
+    return b;
+}
+
+Buffer Buffer::device_local(const Gpu& gpu, VkDeviceSize size, VkBufferUsageFlags usage) {
+    Buffer b;
+    b.size = size;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = size;
+    bci.usage = usage;
+    check(vkCreateBuffer(gpu.device, &bci, nullptr, &b.buffer), "vkCreateBuffer");
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(gpu.device, b.buffer, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = gpu.memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    check(vkAllocateMemory(gpu.device, &mai, nullptr, &b.memory), "vkAllocateMemory");
+    check(vkBindBufferMemory(gpu.device, b.buffer, b.memory, 0), "vkBindBufferMemory");
     return b;
 }
 

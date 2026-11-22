@@ -10,6 +10,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
 
 ### Added
+- **The translucent list sorted for each pixel** in auto-sort mode, as the hardware does: where translucent surfaces cross (smoke, glass, effects in Toy Commander's missions) each pixel blends them from the farthest. Devices without fragment-shader atomics keep the sort by triangle.
 - **CI runs the graphical tests**: on Linux, under Xvfb and Mesa's software Vulkan, the renderer's, the Vulkan layer's and the pads' tests run on every push instead of skipping (`QILIN_REQUIRE_GRAPHICS=1` makes a skip a failure), as in Punch-Out's CI.
 - **The saves' history** (from Punch-Out's): before the memory card or the console's flash memory changes, a copy is kept (the five latest of each); the menu's Game page lists them and can restore one and restart. The flash memory is now written through a temporary file, so a crash mid-write leaves the old one.
 - **A modifier volume's user tile clip**: the volume counts only inside (or outside) its clip, for the opaque volumes (in the stencil) and the translucent ones (in the fragment shader's test); the render test checks both.
@@ -47,6 +48,9 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **Controllers and the first races**, from Toy Commander (written there from this project's session): the Maple bus answered from the host's first pad and the keyboard, with the standard pad's product name this game requires; frame buffers kept between renders, so the races' frames, rendered in two parts, compose. The game goes from the title through the menus into a race and drives.
 - **Calls made with `bra` and PR loaded by hand** are found as calls (Toy Commander's core change, moved here): no function here changed.
 - Toy Commander's level-4 interrupts and bu threads at their caller's mask, and the drive's release command, moved here.
+
+### Fixed
+- The renderer's descriptor sets could keep pointing at a buffer that had been made again with the same handle (wrong pixels or a crash now and then); they're rewritten whenever anything they name is remade.
 
 ## [0.2.0] - 2026-11-21
 The runtime's bring-up begins, from Toy Commander's: the game's own lifted code runs from the start-up through `main` and Kamui 2's initialisation to the first file access.

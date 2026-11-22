@@ -1,0 +1,77 @@
+#version 450
+// The translucent list in auto-sort mode, the second pass: each pixel's
+// fragments (pvr.frag's SORTED lists) sorted from the farthest to the
+// nearest (z = 1/w, smaller is farther; between equals, in the order sent)
+// and blended onto the picture as the hardware's TSP blends them, each with
+// its own source and destination factors.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba8) uniform image2D picture;
+layout(std430, set = 0, binding = 1) readonly buffer Heads { uint head[]; } heads;
+layout(std430, set = 0, binding = 2) readonly buffer Nodes {
+    uint count;
+    uint capacity;
+    uint width;
+    uint unused;
+    uvec4 node[];
+} nodes;
+
+layout(push_constant) uniform Push {
+    ivec4 rect;  // the render's clip, in the picture's pixels: x0, y0, x1, y1 (x1, y1 excluded)
+} push;
+
+// A pixel's fragments beyond this many are left out (the lists are newest first: the last sent are kept).
+const uint kMax = 48u;
+const uint kNone = 0xFFFFFFFFu;
+
+// A blend factor: 0 zero, 1 one, 2 the other side's colour, 3 one minus it,
+// 4 the source's alpha, 5 one minus it, 6 the destination's alpha, 7 one minus it.
+vec4 factor(uint f, bool source, vec4 s, vec4 d) {
+    const vec4 other = source ? d : s;
+    switch (f) {
+    case 0u: return vec4(0.0);
+    case 1u: return vec4(1.0);
+    case 2u: return other;
+    case 3u: return vec4(1.0) - other;
+    case 4u: return vec4(s.a);
+    case 5u: return vec4(1.0 - s.a);
+    case 6u: return vec4(d.a);
+    default: return vec4(1.0 - d.a);
+    }
+}
+
+// a before b: farther, or as far and sent first.
+bool before(uvec4 a, uvec4 b) {
+    const float za = uintBitsToFloat(a.y), zb = uintBitsToFloat(b.y);
+    return za < zb || (za == zb && (a.z & 0x03FFFFFFu) < (b.z & 0x03FFFFFFu));
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy) + push.rect.xy;
+    if (q.x >= push.rect.z || q.y >= push.rect.w) return;
+    uint at = heads.head[uint(q.y) * nodes.width + uint(q.x)];
+    if (at == kNone) return;
+    uvec4 list[kMax];
+    uint n = 0u;
+    while (at != kNone && n < kMax) {
+        list[n] = nodes.node[at];
+        at = list[n].w;
+        ++n;
+    }
+    for (uint i = 1u; i < n; ++i) {  // insertion sort: lists are short
+        const uvec4 key = list[i];
+        uint j = i;
+        while (j > 0u && before(key, list[j - 1u])) {
+            list[j] = list[j - 1u];
+            --j;
+        }
+        list[j] = key;
+    }
+    vec4 d = imageLoad(picture, q);
+    for (uint i = 0u; i < n; ++i) {
+        const vec4 s = unpackUnorm4x8(list[i].x);
+        const uint word = list[i].z;
+        d = clamp(s * factor(word >> 29, true, s, d) + d * factor((word >> 26) & 7u, false, s, d), 0.0, 1.0);
+    }
+    imageStore(picture, q, d);
+}

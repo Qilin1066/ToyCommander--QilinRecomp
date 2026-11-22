@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <map>
@@ -41,7 +42,8 @@ struct Push {
     float screen[4];
     uint32_t flags;
     float alpha_ref;
-    float unused[2];
+    uint32_t sort_word;  // sorted translucent draws: the blend factors (bits 31-29, 28-26), the draw's place (25-0)
+    float unused;
     float clip[4];  // the user tile clip, scene pixels: x0, y0, x1, y1 (exclusive)
 };
 
@@ -78,9 +80,10 @@ struct Draw {
     bool depth_write = false;
     Stencil stencil = Stencil::off;
     uint32_t clip = 0;  // the user tile clip's rectangle, a byte each (tiles), when the flags use it
+    uint32_t sort_word = 0;  // pvr.frag's, for a sorted translucent draw
     bool same_state(const Draw& o) const {
         return pipeline == o.pipeline && set == o.set && flags == o.flags && depth == o.depth && depth_write == o.depth_write &&
-               stencil == o.stencil && clip == o.clip;
+               stencil == o.stencil && clip == o.clip && sort_word == o.sort_word;
     }
 };
 
@@ -90,6 +93,11 @@ constexpr uint32_t pipeline_key(bool blend, uint32_t src, uint32_t dst, bool pun
     return (blend ? 1u | src << 1 | dst << 4 : 0u) | (punch ? 0x80u : 0u);
 }
 constexpr uint32_t kVolumeKey = 0x100u;
+// 9: the translucent list in auto-sort mode, onto the per-pixel lists (no colour written).
+constexpr uint32_t kSortedKey = 0x200u;
+// The per-pixel lists' nodes: 16 bytes each, after a header of 16 (count, capacity, width).
+constexpr VkDeviceSize kNodeBytes = 16, kNodesHeader = 16;
+constexpr uint32_t kNoNode = 0xFFFFFFFFu;
 // A draw's flag (pvr.frag's bit 6): darken where inside a translucent modifier volume.
 constexpr uint32_t kInVolumesFlag = 0x40u;
 constexpr uint32_t kMaxVolumes = 64;  // pvr.frag's array
@@ -176,11 +184,28 @@ struct Renderer::Impl {
     VkDescriptorSetLayout volume_layout = VK_NULL_HANDLE;
     VkDescriptorPool volume_pool = VK_NULL_HANDLE;
     VkDescriptorSet volume_set = VK_NULL_HANDLE;
-    VkBuffer volume_set_buffer = VK_NULL_HANDLE;  // the buffer volume_set points at
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     std::vector<VkDescriptorPool> set_pools;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, frag_punch = VK_NULL_HANDLE;
+    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, frag_punch = VK_NULL_HANDLE, frag_sorted = VK_NULL_HANDLE;
+    // The translucent list's per-pixel sort (auto-sort mode), where the device
+    // has fragment-shader atomics: the lists' heads (one a pixel) and nodes,
+    // the node count read back to make the lists longer when a frame wanted
+    // more, and sort.comp, which sorts and blends them into the picture.
+    bool sorting = false;
+    Buffer heads{}, nodes{}, node_count{};
+    uint32_t node_capacity = 0;
+    VkShaderModule sort_module = VK_NULL_HANDLE;
+    VkDescriptorSetLayout sort_set_layout = VK_NULL_HANDLE;
+    VkPipelineLayout sort_layout = VK_NULL_HANDLE;
+    VkPipeline sort_pipeline = VK_NULL_HANDLE;
+    VkDescriptorPool sort_pool = VK_NULL_HANDLE;
+    VkDescriptorSet sort_set = VK_NULL_HANDLE;
+    // Bumped whenever a buffer or image the frame's set or the sort's set
+    // names is made again: a new one can come back with the old one's handle,
+    // so the sets are written again by this, not by comparing handles.
+    uint64_t remade = 1, volume_set_written = 0, sort_set_written = 0;
+    VkImageView sort_set_view = VK_NULL_HANDLE;  // the frame buffer the sort's set names (both stay alive: a switch rewrites it)
     std::unordered_map<uint32_t, VkPipeline> pipelines;
     std::unordered_map<uint32_t, VkSampler> samplers;
     std::unordered_map<uint64_t, Texture> textures;
@@ -239,14 +264,18 @@ struct Renderer::Impl {
         sli.bindingCount = 1;
         sli.pBindings = &b;
         check(vkCreateDescriptorSetLayout(gpu.device, &sli, nullptr, &set_layout), "vkCreateDescriptorSetLayout");
-        VkDescriptorSetLayoutBinding vb{};
-        vb.binding = 0;
-        vb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        vb.descriptorCount = 1;
-        vb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sli.pBindings = &vb;
+        // The frame's buffer (0), and the per-pixel lists' heads (1) and nodes (2).
+        VkDescriptorSetLayoutBinding vb[3]{};
+        for (uint32_t k = 0; k < 3; ++k) {
+            vb[k].binding = k;
+            vb[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            vb[k].descriptorCount = 1;
+            vb[k].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        sli.bindingCount = 3;
+        sli.pBindings = vb;
         check(vkCreateDescriptorSetLayout(gpu.device, &sli, nullptr, &volume_layout), "vkCreateDescriptorSetLayout");
-        const VkDescriptorPoolSize vsize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+        const VkDescriptorPoolSize vsize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
         VkDescriptorPoolCreateInfo vpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         vpi.maxSets = 1;
         vpi.poolSizeCount = 1;
@@ -269,6 +298,7 @@ struct Renderer::Impl {
         vert = module(kPvrVert, sizeof kPvrVert);
         frag = module(kPvrFrag, sizeof kPvrFrag);
         frag_punch = module(kPvrFragPunch, sizeof kPvrFragPunch);
+        create_sort();
 
         // Depth with a stencil: one of these two every device has.
         VkFormatProperties fp{};
@@ -277,6 +307,80 @@ struct Renderer::Impl {
 
         // What untextured polygons sample (the shader has one sampler whatever it draws).
         white.image = Image::create(gpu, 1, 1, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    }
+
+    // The per-pixel sort's parts. Without fragment-shader atomics the
+    // translucent list in auto-sort mode is sorted by triangle instead
+    // (sort_translucent). The lists' buffers start small and are bound at
+    // once (the frame's set names them whether or not a frame sorts).
+    void create_sort() {
+        sorting = gpu.fragment_atomics && !std::getenv("QILIN_SORT_BY_TRIANGLE");
+        heads = Buffer::device_local(gpu, 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        nodes = Buffer::device_local(gpu, kNodesHeader + kNodeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        node_count = Buffer::host_visible(gpu, 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        std::memset(node_count.mapped, 0, 4);
+        if (!sorting) return;
+        frag_sorted = module(kPvrFragSorted, sizeof kPvrFragSorted);
+        sort_module = module(kSortComp, sizeof kSortComp);
+        VkDescriptorSetLayoutBinding b[3]{};
+        for (uint32_t k = 0; k < 3; ++k) {
+            b[k].binding = k;
+            b[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[k].descriptorCount = 1;
+            b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        sli.bindingCount = 3;
+        sli.pBindings = b;
+        check(vkCreateDescriptorSetLayout(gpu.device, &sli, nullptr, &sort_set_layout), "vkCreateDescriptorSetLayout");
+        const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &sort_set_layout;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &range;
+        check(vkCreatePipelineLayout(gpu.device, &pli, nullptr, &sort_layout), "vkCreatePipelineLayout");
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = sort_module;
+        ci.stage.pName = "main";
+        ci.layout = sort_layout;
+        check(vkCreateComputePipelines(gpu.device, VK_NULL_HANDLE, 1, &ci, nullptr, &sort_pipeline), "vkCreateComputePipelines");
+        const VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}};
+        VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpi.maxSets = 1;
+        dpi.poolSizeCount = 2;
+        dpi.pPoolSizes = sizes;
+        check(vkCreateDescriptorPool(gpu.device, &dpi, nullptr, &sort_pool), "vkCreateDescriptorPool");
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = sort_pool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &sort_set_layout;
+        check(vkAllocateDescriptorSets(gpu.device, &ai, &sort_set), "vkAllocateDescriptorSets");
+    }
+
+    // The lists for a picture of `picture_pixels`: the heads one a pixel, the nodes
+    // as many as the last frame wanted (from its count, read back), at least
+    // one a pixel (16 bytes: 4.9 MB at 1x, 315 MB at 8x before a scene asks
+    // for more). Made again only when they must grow; a frame that wanted
+    // more than there was loses its last fragments, once.
+    void size_lists(uint32_t picture_pixels) {
+        const uint32_t wanted = *static_cast<const uint32_t*>(node_count.mapped);
+        uint32_t capacity = std::max(node_capacity, picture_pixels);
+        if (wanted > capacity) capacity = wanted + wanted / 4;
+        if (heads.size < VkDeviceSize{picture_pixels} * 4) {
+            ++remade;
+            heads.destroy(gpu);
+            heads = Buffer::device_local(gpu, VkDeviceSize{picture_pixels} * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        }
+        if (capacity != node_capacity) {
+            ++remade;
+            nodes.destroy(gpu);
+            nodes = Buffer::device_local(gpu, kNodesHeader + VkDeviceSize{capacity} * kNodeBytes,
+                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            node_capacity = capacity;
+        }
     }
 
     // The frame buffer's image (created, or created again larger: the display
@@ -290,8 +394,10 @@ struct Renderer::Impl {
         if (!t.colour.image || t.colour.width != w || t.colour.height != h) {
             check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
             t.colour.destroy(gpu);
+            ++remade;
             t.colour = Image::create(gpu, w, h, kColourFormat,
-                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                         (sorting ? VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT) : VkImageUsageFlags(0)));
             t.ready = false;
         }
         if (!depth.image || depth.width < w || depth.height < h) {
@@ -314,7 +420,7 @@ struct Renderer::Impl {
         stages[0].pName = "main";
         stages[1] = stages[0];
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].module = key & 0x80u ? frag_punch : frag;
+        stages[1].module = key & 0x80u ? frag_punch : key & kSortedKey ? frag_sorted : frag;
         const VkVertexInputBindingDescription binding{0, sizeof(HostVertex), VK_VERTEX_INPUT_RATE_VERTEX};
         const VkVertexInputAttributeDescription attributes[4] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(HostVertex, x)},
@@ -352,7 +458,7 @@ struct Renderer::Impl {
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         cb.attachmentCount = 1;
         cb.pAttachments = &att;
-        if (key & kVolumeKey) att.colorWriteMask = 0;
+        if (key & (kVolumeKey | kSortedKey)) att.colorWriteMask = 0;
         const VkDynamicState dynamic[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
                                           VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP,
                                           VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
@@ -776,8 +882,49 @@ struct Renderer::Impl {
         }
     }
 
+    void memory_barrier(VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access) {
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = src_stage, mb.srcAccessMask = src_access, mb.dstStageMask = dst_stage, mb.dstAccessMask = dst_access;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers = &mb;
+        vkCmdPipelineBarrier2(cmd, &di);
+    }
+
+    // The per-pixel lists sorted and blended into the picture (sort.comp),
+    // over the render's clip (the target's pixels, x1 and y1 excluded); the
+    // picture is left in GENERAL layout, and the node count copied out for
+    // the next frame's size_lists.
+    void resolve_lists(const Image& colour, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+        qilin::host::transition(cmd, colour.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        memory_barrier(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
+        // (Written while recording: draw waited for the last frame, the only other user of the set.)
+        if (sort_set_written != remade || sort_set_view != colour.view) {
+            const VkDescriptorImageInfo ii{VK_NULL_HANDLE, colour.view, VK_IMAGE_LAYOUT_GENERAL};
+            const VkDescriptorBufferInfo bi[2] = {{heads.buffer, 0, VK_WHOLE_SIZE}, {nodes.buffer, 0, VK_WHOLE_SIZE}};
+            VkWriteDescriptorSet w[2]{{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+            w[0].dstSet = sort_set, w[0].dstBinding = 0, w[0].descriptorCount = 1, w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[0].pImageInfo = &ii;
+            w[1].dstSet = sort_set, w[1].dstBinding = 1, w[1].descriptorCount = 2, w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[1].pBufferInfo = bi;
+            vkUpdateDescriptorSets(gpu.device, 2, w, 0, nullptr);
+            sort_set_written = remade, sort_set_view = colour.view;
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sort_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sort_layout, 0, 1, &sort_set, 0, nullptr);
+        const int32_t rect[4] = {int32_t(x0), int32_t(y0), int32_t(x1), int32_t(y1)};
+        vkCmdPushConstants(cmd, sort_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof rect, rect);
+        vkCmdDispatch(cmd, (x1 - x0 + 7) / 8, (y1 - y0 + 7) / 8, 1);
+        const VkBufferCopy count{0, 0, 4};
+        vkCmdCopyBuffer(cmd, nodes.buffer, node_count.buffer, 1, &count);
+        memory_barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    }
+
     void grow(Buffer& b, VkDeviceSize need, VkBufferUsageFlags usage) {
         if (b.size >= need) return;
+        ++remade;
         b.destroy(gpu);
         b = Buffer::host_visible(gpu, std::max<VkDeviceSize>(need * 3 / 2, 1u << 20), usage);
     }
@@ -818,7 +965,20 @@ struct Renderer::Impl {
                 if (list == ta::kTranslucent && !cheap && modified(s)) add_strip(src, s, scene.vertices.data() + s.first, false, 1);
             }
         }
-        if (!src.presort) sort_translucent(translucent_draws, translucent_vertices);
+        // The translucent list in auto-sort mode: sorted for each pixel where
+        // the device can (each draw onto the per-pixel lists, with its blend
+        // factors and its place in the order sent), else triangle by triangle.
+        const bool sorted = !src.presort && sorting && draws.size() > translucent_draws;
+        if (!src.presort && !sorted) sort_translucent(translucent_draws, translucent_vertices);
+        if (sorted) {
+            size_lists(colour.width * colour.height);
+            for (size_t i = translucent_draws; i < draws.size(); ++i) {
+                Draw& d = draws[i];
+                const uint32_t sf = d.pipeline & 1u ? (d.pipeline >> 1) & 7u : 1u, df = d.pipeline & 1u ? (d.pipeline >> 4) & 7u : 0u;
+                d.pipeline = kSortedKey;
+                d.sort_word = sf << 29 | df << 26 | (static_cast<uint32_t>(i - translucent_draws) & 0x03FFFFFFu);
+            }
+        }
         stats.draws = uint32_t(draws.size());
 
         float z_max = 0.0f;
@@ -848,15 +1008,15 @@ struct Renderer::Impl {
         std::memcpy(volume_data.data() + kFogTableAt, src.fog_table, sizeof src.fog_table);
         grow(volume_buffer, volume_data.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         std::memcpy(volume_buffer.mapped, volume_data.data(), volume_data.size() * sizeof(float));
-        if (volume_set_buffer != volume_buffer.buffer) {
-            const VkDescriptorBufferInfo bi{volume_buffer.buffer, 0, VK_WHOLE_SIZE};
+        if (volume_set_written != remade) {
+            const VkDescriptorBufferInfo bi[3] = {{volume_buffer.buffer, 0, VK_WHOLE_SIZE}, {heads.buffer, 0, VK_WHOLE_SIZE}, {nodes.buffer, 0, VK_WHOLE_SIZE}};
             VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             w.dstSet = volume_set;
-            w.descriptorCount = 1;
+            w.descriptorCount = 3;
             w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w.pBufferInfo = &bi;
+            w.pBufferInfo = bi;
             vkUpdateDescriptorSets(gpu.device, 1, &w, 0, nullptr);
-            volume_set_buffer = volume_buffer.buffer;
+            volume_set_written = remade;
         }
         grow(staging, upload_bytes.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         if (!upload_bytes.empty()) std::memcpy(staging.mapped, upload_bytes.data(), upload_bytes.size());
@@ -885,6 +1045,13 @@ struct Renderer::Impl {
                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         qilin::host::transition(cmd, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                 VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+        if (sorted) {  // empty lists: every head none, no nodes
+            vkCmdFillBuffer(cmd, heads.buffer, 0, VkDeviceSize{colour.width} * colour.height * 4, kNoNode);
+            const uint32_t header[4] = {0, node_capacity, colour.width, 0};
+            vkCmdUpdateBuffer(cmd, nodes.buffer, 0, sizeof header, header);
+            memory_barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        }
         VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         ca.imageView = colour.view;
         ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -933,6 +1100,7 @@ struct Renderer::Impl {
             set_stencil(d.stencil);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr);
             push.flags = d.flags;
+            push.sort_word = d.sort_word;
             // The user tile clip, in scene pixels (tiles of 32), its maximum tile included.
             push.clip[0] = float(d.clip & 0xFFu) * 32.0f, push.clip[1] = float(d.clip >> 8 & 0xFFu) * 32.0f;
             push.clip[2] = float((d.clip >> 16 & 0xFFu) + 1) * 32.0f, push.clip[3] = float((d.clip >> 24) + 1) * 32.0f;
@@ -940,7 +1108,12 @@ struct Renderer::Impl {
             vkCmdDraw(cmd, d.count, 1, d.first, 0);
         }
         vkCmdEndRendering(cmd);
-        qilin::host::transition(cmd, colour.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        if (sorted) {
+            resolve_lists(colour, x0, y0, x1, y1);
+            qilin::host::transition(cmd, colour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        } else {
+            qilin::host::transition(cmd, colour.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        }
         check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
         VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
         cbi.commandBuffer = cmd;
@@ -1009,6 +1182,13 @@ struct Renderer::Impl {
         vkDestroyShaderModule(gpu.device, vert, nullptr);
         vkDestroyShaderModule(gpu.device, frag, nullptr);
         vkDestroyShaderModule(gpu.device, frag_punch, nullptr);
+        if (frag_sorted) vkDestroyShaderModule(gpu.device, frag_sorted, nullptr);
+        if (sort_module) vkDestroyShaderModule(gpu.device, sort_module, nullptr);
+        if (sort_pipeline) vkDestroyPipeline(gpu.device, sort_pipeline, nullptr);
+        if (sort_layout) vkDestroyPipelineLayout(gpu.device, sort_layout, nullptr);
+        if (sort_pool) vkDestroyDescriptorPool(gpu.device, sort_pool, nullptr);
+        if (sort_set_layout) vkDestroyDescriptorSetLayout(gpu.device, sort_set_layout, nullptr);
+        heads.destroy(gpu), nodes.destroy(gpu), node_count.destroy(gpu);
         vkDestroyPipelineLayout(gpu.device, layout, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, set_layout, nullptr);
         vertex_buffer.destroy(gpu), staging.destroy(gpu), volume_buffer.destroy(gpu);

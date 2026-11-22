@@ -10,6 +10,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 - **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
 
 ### Added
+- **The translucent list sorted for each pixel** in auto-sort mode, as the hardware does: where translucent surfaces cross (smoke, glass, effects in Toy Commander's missions) each pixel blends them from the farthest. Devices without fragment-shader atomics keep the sort by triangle.
 - **CI runs the graphical tests**: on Linux, under Xvfb and Mesa's software Vulkan, the renderer's, the Vulkan layer's and the pads' tests run on every push instead of skipping (`QILIN_REQUIRE_GRAPHICS=1` makes a skip a failure), as in Punch-Out's CI.
 - **The saves' history** (from Punch-Out's): before the memory card or the console's flash memory changes, a copy is kept (the five latest of each); the menu's Game page lists them and can restore one and restart. The flash memory is now written through a temporary file, so a crash mid-write leaves the old one.
 - **A modifier volume's user tile clip**: the volume counts only inside (or outside) its clip, for the opaque volumes (in the stencil) and the translucent ones (in the fragment shader's test); the render test checks both.
@@ -81,6 +82,9 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 - **Discovery: calls made with `bra` and PR loaded by hand** (`lds rN,pr ; bra f`, the `lds` before the branch or in its slot), as the engine's matrix code enters a shared tail. They were taken for tail calls, so the callee returned into the caller's caller. A test program covers both forms.
 - **Frame buffers kept between renders**: each render draws into the image of its frame buffer, cleared and drawn only inside its clip, and the vertical blank shows the one the display reads. A frame rendered in parts (Toy Racer's races) now composes as on the console.
 - The controller's product name is the standard pad's (Toy Racer ignores pads it doesn't recognise by name); `QILIN_PRESS` ranges.
+
+### Fixed
+- The renderer's descriptor sets could keep pointing at a buffer that had been made again with the same handle (wrong pixels or a crash now and then); they're rewritten whenever anything they name is remade.
 
 ## [0.9.0] - 2026-11-21
 The runtime's bring-up begins: the game's own lifted code runs, from the start-up into `main` and the middleware's system initialisation.

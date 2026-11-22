@@ -92,6 +92,24 @@ float table_fog(float z) {
     return mix(float(t >> 8 & 255u), float(t & 255u), frac) / 255.0;
 }
 
+#ifdef SORTED
+// The translucent list in auto-sort mode: each fragment, its colour finished
+// but not blended, goes onto its pixel's list (head: the pixel's newest
+// node; a node: the colour, the depth, the blend factors and the draw's
+// place in the order sent, the next node), and sort.comp blends each
+// pixel's list from the farthest. The opaque scene's depth is tested first,
+// so a fragment behind it is never added.
+layout(early_fragment_tests) in;
+layout(std430, set = 1, binding = 1) coherent buffer Heads { uint head[]; } heads;
+layout(std430, set = 1, binding = 2) coherent buffer Nodes {
+    uint count;
+    uint capacity;
+    uint width;
+    uint unused;
+    uvec4 node[];
+} nodes;
+#endif
+
 layout(push_constant) uniform Push {
     vec4 screen;
     uint flags;       // bit 0 textured, 1 offset colour, 2 use alpha, 3 ignore the texture's alpha, 4-5 the shading instruction,
@@ -99,6 +117,8 @@ layout(push_constant) uniform Push {
                       // the translucent modifier volumes, 10-11 the user tile clip (2 inside, 3 outside), 12 vertex fog,
                       // 13 the fog table's second mode, 14 the colour clamp
     float alpha_ref;  // punch-through: texels below it are dropped
+    uint sort_word;   // SORTED: the source and destination blend factors (bits 31-29, 28-26), the draw's place (25-0)
+    float unused;
     vec4 clip;        // the user tile clip: x0, y0, x1, y1 in scene pixels (x1, y1 excluded)
 } push;
 
@@ -142,5 +162,15 @@ void main() {
     if (c.a < push.alpha_ref) discard;
     c.a = 1.0;
 #endif
+#ifdef SORTED
+    const uint n = atomicAdd(nodes.count, 1u);
+    if (n < nodes.capacity) {  // over: dropped, and the renderer makes the list longer for the next frame
+        const uint pixel = uint(gl_FragCoord.y) * nodes.width + uint(gl_FragCoord.x);
+        const uint next = atomicExchange(heads.head[pixel], n);
+        nodes.node[n] = uvec4(packUnorm4x8(c), floatBitsToUint(gl_FragCoord.z), push.sort_word, next);
+    }
+    colour = vec4(0.0);  // not written (the pipeline's mask)
+#else
     colour = c;
+#endif
 }

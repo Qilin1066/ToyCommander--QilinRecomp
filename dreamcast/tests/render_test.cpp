@@ -402,6 +402,51 @@ int renderer() {
         expect(pixel_is(pic, 12, 20, 255, 255, 255), "two volumes: the translucent polygon's second volume inside");
         expect(pixel_is(pic, 12, 44, 0, 255, 0), "two volumes: the translucent polygon below the volume");
     }
+    // The translucent list in auto-sort mode (ISP_FEED_CFG's bit 0 clear),
+    // sorted for each pixel: a red quad, half transparent, at z 0.5 over the
+    // whole picture, then a green one through it, its z from 0.25 at the left
+    // to 0.75 at the right (behind the red on the left, in front on the
+    // right), over black; an opaque blue strip on the right, nearer than both,
+    // keeps them out. Blended from the farthest at each pixel: (127, 64, 0) on
+    // the left, (64, 127, 0) on the right. A sort by triangle gets one side
+    // wrong.
+    {
+        ta::Scene sc;
+        const uint32_t ge = 6u << 29, no_write = 1u << 26, alpha_blend = 4u << 29 | 5u << 26 | 1u << 20 | no_fog;
+        add_quad(sc, ta::kOpaque, 0, ge, one_zero | no_fog, 0, 0, 64, 48, 0.01f, {0, 0, 0, 1});
+        add_quad(sc, ta::kOpaque, 0, ge, one_zero | no_fog, 56, 0, 64, 48, 0.9f, {0, 0, 1, 1});
+        add_quad(sc, ta::kTranslucent, 0, ge | no_write, alpha_blend, 0, 0, 64, 48, 0.5f, {1, 0, 0, 0.5f});
+        const size_t g_ = add_quad(sc, ta::kTranslucent, 0, ge | no_write, alpha_blend, 0, 0, 64, 48, 0.5f, {0, 1, 0, 0.5f});
+        for (uint32_t k = 0; k < 4; ++k) {  // the strip's corners: left, right, left, right
+            ta::Vertex& v = sc.vertices[sc.strips[g_].first + k];
+            v.z = k % 2 == 0 ? 0.25f : 0.75f;
+        }
+        // Drawn twice: the first frame sizes the lists (one node a pixel at first, two wanted here).
+        const uint32_t same = next_buffer;
+        draw(sc, [](dreamcast::renderer::Source& s) { s.presort = false; });
+        const auto pic = draw(sc, [same](dreamcast::renderer::Source& s) { s.presort = false, s.frame_buffer = same; });
+        // Each point across the diagonal that splits the green quad into two triangles from its own
+        // triangle's mean depth, which says the other way.
+        expect(pixel_is(pic, 6, 44, 127, 64, 0), "auto-sort: on the left the green, farther, blended first");
+        expect(pixel_is(pic, 44, 4, 64, 127, 0), "auto-sort: on the right the red, farther, blended first");
+        expect(pixel_is(pic, 60, 24, 0, 0, 255), "auto-sort: nothing behind an opaque surface");
+        const auto sent = draw(sc, [](dreamcast::renderer::Source& s) { s.presort = true; });
+        expect(pixel_is(sent, 6, 44, 64, 127, 0) && pixel_is(sent, 44, 4, 64, 127, 0), "presort: in the order sent everywhere");
+    }
+    // More fragments a pixel than the lists hold (one a pixel at first):
+    // five additive layers of a tenth of red. The renderer reads the count
+    // back and makes the lists longer, so the same scene drawn again is
+    // whole: half red.
+    {
+        ta::Scene sc;
+        const uint32_t additive = 1u << 29 | 1u << 26 | 1u << 20 | no_fog;
+        add_quad(sc, ta::kOpaque, 0, 6u << 29, one_zero | no_fog, 0, 0, 64, 48, 0.01f, {0, 0, 0, 1});
+        for (int k = 0; k < 5; ++k) add_quad(sc, ta::kTranslucent, 0, 6u << 29 | 1u << 26, additive, 0, 0, 64, 48, 0.2f + 0.1f * float(k), {0.1f, 0, 0, 1});
+        const uint32_t again_at = next_buffer;
+        draw(sc, [](dreamcast::renderer::Source& s) { s.presort = false; });
+        const auto regrown = draw(sc, [again_at](dreamcast::renderer::Source& s) { s.presort = false, s.frame_buffer = again_at; });
+        expect(pixel_is(regrown, 30, 24, 128, 0, 0), "auto-sort: lists made longer when a frame wanted more");
+    }
     // A modifier volume's user tile clip: the shadows' scene again, its
     // volumes drawn only inside tile (0, 0) (x and y below 32): the box's
     // part below y 32 darkens nothing, the opaque surface's nor the
