@@ -58,11 +58,20 @@ public:
         uint32_t buttons = 0;
         float lx = 0, ly = 0, rx = 0, ry = 0, lt = 0, rt = 0;
     };
+    // A player's pad: port A's (0) or another player's (1-3). Every
+    // controller SDL lists is opened; each takes a place when it first has a
+    // button pressed (so a virtual pad or a wheel's base listed first doesn't
+    // take port A from the player's real one): the first place whose
+    // controller is unplugged, else the next. All zero for a place nobody
+    // has. buttons() is every controller's together (the menu's).
     PadState pad_state() const;
-    // The pads after the first, for more players (1-3; 0 is the first): every
-    // gamepad connected is opened, in the order they come. Not connected:
-    // all zero.
     PadState pad_state(unsigned player) const;
+    // The name of a place's controller (empty: nobody has it yet), how many
+    // controllers are connected, and the places given up (each controller
+    // joins again by pressing a button).
+    std::string player_controller(unsigned player) const;
+    unsigned controllers_connected() const;
+    void reset_player_order();
     // Whether the window has the keyboard. While another window has it, the
     // buttons, keys and pads all read as nothing held, and no pad rumbles.
     bool focused() const;

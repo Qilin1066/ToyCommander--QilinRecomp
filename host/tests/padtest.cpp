@@ -66,6 +66,8 @@ int main() {
     check(reaches(d, 0), "connected before the window: nothing held");
     SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, true);
     check(reaches(d, h::kPadA), "A (south) reaches the game: the pad was opened at start-up");
+    check(d.pad_state(0).connected && (d.pad_state(0).buttons & h::kPadA) && !d.pad_state(1).connected,
+          "the first controller to press a button is port A's");
     SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, false);
     SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_EAST, true);
     SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
@@ -79,15 +81,27 @@ int main() {
     SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0);
     check(reaches(d, 0), "let go");
 
-    // Unplugged, then another plugged in: it takes over.
+    // A second controller, pressed: port B's, port A's staying where it is.
+    const SDL_JoystickID other = attach_pad("Other virtual controller");
+    SDL_Joystick* jo = SDL_OpenJoystick(other);
+    SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, true);
+    check(reaches(d, h::kPadY), "a second controller's button");
+    check((d.pad_state(1).buttons & h::kPadY) && !(d.pad_state(0).buttons & h::kPadY), "the second controller to press is port B's");
+    SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, false);
+    check(reaches(d, 0), "let go of the second");
+
+    // Port A's unplugged, then another plugged in and pressed: it takes port A, port B's staying.
     SDL_CloseJoystick(j);
     SDL_DetachVirtualJoystick(first);
     d.poll();
+    check(!d.pad_state(0).connected && d.pad_state(1).connected, "port A unplugged: port B's stays port B's");
     const SDL_JoystickID second = attach_pad("Second virtual controller");
     SDL_Joystick* j2 = SDL_OpenJoystick(second);
     SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_START, true);
     check(reaches(d, h::kPadStart), "a controller connected later is used");
+    check((d.pad_state(0).buttons & h::kPadStart) && !(d.pad_state(1).buttons & h::kPadStart), "it takes the unplugged port A");
     SDL_CloseJoystick(j2);
+    SDL_CloseJoystick(jo);
 
     std::printf("padtest: %s\n", g_failures ? "FAILED" : "passed");
     return g_failures ? 1 : 0;

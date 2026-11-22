@@ -358,14 +358,16 @@ void Menu::draw_menu() {
 
 void Menu::controls_page() {
     ImGui::SeparatorText("Controllers");
-    int n = 0;
-    SDL_JoystickID* ids = SDL_GetGamepads(&n);
-    if (n == 0) ImGui::TextDisabled("None connected: the keyboard plays the Dreamcast controller.");
-    for (int i = 0; i < n; ++i) {
-        const char* name = SDL_GetGamepadNameForID(ids[i]);
-        ImGui::BulletText("%s%s", name ? name : "A controller", i == 0 ? " (port A's Dreamcast controller)" : " (another player's: ports B to D)");
+    if (display_.controllers_connected() == 0) ImGui::TextDisabled("None connected: the keyboard plays the Dreamcast controller on port A.");
+    else ImGui::TextDisabled("Each controller takes the next port when it first has a button pressed.");
+    for (unsigned port = 0; port < 4; ++port) {
+        const std::string name = display_.player_controller(port);
+        if (name.empty()) ImGui::BulletText("Port %c: %s", 'A' + port, port == 0 ? "the keyboard (and the first controller to press a button)" : "nobody yet");
+        else ImGui::BulletText("Port %c: %s%s", 'A' + port, name.c_str(), port == 0 ? ", and the keyboard" : "");
     }
-    SDL_free(ids);
+    if (ImGui::Button("Choose the ports again")) display_.reset_player_order();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(then press a button on each controller, in port order)");
     ImGui::Checkbox("Rumble", &s_.rumble);
     int strength = int(s_.rumble_strength);
     ImGui::BeginDisabled(!s_.rumble);

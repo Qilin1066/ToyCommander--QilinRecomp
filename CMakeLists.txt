@@ -234,6 +234,12 @@ if(QILIN_HOST)
     target_link_libraries(qilin_vktest PRIVATE qilin_host_toycommander qilin_warnings)
     add_test(NAME qilin_vktest COMMAND qilin_vktest)
     set_tests_properties(qilin_vktest PROPERTIES SKIP_RETURN_CODE 77)
+    # Controllers reach the game (SDL's virtual joysticks): opened at start-up
+    # and later, each taking its port by its first press.
+    add_executable(qilin_padtest host/tests/padtest.cpp)
+    target_link_libraries(qilin_padtest PRIVATE qilin_host_toycommander SDL3::SDL3-static qilin_warnings)
+    add_test(NAME qilin_padtest COMMAND qilin_padtest)
+    set_tests_properties(qilin_padtest PROPERTIES SKIP_RETURN_CODE 77)
 
     # The texture decoder and the renderer, without the game (the renderer's part
     # skips where there's no Vulkan 1.3 device; the test then exits 77).
