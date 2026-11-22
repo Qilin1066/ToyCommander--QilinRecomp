@@ -889,6 +889,30 @@ void test_fpmode() {
         CHECK(pr(m.at.at(kB + 8)) == 1 && m.unproven == 0 && m.problems.empty());
         CHECK(m.exit && pr(*m.exit) == 0);
     }
+    // A branch into a delay slot (Toy Racer's Kamui 2 has one): the slot's
+    // instruction runs on its own, then what follows it, which only that path
+    // reaches; the walk has it as the slot's address with its low bit set.
+    {
+        const BootFile boot = program({
+            0x8901,  // 00  bt 06
+            0xF210,  // 02  fadd fr1,fr2
+            0xA003,  // 04  bra 0E
+            0xF212,  // 06   fmul fr1,fr2  (the slot; also bt's target)
+            0xF430,  // 08  fadd fr3,fr4  (only after 06 run on its own)
+            0x000B,  // 0A  rts
+            0x0009,  // 0C   nop
+            0x000B,  // 0E  rts
+            0x0009,  // 10   nop
+        });
+        const Cfg cfg = analyse(boot);
+        const Function& f = cfg.functions.at(kB);
+        CHECK(successors(boot, f, kB) == std::vector<uint32_t>({kB + 7, kB + 2}));
+        CHECK(successors(boot, f, kB + 6) == std::vector<uint32_t>({kB + 0x0E}));
+        CHECK(successors(boot, f, kB + 7) == std::vector<uint32_t>({kB + 8}));
+        const auto modes = fp_modes(boot, cfg);
+        const FpModes& m = modes.at(kB);
+        CHECK(m.unproven == 0 && m.problems.empty() && m.at.contains(kB + 8) && sz(m.at.at(kB + 8)) == 0);
+    }
     // Saved and restored through the stack: the restore brings the mode back.
     {
         const BootFile boot = program({

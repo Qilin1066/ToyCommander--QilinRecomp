@@ -722,7 +722,9 @@ public:
         }
         find_evictions();
         // Padding: zero or nop words between classified things, up to 16 bytes
-        // of them (alignment), or any run of them that ends the image.
+        // of them (alignment), fewer than 32 that end on a 32-byte boundary
+        // (the compiler aligns some loop heads so, inside a function), or any
+        // run of them that ends the image.
         for (uint32_t a = boot_.base(); a < boot_.end();) {
             if (kind(a) != Kind::unknown) {
                 a += 2;
@@ -731,7 +733,7 @@ public:
             uint32_t b = a;
             bool pad = true, swapped = true;
             while (b < boot_.end() && kind(b) == Kind::unknown) pad &= is_padding(boot_.u16(b)), swapped &= boot_.u16(b) == 0x0900, b += 2;
-            if (pad && (b - a <= (swapped ? 32u : 16u) || b == boot_.end()))
+            if (pad && (b - a <= (swapped ? 32u : 16u) || (b - a < 32u && b % 32u == 0) || b == boot_.end()))
                 for (uint32_t k = a; k < b; k += 2) cfg_.kind[index(k)] = Kind::padding;
             a = b;
         }
@@ -784,8 +786,11 @@ private:
     }
 
     void add(uint32_t entry, Origin origin) {
-        // A guess that failed once fails again: try each only once.
-        if (guess(origin) && !guessed_.insert(entry).second) return;
+        // A guess that failed once fails again: try each only once. A
+        // layout's entry is tried as such even after a guess at the same
+        // address failed (its address loaded as a constant, say): the layout
+        // knows it runs on into its neighbour.
+        if (guess(origin) && origin != Origin::layout && !guessed_.insert(entry).second) return;
         work_.emplace_back(entry, origin);
     }
 
@@ -944,6 +949,23 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
     const auto add = [&](uint32_t a) {
         if (in(a) && std::ranges::find(out, a) == out.end()) out.push_back(a);
     };
+    const auto is_slot = [&](uint32_t a) {
+        if (a <= boot.base() || !in(a - 2)) return false;
+        const Insn b = sh4::decode(boot.u16(a - 2));
+        return b.valid() && (sh4::spec(b.op).flags & sh4::kDelayed) != 0;
+    };
+    // A branch into a delay slot runs the slot's instruction on its own, then
+    // what follows it (the lifter's slot copies): that is the slot's address
+    // with its low bit set, a node of its own.
+    const auto branch_to = [&](uint32_t a) {
+        if (!is_slot(a)) return add(a);
+        if (in(a) && std::ranges::find(out, a | 1u) == out.end()) out.push_back(a | 1u);
+    };
+    if (pc & 1u) {
+        const uint32_t plain = pc & ~1u;
+        if (!(sh4::spec(sh4::decode(boot.u16(plain)).op).flags & sh4::kBranch)) add(plain + 2);
+        return out;  // a branch in a slot entered on its own: the lifter refuses it
+    }
     // A delay slot goes where its branch goes.
     uint32_t at = pc;
     bool slot = false;
@@ -970,13 +992,13 @@ std::vector<uint32_t> successors(const BootFile& boot, const Function& f, uint32
     const bool tail = f.tail_jumps.contains(at);
     switch (i.op) {
     case Op::bt: case Op::bf: case Op::bt_s: case Op::bf_s:
-        if (!tail) add(i.branch_target(at));
+        if (!tail) branch_to(i.branch_target(at));
         add(next);
         break;
     case Op::bra:
         // A call made by loading PR by hand continues where PR points.
         if (auto it = f.call_returns.find(at); it != f.call_returns.end()) add(it->second);
-        else if (!tail) add(i.branch_target(at));
+        else if (!tail) branch_to(i.branch_target(at));
         break;
     case Op::braf:
         if (auto it = f.computed_branches.find(at); it != f.computed_branches.end()) add(it->second);

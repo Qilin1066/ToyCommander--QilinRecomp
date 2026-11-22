@@ -217,6 +217,57 @@ void kamui_install_interrupt_handler(rt::Context& c) {
     set_pvr_register(0xA05F6930u, 0x00280FECu), set_pvr_register(0xA05F6938u, 14);
 }
 
+// 0x8C090B84, Kamui 2's interrupt removal, the other half of 0x8C090AC6 (the
+// same code as Toy Commander's 0x8C085ED4): with interrupts masked it saves
+// IMASK and the level-9 masks in its state again, puts the handler it kept
+// (+40) back in the table entry at VBR + 0x224 unless the entry still holds
+// the one at +44, clears the masks and every pending event, and leaves its
+// own masks (+24, +28) at 0.
+void kamui_remove_interrupt_handler(rt::Context& c) {
+    constexpr uint32_t kState = 0x8C1B9024u, kSlot = 0x224u;
+    rt::st32(kState + 8, (c.sr >> 4) & 15u);
+    rt::st32(kState + 12, pvr_register(0xA05F6930u));
+    rt::st32(kState + 16, pvr_register(0xA05F6938u));
+    if (rt::ld32(kState + 44) != g_vector[kSlot]) g_vector[kSlot] = rt::ld32(kState + 40);
+    set_pvr_register(0xA05F6930u, 0), set_pvr_register(0xA05F6938u, 0);
+    set_pvr_register(0xA05F6900u, 0xFFFFFFFFu), set_pvr_register(0xA05F6908u, 0xFFFFFFFFu);
+    rt::st32(kState + 24, 0), rt::st32(kState + 28, 0);
+}
+
+// 0x8C05E2F8: the debug base register (stc dbr), a debugger's (Toy
+// Commander's 0x8C04F0D0). Nothing refers to it; the port has no debugger.
+void read_dbr(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C05E2F8u, 0}; }
+
+// 0x8C04D7E0 (entered with r7 = 2 through 0x8C04D7DC) and 0x8C04D916:
+// Shinobi's timer interrupts, linked among the middleware in this build:
+// each puts a handler in the exception table through VBR and enables a
+// timer's underflow interrupt. Nothing refers to either; the port's timer
+// unit raises no interrupts: stop if one is ever reached.
+void shinobi_timer_interrupt_a(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C04D7E0u, 0}; }
+void shinobi_timer_interrupt_b(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C04D916u, 0}; }
+
+// 0x8C0A1DD4: a debugger's break (0x003B), which the engine's checks call
+// when one fails; 0x8C0A1DE0: trapa #2, the C runtime's default handler. On
+// a console without a debugger either ends the game: stop, naming the caller.
+void debug_break(rt::Context& c) { throw rt::Stop{rt::Stop::Trap, c.pr - 4, 0x003B}; }
+void debug_trap(rt::Context& c) { throw rt::Stop{rt::Stop::Trap, c.pr - 4, 2}; }
+
+// 0x8C09A900: compares the words from 0x8C004020 with the development kit's
+// debug adapter's name (in its literal pool, ending in a 0)
+// until two differ, and breaks into the debugger (0x003B) if the name ran to
+// its end. A console has no adapter there; if the port's RAM ever matched,
+// the break stops as debug_break does. Registers as the code leaves them.
+void debug_adapter_check(rt::Context& c) {
+    uint32_t a = 0x8C004020u, b = 0x8C09A91Cu, x, y;
+    do {
+        x = rt::ld32(a), y = rt::ld32(b);
+        a += 4, b += 4;
+    } while (x == y);
+    c.r[0] = b, c.r[1] = a, c.r[2] = y, c.r[3] = x;
+    c.t = y == 0;
+    if (y == 0) throw rt::Stop{rt::Stop::Trap, 0x8C09A910u, 0x003B};
+}
+
 // 0x8C0D1674, Shinobi's clear: r5 bytes from r4, in units as its copy picks
 // them (8-byte ones are fr0/fr1 zeroed and stored with 64-bit fmov). Through
 // the bus; the registers end as the guest leaves them; a count of 0 stops.
@@ -367,6 +418,13 @@ const rt::Provided kNatives[] = {
     {0x8C05E108u, "memclr", memclr},
     {0x8C0C5856u, "shinobi_library_init", shinobi_library_init},
     {0x8C090AC6u, "kamui_install_interrupt_handler", kamui_install_interrupt_handler},
+    {0x8C090B84u, "kamui_remove_interrupt_handler", kamui_remove_interrupt_handler},
+    {0x8C05E2F8u, "read_dbr", read_dbr},
+    {0x8C04D7E0u, "shinobi_timer_interrupt_a", shinobi_timer_interrupt_a},
+    {0x8C04D916u, "shinobi_timer_interrupt_b", shinobi_timer_interrupt_b},
+    {0x8C0A1DD4u, "debug_break", debug_break},
+    {0x8C0A1DE0u, "debug_trap", debug_trap},
+    {0x8C09A900u, "debug_adapter_check", debug_adapter_check},
     {0x8C04DB04u, "shinobi_cable", shinobi_cable},
     {0x8C0C5AFCu, "shinobi_heap_init", shinobi_heap_init},
     {0x8C0C5B56u, "shinobi_heap_exit", shinobi_heap_exit},

@@ -156,11 +156,18 @@ Summary summarise(const BootFile& boot, const Function& f, const KnownBits& entr
     start.fpscr = entry;
     in[f.entry] = start;
     std::vector<uint32_t> work{f.entry};
-    const auto step = [&](uint32_t pc, State& s, bool report) {
+    // `node` is an instruction's address, or a delay slot's with its low bit
+    // set where a branch enters the slot and it runs on its own
+    // (`successors`): the instruction's mode is then the meet of both.
+    const auto step = [&](uint32_t node, State& s, bool report) {
+        const uint32_t pc = node & ~1u;
         const Insn i = sh4::decode(boot.u16(pc));
         const sh4::Spec& spec = sh4::spec(i.op);
         auto& r = s.r;
-        if (report && (spec.flags & sh4::kFloat)) out.at[pc] = tracked(s.fpscr);
+        if (report && (spec.flags & sh4::kFloat)) {
+            const KnownBits m = tracked(s.fpscr);
+            if (auto [it, fresh] = out.at.try_emplace(pc, m); !fresh) it->second = meet(it->second, m);
+        }
         bool handled = true;
         switch (i.op) {
         case Op::fschg: s.fpscr = bxor(s.fpscr, constant(fpscr::kSZ)); break;
@@ -225,7 +232,7 @@ Summary summarise(const BootFile& boot, const Function& f, const KnownBits& entr
                 if (w & (1u << k)) r[k] = {};
         }
         // Calls, returns and tail calls take effect after the delay slot.
-        const bool slot = pc > boot.base() && std::ranges::binary_search(f.insns, pc - 2) &&
+        const bool slot = !(node & 1u) && pc > boot.base() && std::ranges::binary_search(f.insns, pc - 2) &&
                           (sh4::spec(sh4::decode(boot.u16(pc - 2)).op).flags & sh4::kDelayed);
         const uint32_t site = slot ? pc - 2 : pc;
         const Insn branch = slot ? sh4::decode(boot.u16(site)) : i;

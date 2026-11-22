@@ -310,6 +310,12 @@ ToyRacer--QilinRecomp started from this core, and its boot file needed three thi
 
 The counts earlier in this file are as they were when each section was written.
 
+## Three more rules from Toy Racer (2026-11-22)
+Bringing Toy Racer's boot file to no unknown bytes (`docs/toyracer/code-analysis.md`, "Every byte") changed discovery and the mode pass in three general ways; Toy Commander's results are unchanged by all three (its lift output is identical):
+- **A layout's entry is always tried as such**, even where a pointer guess at the same address failed first (a guess is tried only once). The layout knows an entry may run on into its neighbour; the guess doesn't.
+- **Filler before an aligned loop head**: zero or `nop` words fewer than 32 bytes that end on a 32-byte boundary are padding, whatever their length below that (before, 16 bytes at most).
+- **A branch into a delay slot** is followed by `successors()` as a node of its own, the slot's address with its low bit set (instructions are 2-byte aligned, so no instruction has that address): the slot's instruction runs on its own, then the one after it. The FPSCR mode pass decodes `pc & ~1` and gives the instruction the meet of both paths' modes. The lifter already emitted such a slot as a plain copy. A unit test has one, and fails if the walk treats the slot only as its branch's.
+
 ## What comes next
 In the order the sister projects took:
 
