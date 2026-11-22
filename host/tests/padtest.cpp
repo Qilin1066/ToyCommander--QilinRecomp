@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <string>
 
 #include "qilin/host/display.hpp"
 
@@ -18,7 +20,10 @@ void check(bool ok, const char* what) {
     if (!ok) ++g_failures;
 }
 
-SDL_JoystickID attach_pad(const char* name) {
+struct Rumble {
+    std::atomic<unsigned> calls{0}, level{0};
+};
+SDL_JoystickID attach_pad(const char* name, Rumble* rumble = nullptr) {
     SDL_VirtualJoystickDesc desc;
     SDL_INIT_INTERFACE(&desc);
     desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
@@ -27,6 +32,15 @@ SDL_JoystickID attach_pad(const char* name) {
     desc.vendor_id = 0x045e;  // Microsoft
     desc.product_id = 0x0b12; // Xbox Series controller
     desc.name = name;
+    if (rumble) {
+        desc.userdata = rumble;
+        desc.Rumble = [](void* data, Uint16 low, Uint16 high) {
+            auto& state = *static_cast<Rumble*>(data);
+            state.level.store(unsigned(low) + high);
+            state.calls.fetch_add(1);
+            return true;
+        };
+    }
     return SDL_AttachVirtualJoystick(&desc);
 }
 
@@ -61,49 +75,84 @@ int main() {
     SDL_Joystick* j = SDL_OpenJoystick(first);
     qilin::host::Display::Options o;
     o.width = 320, o.height = 180;
-    qilin::host::Display d(o);  // SDL_Init again: counted, harmless
+    SDL_SetHintWithPriority(SDL_HINT_AUDIO_DRIVER, "dummy", SDL_HINT_OVERRIDE);
+    check(SDL_InitSubSystem(SDL_INIT_AUDIO), "another component owns audio");
+    {
+        qilin::host::Display d(o);  // SDL_Init again: counted, harmless
 
-    namespace h = qilin::host;
-    check(reaches(d, 0), "connected before the window: nothing held");
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, true);
-    check(reaches(d, h::kPadA), "A (south) reaches the game: the pad was opened at start-up");
-    check(d.pad_state(0).connected && (d.pad_state(0).buttons & h::kPadA) && !d.pad_state(1).connected,
-          "the first controller to press a button is port A's");
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, false);
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_EAST, true);
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
-    check(reaches(d, h::kPadB | h::kPadRB), "B and RB together");
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_EAST, false);
-    SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, false);
-    SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFTX, -32767);
-    SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767);
-    check(reaches(d, h::kPadLeft | h::kPadRT), "the left stick as the D-pad, the trigger as a button");
-    SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFTX, 0);
-    SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0);
-    check(reaches(d, 0), "let go");
+        namespace h = qilin::host;
+        check(reaches(d, 0), "connected before the window: nothing held");
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, true);
+        check(reaches(d, h::kPadA), "A (south) reaches the game: the pad was opened at start-up");
+        check(d.pad_state(0).connected && (d.pad_state(0).buttons & h::kPadA) && !d.pad_state(1).connected,
+              "the first controller to press a button is port A's");
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_SOUTH, false);
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_EAST, true);
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
+        check(reaches(d, h::kPadB | h::kPadRB), "B and RB together");
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_EAST, false);
+        SDL_SetJoystickVirtualButton(j, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, false);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFTX, -32767);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767);
+        check(reaches(d, h::kPadLeft | h::kPadRT), "the left stick as the D-pad, the trigger as a button");
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFTX, 0);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0);
+        check(reaches(d, 0), "let go");
 
-    // A second controller, pressed: port B's, port A's staying where it is.
-    const SDL_JoystickID other = attach_pad("Other virtual controller");
-    SDL_Joystick* jo = SDL_OpenJoystick(other);
-    SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, true);
-    check(reaches(d, h::kPadY), "a second controller's button");
-    check((d.pad_state(1).buttons & h::kPadY) && !(d.pad_state(0).buttons & h::kPadY), "the second controller to press is port B's");
-    SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, false);
-    check(reaches(d, 0), "let go of the second");
+        // A second controller, pressed: port B's, port A's staying where it is.
+        const SDL_JoystickID other = attach_pad("Other virtual controller");
+        SDL_Joystick* jo = SDL_OpenJoystick(other);
+        SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, true);
+        check(reaches(d, h::kPadY), "a second controller's button");
+        check((d.pad_state(1).buttons & h::kPadY) && !(d.pad_state(0).buttons & h::kPadY), "the second controller to press is port B's");
+        SDL_SetJoystickVirtualButton(jo, SDL_GAMEPAD_BUTTON_NORTH, false);
+        check(reaches(d, 0), "let go of the second");
 
-    // Port A's unplugged, then another plugged in and pressed: it takes port A, port B's staying.
-    SDL_CloseJoystick(j);
-    SDL_DetachVirtualJoystick(first);
-    d.poll();
-    check(!d.pad_state(0).connected && d.pad_state(1).connected, "port A unplugged: port B's stays port B's");
-    const SDL_JoystickID second = attach_pad("Second virtual controller");
-    SDL_Joystick* j2 = SDL_OpenJoystick(second);
-    SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_START, true);
-    check(reaches(d, h::kPadStart), "a controller connected later is used");
-    check((d.pad_state(0).buttons & h::kPadStart) && !(d.pad_state(1).buttons & h::kPadStart), "it takes the unplugged port A");
-    SDL_CloseJoystick(j2);
-    SDL_CloseJoystick(jo);
+        // Port A's unplugged, then another plugged in and pressed: it takes port A, port B's staying.
+        SDL_CloseJoystick(j);
+        SDL_DetachVirtualJoystick(first);
+        d.poll();
+        check(!d.pad_state(0).connected && d.pad_state(1).connected, "port A unplugged: port B's stays port B's");
+        Rumble rumble;
+        const SDL_JoystickID second = attach_pad("Second virtual controller", &rumble);
+        SDL_Joystick* j2 = SDL_OpenJoystick(second);
+        SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_START, true);
+        check(reaches(d, h::kPadStart), "a controller connected later is used");
+        check((d.pad_state(0).buttons & h::kPadStart) && !(d.pad_state(1).buttons & h::kPadStart), "it takes the unplugged port A");
+        d.rumble(0, 0.5f);
+        d.poll();
+        check(rumble.level.load() > 0, "rumble starts");
+        for (int i = 0; i < 12; ++i) { d.rumble(0, 0.5f); SDL_Delay(40); d.poll(); }
+        check(rumble.level.load() > 0, "constant strength renews the short lease");
+        for (int i = 0; i < 100 && rumble.level.load(); ++i) { SDL_Delay(5); d.poll(); }
+        check(rumble.level.load() == 0, "rumble stops after a stalled producer's lease expires");
 
+        const SDL_JoystickID third = attach_pad("Third virtual controller"), fourth = attach_pad("Fourth virtual controller");
+        SDL_Joystick* j3 = SDL_OpenJoystick(third);
+        SDL_Joystick* j4 = SDL_OpenJoystick(fourth);
+        SDL_SetJoystickVirtualButton(j3, SDL_GAMEPAD_BUTTON_SOUTH, true);
+        SDL_SetJoystickVirtualButton(j4, SDL_GAMEPAD_BUTTON_EAST, true);
+        for (int i = 0; i < 10; ++i) { d.poll(); SDL_Delay(5); }
+        check(d.pad_state(2).connected && d.pad_state(3).connected, "four ports filled");
+        const SDL_JoystickID waiting = attach_pad("Waiting fifth controller");
+        SDL_Joystick* jw = SDL_OpenJoystick(waiting);
+        SDL_SetJoystickVirtualButton(jw, SDL_GAMEPAD_BUTTON_NORTH, true);
+        for (int i = 0; i < 10; ++i) { d.poll(); SDL_Delay(5); }
+        SDL_SetJoystickVirtualButton(jw, SDL_GAMEPAD_BUTTON_NORTH, false);
+        d.poll();
+        SDL_CloseJoystick(j2);
+        SDL_DetachVirtualJoystick(second);
+        for (int i = 0; i < 20 && d.player_controller(0) != "Waiting fifth controller"; ++i) { d.poll(); SDL_Delay(5); }
+        check(d.player_controller(0) == "Waiting fifth controller" && d.pad_state(0).connected,
+              "fifth controller's earlier press claims the freed port without unplugging");
+        check(d.pad_state(1).connected && d.pad_state(2).connected && d.pad_state(3).connected, "other controllers keep their ports");
+        SDL_CloseJoystick(j3); SDL_CloseJoystick(j4); SDL_CloseJoystick(jw);
+        SDL_CloseJoystick(jo);
+
+    }
+    check((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0, "display destruction preserves another owner's audio");
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    SDL_Quit();  // the test's original video/gamepad references
     std::printf("padtest: %s\n", g_failures ? "FAILED" : "passed");
     return g_failures ? 1 : 0;
 }

@@ -6,6 +6,20 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-22
+
+### Fixed
+- A controller that pressed while all four ports were full remains eligible for a vacant port. It no longer needs another unplug/replug; connected players keep their assignments.
+- Rumble uses a renewable 300 ms lease rather than a 60-second command. Constant-strength vibration renews every 100 ms; stalled producers expire, disconnect/order reset stops motors, and non-finite strengths stop vibration.
+- Destroying a display releases its own video/gamepad subsystem references rather than calling global `SDL_Quit`, preserving audio owned by another component.
+- Missing playback devices and recoverable stream-operation failures no longer terminate the game. Output is retried at most once per second, stale queued sound is discarded, and saved volume/mute settings are applied before restarting playback. Stream lifecycle is serialised separately from the callback's SDL lock; callback errors are reported on the originating thread.
+- Save history refuses linked folders that the restore validator would reject. Snapshot inspection/listing/pruning failures are reported instead of silently succeeding. Restore requests are bounded to 1024 bytes and accept UTF-8 BOMs/CRLF while still rejecting multiple lines or embedded NULs.
+
+### Tests
+- Added real SDL startup-failure/recovery and subsystem-reference checks alongside the concurrent callback/format/volume stress test.
+- Extended the graphics-backed pad test with five-controller promotion, rumble renewal/expiry and audio ownership across display destruction. Linux CI requires it to run.
+- Added linked-history, Windows-edited restore-request and oversized-request regressions. [Validation record](docs/validation-0.12-0.5.md); a complete real-disc playthrough remains unverified.
+
 ## [0.11.0] - 2026-11-22
 
 ### Fixed

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -95,7 +96,7 @@ public:
     // sound in pieces too large for that (twice a piece and 10 ms). The cap is twice the target.
     static constexpr double kTargetMs = 40.0;
 
-    AudioOut();  // fails loudly if there's no playback device
+    AudioOut();  // playback outages are reported and retried; the game keeps running
     ~AudioOut();
     AudioOut(const AudioOut&) = delete;
     AudioOut& operator=(const AudioOut&) = delete;
@@ -105,7 +106,7 @@ public:
 
     void set_volume(unsigned percent, bool muted = false);
 
-    double target_ms() const { return target_ms_; }
+    double target_ms() const { const std::lock_guard lock(device_mutex_); return target_ms_; }
 
     // Since the last call (any thread): how much was queued on average and at
     // most, the playback speed, how often the queue ran dry, and how often and
@@ -113,11 +114,23 @@ public:
     struct Stats {
         double average_ms = 0, max_ms = 0, ratio = 1, dropped_ms = 0;
         uint32_t pushes = 0, empty = 0, dropped = 0, callbacks = 0;
+        uint32_t open_failures = 0, recoveries = 0;
+        double outage_ms = 0;  // submitted sound discarded while no stream was available
     };
     Stats take_stats();
 
 private:
     void feed(SDL_AudioStream* stream, int bytes);
+    bool try_open();  // construction or device_mutex_ held; no callback until resume
+    void close();     // device_mutex_ held; destroy waits for the callback
+    void unavailable(const char* reason);
+    void mark_failed(const char* reason);
+    mutable std::mutex device_mutex_;  // pointer/lifecycle, then SDL stream lock
+    bool audio_initialized_ = false, warned_ = false;
+    std::chrono::steady_clock::time_point retry_at_{};
+    std::atomic<bool> failed_{false};
+    std::atomic<uint32_t> open_failures_{0}, recoveries_{0};
+    std::atomic<uint64_t> outage_us_{0};
 
     SDL_AudioStream* stream_ = nullptr;
     unsigned rate_ = 0;

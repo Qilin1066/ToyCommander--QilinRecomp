@@ -7,6 +7,31 @@
 #include <vector>
 int main() {
     using qilin::host::AudioOut;
+    // A missing backend must not terminate the game. Real SDL initialisation
+    // fails, samples are dropped, then the same object recovers on a retry.
+    SDL_SetHintWithPriority(SDL_HINT_AUDIO_DRIVER, "qilin-invalid-audio-driver", SDL_HINT_OVERRIDE);
+    {
+        AudioOut out;
+        std::vector<int16_t> silence(4096 * 2, 0);
+        out.set_volume(25, true);  // retained during the outage
+        out.push(silence.data(), 1600, 32000);
+        SDL_SetHintWithPriority(SDL_HINT_AUDIO_DRIVER, "dummy", SDL_HINT_OVERRIDE);
+        SDL_Delay(1100);
+        out.push(silence.data(), 4096, 32000);
+        SDL_Delay(100);
+        const auto stats = out.take_stats();
+        if (stats.open_failures == 0 || stats.recoveries != 1 || stats.outage_ms < 49 || stats.callbacks == 0) {
+            std::printf("FAIL outage failures=%u recoveries=%u lost_ms=%.1f callbacks=%u\n",
+                        stats.open_failures, stats.recoveries, stats.outage_ms, stats.callbacks);
+            return 1;
+        }
+    }
+    if (SDL_WasInit(SDL_INIT_AUDIO)) { std::puts("FAIL leaked audio subsystem after recovery"); return 1; }
+    // Do not release another owner's reference when this AudioOut closes.
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return 1;
+    { AudioOut out; }
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) { std::puts("FAIL lost another owner's audio subsystem"); return 1; }
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
     for (int cycle = 0; cycle < 3; ++cycle) {
         AudioOut out;
         std::vector<int16_t> samples(8192 * 2, 1000);
@@ -29,6 +54,6 @@ int main() {
         }
         out.push(nullptr, 0, 0);
     }
-    std::puts("concurrent callbacks, format changes, volume and shutdown: passed");
+    std::puts("outage recovery, subsystem ownership, concurrent callbacks, formats, volume and shutdown: passed");
     return 0;
 }

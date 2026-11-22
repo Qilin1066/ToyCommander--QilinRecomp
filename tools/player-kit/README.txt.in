@@ -79,3 +79,14 @@ history supports recovery after an interrupted save, rather than making a
 whole game save transactional. Existing unreadable or malformed card/flash
 files stop the game and are left unchanged. Keep a separate copy before
 manual recovery.
+
+Sound and controller recovery
+-----------------------------
+If the sound output is unavailable, the game keeps running and retries it
+once a second. Playback resumes with the selected volume and mute setting;
+sound from the outage is discarded rather than played late. Recovery and
+errors are recorded in run-errors.log.
+
+A controller that pressed while all four ports were full can take a port
+when another controller disconnects. Existing players keep their ports.
+Vibration expires quickly if the game stops updating it.

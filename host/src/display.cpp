@@ -138,6 +138,7 @@ struct Display::Impl {
         Display::PadState state;  // as of the last poll
         uint32_t buttons = 0;     // with the stick's ways and the triggers as buttons
         uint16_t rumble_level = 0;
+        uint64_t rumble_refreshed = 0;
         bool pressed = false;  // a button seen since it was opened (said once)
     };
     std::vector<Pad> pads;
@@ -180,6 +181,7 @@ struct Display::Impl {
             if (pads[i].id == id) {
                 const char* name = SDL_GetGamepadName(pads[i].pad);
                 say("controllers: \"%s\" disconnected", name ? name : "the controller");
+                SDL_RumbleGamepad(pads[i].pad, 0, 0, 0);
                 SDL_CloseGamepad(pads[i].pad);
                 pads.erase(pads.begin() + static_cast<std::ptrdiff_t>(i));
                 return;
@@ -483,8 +485,8 @@ Display::Display(const Options& options) : impl_(std::make_unique<Impl>()) {
         d.target = Image::create(d.gpu, options.width, options.height, kFrameFormat,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     } else {
-        // Controllers work whichever window has the focus (the game is often
-        // started from a console, which may keep it).
+        // Keep discovering hotplug events in the background. poll() still
+        // suppresses controls and rumble while another window has focus.
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) die("SDL can't start: %s", SDL_GetError());
         d.log_input = std::getenv("QILIN_INPUT_LOG") != nullptr;
@@ -561,7 +563,7 @@ Display::~Display() {
     d.pads.clear();
     if (d.window) {
         SDL_DestroyWindow(d.window);
-        SDL_Quit();
+        SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
     }
 }
 
@@ -635,7 +637,8 @@ bool Display::poll() {
         if (y > 16384) held |= kPadDown;
         pad.buttons = held;
         b |= held;
-        if (!pad.pressed && held) {
+        if (pad.pressed || held) {
+            const bool first_press = !pad.pressed;
             pad.pressed = true;
             const char* name = SDL_GetGamepadName(p);
             if (d.place_of(pad.key) < 0) {
@@ -645,7 +648,7 @@ bool Display::poll() {
                 if (place < d.joined.size()) d.joined[place] = pad.key;
                 else if (place < Impl::kPlaces) d.joined.push_back(pad.key);
                 if (place < Impl::kPlaces) say("controllers: \"%s\" works (buttons 0x%x): port %c", name ? name : "the controller", held, char('A' + place));
-                else say("controllers: \"%s\" works, but the four ports are taken", name ? name : "the controller");
+                else if (first_press) say("controllers: \"%s\" works, but the four ports are taken", name ? name : "the controller");
             }
         }
         // The right stick (a dead zone of a quarter, then linear to 1): whichever pad's is pushed furthest.
@@ -718,11 +721,14 @@ void Display::rumble(unsigned player, float strength) {
     Impl& d = *impl_;
     Impl::Pad* p = player < Impl::kPlaces ? d.at_place(player) : nullptr;
     if (!p) return;
-    if (!focused()) strength = 0.0f;  // not while another window has the keyboard
+    if (!focused() || !std::isfinite(strength)) strength = 0.0f;  // not while another window has the keyboard
     const uint16_t level = static_cast<uint16_t>(std::clamp(strength, 0.0f, 1.0f) * 65535.0f + 0.5f);
-    if (level == p->rumble_level) return;
-    p->rumble_level = level;
-    SDL_RumbleGamepad(p->pad, level, level, level ? 60000 : 0);
+    const uint64_t now = SDL_GetTicksNS();
+    if (level == p->rumble_level && (!level || now - p->rumble_refreshed < 100'000'000)) return;
+    if (SDL_RumbleGamepad(p->pad, level, level, level ? 300 : 0)) {
+        p->rumble_level = level;
+        p->rumble_refreshed = now;
+    }
 }
 
 void Display::Impl::show(VkImage src, VkImageView view, uint32_t sw, uint32_t sh, float aspect, uint32_t lines) {

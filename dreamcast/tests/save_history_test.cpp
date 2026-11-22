@@ -101,6 +101,36 @@ int main() {
     for (const auto& b : list) flash = flash || b.label.rfind("Console flash memory / ", 0) == 0;
     check(flash && list.size() == 6, "listed beside the memory card's");
 
+    // Requests edited on Windows: UTF-8 BOM and CRLF keep their meaning.
+    list = dreamcast::save_backups(dir);
+    for (const auto& backup : list) {
+        if (backup.label.rfind("Memory card / ", 0) != 0) continue;
+        const auto wanted = read(backup.file);
+        check(dreamcast::request_save_restore(dir, backup.file, error), "request fixture for CRLF");
+        auto request = read(dir / "restore-save.txt");
+        request.pop_back();
+        write(dir / "restore-save.txt", std::string("\xEF\xBB\xBF") + request + "\r\n");
+        check(dreamcast::apply_save_restore(dir, error) && read(card) == wanted, "BOM and CRLF restore request");
+        break;
+    }
+    const auto before = read(card);
+    write(dir / "restore-save.txt", std::string(1025, 'x'));
+    check(!dreamcast::apply_save_restore(dir, error) && read(card) == before && fs::exists(dir / "restore-save.txt"),
+          "oversized restore request refused without changing the save or request");
+    fs::remove(dir / "restore-save.txt");
+
+    // A history through a directory link could be written but not restored
+    // under backup_path's policy. Refuse it before claiming a recoverable copy.
+    const auto linked = dir / "linked", outside = dir / "outside";
+    fs::create_directories(linked); fs::create_directories(outside);
+    write(linked / "memory_card_a1.bin", "unchanged");
+    std::error_code ec;
+    fs::create_directory_symlink(outside, linked / "save-backups", ec);
+    if (!ec) {
+        check(!dreamcast::backup_save(linked, "memory_card_a1.bin", error) && fs::is_empty(outside) &&
+              read(linked / "memory_card_a1.bin") == "unchanged", "linked history refused before making an unusable backup");
+    } else std::printf("directory symlink fixture unavailable: %s\n", ec.message().c_str());
+
     fs::remove_all(dir);
     std::printf("save_history_test: %s\n", g_failures ? "FAILED" : "passed");
     return g_failures ? 1 : 0;

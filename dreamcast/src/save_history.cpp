@@ -84,8 +84,11 @@ bool backup_path(const fs::path& folder, const fs::path& backup, std::string& na
     dir.resize(dir.size() - kSuffix.size());
     if (!label_of(dir)) return fail(error, "not a save this program keeps");
     std::error_code ec;
-    for (const fs::path& p : {history, history / parts[0], backup})
-        if (fs::is_symlink(fs::symlink_status(p, ec))) return fail(error, "a link in the saves' history");
+    for (const fs::path& p : {history, history / parts[0], backup}) {
+        const auto status = fs::symlink_status(p, ec);
+        if (ec) return fail(error, "cannot inspect a path in the saves' history", ec);
+        if (fs::is_symlink(status)) return fail(error, "a link in the saves' history");
+    }
     if (!fs::is_regular_file(backup, ec)) return fail(error, "the copy is missing", ec);
     name = dir;
     return true;
@@ -103,11 +106,16 @@ bool backup_save(const fs::path& folder, const std::string& name, std::string& e
     if (!label_of(name)) return fail(error, "not a save this program keeps");
     const fs::path file = folder / name;
     std::error_code ec;
-    const bool exists = fs::exists(file, ec);
+    const auto status = fs::symlink_status(file, ec);
+    if (ec == std::errc::no_such_file_or_directory || (!ec && status.type() == fs::file_type::not_found)) return error.clear(), true;
     if (ec) return fail(error, "cannot inspect the existing save", ec);
-    if (!exists) return error.clear(), true;  // nothing to keep yet
-    if (!fs::is_regular_file(file, ec) || fs::is_symlink(fs::symlink_status(file, ec))) return fail(error, qilin::utf8_path(file) + " isn't a plain file");
-    const fs::path dir = folder / kHistory / (name + ".history");
+    if (!fs::is_regular_file(status)) return fail(error, qilin::utf8_path(file) + " isn't a plain file");
+    const fs::path history = folder / kHistory, dir = history / (name + ".history");
+    for (const fs::path& p : {history, dir}) {
+        const auto entry = fs::symlink_status(p, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) return fail(error, "cannot inspect the saves' history", ec);
+        if (!ec && fs::is_symlink(entry)) return fail(error, "a link in the saves' history");
+    }
     fs::create_directories(dir, ec);
     if (ec) return fail(error, "cannot make the saves' history", ec);
     const auto ticks = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -116,7 +124,9 @@ bool backup_save(const fs::path& folder, const std::string& name, std::string& e
         std::ostringstream n;
         n << std::setw(20) << std::setfill('0') << ticks << '-' << std::setw(6) << sequence << ".bak";
         destination = dir / n.str();
-        if (!fs::exists(destination, ec)) break;
+        const bool exists = fs::exists(destination, ec);
+        if (ec) return fail(error, "cannot inspect a snapshot name", ec);
+        if (!exists) break;
     }
     fs::path temporary = destination;
     temporary += ".tmp";
@@ -129,9 +139,13 @@ bool backup_save(const fs::path& folder, const std::string& name, std::string& e
     }
     std::vector<fs::path> copies;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && it->path().extension() == ".bak") copies.push_back(it->path());
+        if (fs::is_regular_file(it->symlink_status(ec)) && it->path().extension() == ".bak") copies.push_back(it->path());
+    if (ec) return fail(error, "cannot list snapshots for retention", ec);
     std::sort(copies.begin(), copies.end());
-    for (size_t i = 0; i + kKeep < copies.size(); ++i) fs::remove(copies[i], ec);
+    for (size_t i = 0; i + kKeep < copies.size(); ++i) {
+        fs::remove(copies[i], ec);
+        if (ec) return fail(error, "cannot remove an expired snapshot", ec);
+    }
     error.clear();
     return true;
 }
@@ -172,12 +186,16 @@ bool request_save_restore(const fs::path& folder, const fs::path& backup, std::s
 bool apply_save_restore(const fs::path& folder, std::string& error) {
     const fs::path request = folder / kRequest;
     std::error_code ec;
-    if (!fs::exists(request, ec)) return ec ? fail(error, "cannot look for a restore request", ec) : (error.clear(), true);
-    std::ifstream in(request, std::ios::binary);
-    std::string relative, extra;
-    if (!std::getline(in, relative) || std::getline(in, extra)) return fail(error, "the restore request isn't one line");
-    in.close();
-    const fs::path backup = folder / kHistory / fs::path(relative);
+    std::string relative;
+    bool missing = false;
+    if (!qilin::host::read_file(request, relative, &missing, 1024))
+        return missing ? (error.clear(), true) : fail(error, "cannot read the restore request (maximum 1024 bytes)");
+    if (relative.starts_with("\xEF\xBB\xBF")) relative.erase(0, 3);
+    if (relative.ends_with('\n')) relative.pop_back();
+    if (relative.ends_with('\r')) relative.pop_back();
+    if (relative.empty() || relative.find_first_of("\r\n") != std::string::npos || relative.find('\0') != std::string::npos)
+        return fail(error, "the restore request isn't one line");
+    const fs::path backup = folder / kHistory / qilin::native_path(relative);
     std::string name;
     if (!backup_path(folder, backup, name, error)) return false;
     // The copy is staged before the present save is kept: keeping it may
