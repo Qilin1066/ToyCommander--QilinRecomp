@@ -42,6 +42,8 @@ struct Push {
     float screen[4];
     uint32_t flags;
     float alpha_ref;
+    float unused[2];
+    float clip[4];  // the user tile clip, scene pixels: x0, y0, x1, y1 (exclusive)
 };
 
 // The ISP/TSP instruction word and the TSP instruction word.
@@ -51,6 +53,7 @@ constexpr bool z_write_off(uint32_t isp) { return (isp >> 26) & 1u; }
 constexpr uint32_t src_blend(uint32_t tsp) { return tsp >> 29; }
 constexpr uint32_t dst_blend(uint32_t tsp) { return (tsp >> 26) & 7u; }
 constexpr uint32_t fog_mode(uint32_t tsp) { return (tsp >> 22) & 3u; }
+constexpr bool colour_clamp(uint32_t tsp) { return (tsp >> 21) & 1u; }
 constexpr bool use_alpha(uint32_t tsp) { return (tsp >> 20) & 1u; }
 constexpr bool ignore_texture_alpha(uint32_t tsp) { return (tsp >> 19) & 1u; }
 constexpr uint32_t shading(uint32_t tsp) { return (tsp >> 6) & 3u; }
@@ -59,11 +62,12 @@ constexpr uint32_t v_size(uint32_t tsp) { return 8u << (tsp & 7u); }
 // Filter, clamp and flip, then the mip-map D adjust: what a sampler is made from.
 constexpr uint32_t sampler_bits(uint32_t tsp) { return ((tsp >> 13) & 0x3Fu) | ((tsp >> 8) & 0xFu) << 6; }
 
-// The stencil's use, for the cheap shadows of the opaque modifier volumes:
-// bit 1 says the polygon seen at a pixel takes shadows (its PCW's bit 7);
-// bit 0 is flipped by each face of one volume in front of it (odd: inside),
-// then moved into bit 2 (inside some volume) before the next volume; the
-// shadow darkens where bits 1 and 2 are set.
+// The stencil's use, for the opaque modifier volumes: bit 1 says the polygon
+// seen at a pixel is one they affect (its PCW's bit 7, and in the two-volume
+// mode its two volumes); bit 0 is flipped by each face of one volume in
+// front of it (odd: inside), then moved into bit 2 (inside some volume)
+// before the next volume; where bits 1 and 2 are set, the cheap shadow
+// darkens, or the polygon's second volume is drawn.
 enum class Stencil : uint8_t { off, mark_none, mark_shadow, volume, resolve, shade };
 
 struct Draw {
@@ -74,9 +78,10 @@ struct Draw {
     uint32_t depth = 0;
     bool depth_write = false;
     Stencil stencil = Stencil::off;
+    uint32_t clip = 0;  // the user tile clip's rectangle, a byte each (tiles), when the flags use it
     bool same_state(const Draw& o) const {
         return pipeline == o.pipeline && set == o.set && flags == o.flags && depth == o.depth && depth_write == o.depth_write &&
-               stencil == o.stencil;
+               stencil == o.stencil && clip == o.clip;
     }
 };
 
@@ -89,13 +94,21 @@ constexpr uint32_t kVolumeKey = 0x100u;
 // A draw's flag (pvr.frag's bit 6): darken where inside a translucent modifier volume.
 constexpr uint32_t kInVolumesFlag = 0x40u;
 constexpr uint32_t kMaxVolumes = 64;  // pvr.frag's array
-// A draw's flag (pvr.frag's bit 7): table fog.
-constexpr uint32_t kTableFogFlag = 0x80u;
+// A draw's flags (pvr.frag's): bit 7 table fog; 8 and 9 drop the pixels
+// inside, or outside, the translucent modifier volumes (a two-volume
+// polygon's first and second volume); 10-11 the user tile clip (2: drawn
+// only inside it, 3: only outside); 12 vertex fog; 13 the fog table's second
+// mode; 14 the colour clamp.
+constexpr uint32_t kTableFogFlag = 0x80u, kOutsideVolumesFlag = 0x100u, kInsideVolumesFlag = 0x200u, kVertexFogFlag = 0x1000u,
+                   kTableFog2Flag = 0x2000u, kClampFlag = 0x4000u;
+constexpr uint32_t kClipShift = 10;
 // The frame's buffer for pvr.frag, in floats: a header of 8, the table fog's
-// colour (4), density (1, then 3 unused) and table (128 words), then the
-// translucent modifier volumes (8 each, kMaxVolumes of them), then their
-// triangles.
-constexpr size_t kFogColourAt = 8, kFogDensityAt = 12, kFogTableAt = 16, kVolumesAt = 144, kTrianglesAt = kVolumesAt + kMaxVolumes * 8;
+// colour (4), vertex fog's colour (4), the colour clamp's maximum (4) and
+// minimum (4), the table fog's density (1, then 3 unused) and table (128
+// words), then the translucent modifier volumes (8 each, kMaxVolumes of
+// them), then their triangles.
+constexpr size_t kFogColourAt = 8, kFogVertexColourAt = 12, kClampMaxAt = 16, kClampMinAt = 20, kFogDensityAt = 24, kFogTableAt = 28,
+                 kVolumesAt = 156, kTrianglesAt = kVolumesAt + kMaxVolumes * 8;
 
 VkBlendFactor blend_factor(uint32_t f, bool source) {
     switch (f) {
@@ -181,8 +194,9 @@ struct Renderer::Impl {
     Texture white{};
     uint64_t frame = 0;
     Stats stats{};
-    bool said_modifiers = false, said_fog = false, said_two_volumes = false;
-    bool shadows = false;  // this scene has cheap shadows to draw
+    bool said_modifier_clip = false;
+    bool cheap = false;    // SHADOW_SCALE's bit 8: cheap shadows; clear, the two-volume mode
+    bool opaque_volumes = false;  // this scene has opaque modifier volumes, drawn into the stencil
     bool translucent_volumes = false;  // and translucent modifier volumes for translucent polygons
 
     // The frame being built.
@@ -492,26 +506,52 @@ struct Renderer::Impl {
     }
     static float clean_z(float z) { return z > 0.0f && std::isfinite(z) ? z : 1e-12f; }
 
-    void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background) {
+    // A polygon affected by the modifier volumes: its PCW's bit 7 (and, in
+    // the two-volume mode, its two volumes, bit 6).
+    bool modified(const ta::Strip& s) const { return (s.pcw & 0x80u) && (cheap || s.two_volumes); }
+
+    // A strip's triangles in one of its volumes (0, or 1: the second, drawn
+    // where the modifier volumes enclose it, in the two-volume mode).
+    void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background, int vol = 0) {
         if (s.count < 3) return;
-        if (s.two_volumes) once(said_two_volumes, "a polygon's second volume (it draws the first)");
-        // Table fog (mode 0) is drawn; none is mode 2. Vertex fog (1) and the
-        // table's second mode (3) aren't yet, and neither game uses them.
-        if (const uint32_t fog = fog_mode(s.tsp[0]); fog == 1 || fog == 3) once(said_fog, "vertex fog or table fog's second mode");
-        const uint32_t tsp = s.tsp[0];
+        const uint32_t tsp = s.tsp[vol];
         const bool translucent = s.list == ta::kTranslucent, punch = s.list == ta::kPunchThrough;
+        const bool second_volumes = !cheap && !background && modified(s);  // its second volume is drawn too
         Draw d;
         d.pipeline = pipeline_key(translucent, src_blend(tsp), dst_blend(tsp), punch);
         d.flags = (s.textured ? 1u : 0u) | (s.pcw & 0x04u ? 2u : 0u) | (use_alpha(tsp) ? 4u : 0u) | (ignore_texture_alpha(tsp) ? 8u : 0u) |
                   shading(tsp) << 4;
         d.depth = background ? 7u : depth_mode(s.isp);
         d.depth_write = !z_write_off(s.isp);
-        if (shadows && !translucent) d.stencil = (s.pcw & 0x80u) && !background ? Stencil::mark_shadow : Stencil::mark_none;
-        // A translucent polygon that takes shadows tests itself against the
-        // translucent modifier volumes, pixel by pixel (pvr.frag).
-        if (translucent_volumes && translucent && (s.pcw & 0x80u)) d.flags |= kInVolumesFlag;
-        if (fog_mode(tsp) == 0) d.flags |= kTableFogFlag;
-        d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[0]), sampler_bits(tsp)) : set_for(white, 0);
+        if (opaque_volumes && !translucent) d.stencil = !background && modified(s) ? Stencil::mark_shadow : Stencil::mark_none;
+        if (vol == 1 && !translucent) {
+            // Where the first volume's surface is the one seen and inside a
+            // volume: the same triangles at the same depth, over it.
+            d.depth = 2, d.depth_write = false, d.stencil = Stencil::shade;
+        }
+        // A translucent polygon tests itself against the translucent modifier
+        // volumes, pixel by pixel (pvr.frag): darkened inside them (cheap
+        // shadows), or each volume drawn only on its own side of them.
+        if (translucent_volumes && translucent && !background && modified(s)) {
+            if (cheap) d.flags |= kInVolumesFlag;
+            else d.flags |= vol == 0 ? kOutsideVolumesFlag : kInsideVolumesFlag;
+        } else if (translucent && second_volumes && vol == 1) {
+            return;  // no translucent modifier volume: nothing is inside one
+        }
+        switch (fog_mode(tsp)) {
+        case 0: d.flags |= kTableFogFlag; break;
+        case 1: d.flags |= kVertexFogFlag; break;
+        case 3: d.flags |= kTableFog2Flag; break;
+        default: break;  // 2: no fog
+        }
+        if (colour_clamp(tsp)) d.flags |= kClampFlag;
+        // The user tile clip (PCW bits 17-16): 0 none; 1 is reserved.
+        if (const uint32_t clip = (s.pcw >> 16) & 3u; clip != 0 && !background) {
+            if (clip == 1) throw rt::Stop{rt::Stop::Unsupported, 0, s.pcw};
+            d.flags |= clip << kClipShift;
+            d.clip = uint32_t{s.clip[0]} | uint32_t{s.clip[1]} << 8 | uint32_t{s.clip[2]} << 16 | uint32_t{s.clip[3]} << 24;
+        }
+        d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[vol]), sampler_bits(tsp)) : set_for(white, 0);
         d.first = uint32_t(vertices.size());
         const bool gouraud = s.pcw & 0x02u;
         const uint32_t cull = s.sprite || background ? 0u : cull_mode(s.isp);
@@ -537,8 +577,8 @@ struct Renderer::Impl {
                 const ta::Vertex& a = *t[k];
                 const ta::Vertex& c = gouraud ? a : *t[2];  // flat: the triangle's last vertex colours it
                 HostVertex h;
-                h.x = a.x, h.y = a.y, h.z = clean_z(a.z), h.u = a.u[0], h.v = a.v[0];
-                std::memcpy(h.base, c.base[0], sizeof h.base), std::memcpy(h.offset, c.offset[0], sizeof h.offset);
+                h.x = a.x, h.y = a.y, h.z = clean_z(a.z), h.u = a.u[vol], h.v = a.v[vol];
+                std::memcpy(h.base, c.base[vol], sizeof h.base), std::memcpy(h.offset, c.offset[vol], sizeof h.offset);
                 vertices.push_back(h);
             }
             ++stats.triangles;
@@ -572,6 +612,7 @@ struct Renderer::Impl {
         };
         for (const ta::Modifier& m : scene.modifiers) {
             if (m.list == ta::kOpaqueModifier) continue;
+            if (m.pcw & 0x30000u) once(said_modifier_clip, "a modifier volume's user tile clip (the whole volume counts)");
             for (uint32_t t = m.first; t < m.first + m.count; ++t) {
                 const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
                 for (int k = 0; k < 3; ++k) {
@@ -596,10 +637,11 @@ struct Renderer::Impl {
 
     // The opaque modifier volumes into the stencil, one volume at a time
     // (a volume ends with the polygon whose ISP word has a volume
-    // instruction, bits 30-29), then the darkening where a surface that
-    // takes shadows is inside one: its colour times SHADOW_SCALE's low byte,
-    // in 256ths.
-    void add_shadows(const Source& src, const ta::Scene& scene) {
+    // instruction, bits 30-29), then what being inside one does to the
+    // surface the volumes affect: with cheap shadows, its colour times
+    // SHADOW_SCALE's low byte, in 256ths; in the two-volume mode, its
+    // polygon's second volume drawn instead of the first.
+    void add_volumes(const Source& src, const ta::Scene& scene) {
         Draw faces;
         faces.pipeline = kVolumeKey;
         faces.set = set_for(white, 0);
@@ -630,6 +672,7 @@ struct Renderer::Impl {
         };
         for (const ta::Modifier& m : scene.modifiers) {
             if (m.list != ta::kOpaqueModifier) continue;
+            if (m.pcw & 0x30000u) once(said_modifier_clip, "a modifier volume's user tile clip (the whole volume counts)");
             for (uint32_t t = m.first; t < m.first + m.count; ++t) {
                 if (faces.count == 0) faces.first = uint32_t(vertices.size());
                 const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
@@ -645,6 +688,12 @@ struct Renderer::Impl {
         }
         end_volume();  // a list that ends without the instruction
         if (!any) return;
+        if (!cheap) {
+            for (const ta::List list : {ta::kOpaque, ta::kPunchThrough})
+                for (const ta::Strip& s : scene.strips)
+                    if (s.list == list && modified(s)) add_strip(src, s, scene.vertices.data() + s.first, false, 1);
+            return;
+        }
         Draw shade;
         shade.pipeline = pipeline_key(true, 0, 2, false);  // zero, the colour drawn: the destination times it
         shade.set = set_for(white, 0);
@@ -727,24 +776,28 @@ struct Renderer::Impl {
             queue_upload(white.image, &opaque_white, true);
         }
         const ta::Scene& scene = *src.scene;
-        // Cheap shadows (SHADOW_SCALE's bit 8): the opaque modifier volumes
-        // darken the polygons that take shadows inside them. Translucent
-        // modifier volumes and the two-volume mode aren't drawn yet.
-        bool opaque_volumes = false, any_translucent = false;
-        for (const ta::Modifier& m : scene.modifiers) (m.list == ta::kOpaqueModifier ? opaque_volumes : any_translucent) = true;
-        const bool cheap = (src.shadow_scale & 0x100u) != 0;
-        shadows = opaque_volumes && cheap;
-        translucent_volumes = any_translucent && cheap && collect_translucent_volumes(src, scene);
-        if ((opaque_volumes || any_translucent) && !cheap) once(said_modifiers, "modifier volumes in two-volume mode");
+        // The modifier volumes (SHADOW_SCALE's bit 8 says how): with cheap
+        // shadows they darken the polygons that take shadows inside them; in
+        // the two-volume mode, those polygons are drawn with their second
+        // volume inside them. The opaque list's go through the stencil, the
+        // translucent list's through the fragment shader's test.
+        bool any_opaque = false, any_translucent = false;
+        for (const ta::Modifier& m : scene.modifiers) (m.list == ta::kOpaqueModifier ? any_opaque : any_translucent) = true;
+        cheap = (src.shadow_scale & 0x100u) != 0;
+        opaque_volumes = any_opaque;
+        translucent_volumes = any_translucent && collect_translucent_volumes(src, scene);
         if (src.background.count) add_strip(src, src.background, src.background_vertices, true);
         size_t translucent_draws = 0, translucent_vertices = 0;
         for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent}) {
             if (list == ta::kTranslucent) {
-                if (shadows) add_shadows(src, scene);
+                if (opaque_volumes) add_volumes(src, scene);
                 translucent_draws = draws.size(), translucent_vertices = vertices.size();
             }
-            for (const ta::Strip& s : scene.strips)
-                if (s.list == list) add_strip(src, s, scene.vertices.data() + s.first, false);
+            for (const ta::Strip& s : scene.strips) {
+                if (s.list != list) continue;
+                add_strip(src, s, scene.vertices.data() + s.first, false);
+                if (list == ta::kTranslucent && !cheap && modified(s)) add_strip(src, s, scene.vertices.data() + s.first, false, 1);
+            }
         }
         if (!src.presort) sort_translucent(translucent_draws, translucent_vertices);
         stats.draws = uint32_t(draws.size());
@@ -765,6 +818,13 @@ struct Renderer::Impl {
         volume_data[kFogColourAt] = float(src.fog_colour >> 16 & 0xFFu) / 255.0f;
         volume_data[kFogColourAt + 1] = float(src.fog_colour >> 8 & 0xFFu) / 255.0f;
         volume_data[kFogColourAt + 2] = float(src.fog_colour & 0xFFu) / 255.0f;
+        const auto colour_at = [&](size_t at, uint32_t argb, bool with_alpha) {
+            for (int k = 0; k < 3; ++k) volume_data[at + size_t(k)] = float(argb >> (16 - 8 * k) & 0xFFu) / 255.0f;
+            volume_data[at + 3] = with_alpha ? float(argb >> 24) / 255.0f : 1.0f;
+        };
+        colour_at(kFogVertexColourAt, src.fog_vertex_colour, false);
+        colour_at(kClampMaxAt, src.clamp_max, true);
+        colour_at(kClampMinAt, src.clamp_min, true);
         volume_data[kFogDensityAt] = fog_density(src.fog_density);
         std::memcpy(volume_data.data() + kFogTableAt, src.fog_table, sizeof src.fog_table);
         grow(volume_buffer, volume_data.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -854,6 +914,9 @@ struct Renderer::Impl {
             set_stencil(d.stencil);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr);
             push.flags = d.flags;
+            // The user tile clip, in scene pixels (tiles of 32), its maximum tile included.
+            push.clip[0] = float(d.clip & 0xFFu) * 32.0f, push.clip[1] = float(d.clip >> 8 & 0xFFu) * 32.0f;
+            push.clip[2] = float((d.clip >> 16 & 0xFFu) + 1) * 32.0f, push.clip[3] = float((d.clip >> 24) + 1) * 32.0f;
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
             vkCmdDraw(cmd, d.count, 1, d.first, 0);
         }

@@ -288,6 +288,113 @@ int renderer() {
         if (std::fabs(float(p[1]) - want) > 1.5f) all = false, std::printf("render_test: fog at z %g: %u, wanted %.1f\n", double(depths[k]), p[1], double(want));
     }
     expect(all, "fog: each depth's pixel is the table's value there");
+
+    // Each scene below: a 64x48 picture, its pixels read back and compared.
+    uint32_t next_buffer = 0x400000;
+    auto draw = [&](const ta::Scene& sc, auto&& set) {
+        dreamcast::renderer::Source s;
+        s.scene = &sc, s.width = 64, s.height = 48, s.frame_buffer = next_buffer, next_buffer += 0x100000;
+        s.read = read_vram, s.generation = generation;
+        set(s);
+        r.draw(s);
+        return r.read_back();
+    };
+    auto pixel_is = [](const std::vector<uint8_t>& pic, int x, int y, int red, int green, int blue) {
+        const uint8_t* q = &pic[size_t(y * 64 + x) * 4];
+        const bool ok = std::abs(q[0] - red) <= 2 && std::abs(q[1] - green) <= 2 && std::abs(q[2] - blue) <= 2;
+        if (!ok) std::printf("render_test: (%d, %d) is %u %u %u, wanted %d %d %d\n", x, y, q[0], q[1], q[2], red, green, blue);
+        return ok;
+    };
+    // A quad as a strip of four, one colour, in a list, with its words.
+    auto add_quad = [](ta::Scene& sc, ta::List list, uint32_t pcw, uint32_t isp, uint32_t tsp, float x0, float y0, float x1, float y1,
+                       float z, const float (&rgba)[4]) {
+        ta::Strip s{};
+        s.list = list, s.pcw = pcw, s.isp = isp, s.tsp[0] = tsp, s.textured = pcw & 0x08u;
+        s.tcw[0] = 1u << 27 | 1u << 26;  // RGB565, raster, at 0 (the blue texture)
+        s.first = uint32_t(sc.vertices.size()), s.count = 4;
+        const float xs[4] = {x0, x1, x0, x1}, ys[4] = {y0, y0, y1, y1};
+        for (int k = 0; k < 4; ++k) {
+            ta::Vertex v = vertex(xs[k], ys[k], z, rgba[0], rgba[1], rgba[2], k & 1 ? 1.0f : 0.0f, k & 2 ? 1.0f : 0.0f);
+            v.base[0][3] = rgba[3];
+            sc.vertices.push_back(v);
+        }
+        sc.strips.push_back(s);
+        return sc.strips.size() - 1;
+    };
+    const uint32_t always = 7u << 29, one_zero = 1u << 29, no_fog = 2u << 22;
+
+    // Vertex fog (fog mode 1): a black textured quad (blue texels modulated by
+    // black) whose offset colour's alpha is a half; FOG_COL_VERT white.
+    {
+        ta::Scene sc;
+        const size_t q = add_quad(sc, ta::kOpaque, 0x08u | 0x04u, always, one_zero | 1u << 22 | 1u << 6, 0, 0, 64, 48, 0.5f, {0, 0, 0, 1});
+        for (uint32_t k = 0; k < 4; ++k) sc.vertices[sc.strips[q].first + k].offset[0][3] = 0.5f;
+        const auto pic = draw(sc, [](dreamcast::renderer::Source& s) { s.fog_vertex_colour = 0x00FFFFFFu, s.fog_colour = 0x00FF0000u; });
+        expect(pixel_is(pic, 20, 20, 128, 128, 128), "vertex fog: half way to FOG_COL_VERT by the offset colour's alpha");
+    }
+    // The fog table's second mode (fog mode 3): a red translucent quad,
+    // blended by its source alpha over black, becomes FOG_COL_RAM (white)
+    // with the table's value (entry 0's high byte, 0x80, at a coefficient
+    // below 1) as its alpha.
+    {
+        ta::Scene sc;
+        add_quad(sc, ta::kTranslucent, 0, always, 4u << 29 | 5u << 26 | 3u << 22 | 1u << 20, 0, 0, 64, 48, 0.5f, {1, 0, 0, 1});
+        const auto pic = draw(sc, [](dreamcast::renderer::Source& s) {
+            s.fog_colour = 0x00FFFFFFu, s.fog_density = 0x8000u;  // 1
+            s.fog_table[0] = 0x8040u;
+        });
+        expect(pixel_is(pic, 20, 20, 128, 128, 128), "fog table's second mode: the fog colour, the table's value as alpha");
+    }
+    // The colour clamp (TSP bit 21): (1, 0.2, 0.9) between FOG_CLAMP_MIN
+    // (green at least 0x40) and FOG_CLAMP_MAX (red and blue at most 0x80).
+    {
+        ta::Scene sc;
+        add_quad(sc, ta::kOpaque, 0, always, one_zero | no_fog | 1u << 21, 0, 0, 64, 48, 0.5f, {1, 0.2f, 0.9f, 1});
+        const auto pic = draw(sc, [](dreamcast::renderer::Source& s) { s.clamp_max = 0xFF80FF80u, s.clamp_min = 0x00004000u; });
+        expect(pixel_is(pic, 20, 20, 128, 64, 128), "colour clamp: between FOG_CLAMP_MIN and FOG_CLAMP_MAX");
+    }
+    // The user tile clip: a far red quad over everything; a near green one
+    // drawn only inside tile (1, 0); a blue one between them drawn only
+    // outside tile (0, 1).
+    {
+        ta::Scene sc;
+        const uint32_t ge = 6u << 29;
+        add_quad(sc, ta::kOpaque, 0, ge, one_zero | no_fog, 0, 0, 64, 48, 0.1f, {1, 0, 0, 1});
+        const size_t g_ = add_quad(sc, ta::kOpaque, 2u << 16, ge, one_zero | no_fog, 0, 0, 64, 48, 0.5f, {0, 1, 0, 1});
+        const size_t b_ = add_quad(sc, ta::kOpaque, 3u << 16, ge, one_zero | no_fog, 0, 0, 64, 48, 0.3f, {0, 0, 1, 1});
+        const uint8_t inside[4] = {1, 0, 1, 0}, outside[4] = {0, 1, 0, 1};
+        std::memcpy(sc.strips[g_].clip, inside, 4), std::memcpy(sc.strips[b_].clip, outside, 4);
+        const auto pic = draw(sc, [](dreamcast::renderer::Source&) {});
+        expect(pixel_is(pic, 40, 10, 0, 255, 0), "user tile clip: drawn inside its tile");
+        expect(pixel_is(pic, 10, 10, 0, 0, 255), "user tile clip: not drawn outside its tile; the other drawn outside its own");
+        expect(pixel_is(pic, 10, 40, 255, 0, 0), "user tile clip: not drawn inside the tile it excludes");
+        expect(pixel_is(pic, 40, 40, 0, 0, 255), "user tile clip: drawn outside the tile it excludes");
+    }
+    // The two-volume mode (SHADOW_SCALE's bit 8 clear): an opaque quad over
+    // everything, red in its first volume and blue in its second, and a
+    // translucent one over the left quarter, green and white; the volume is
+    // the box of the shadows' test (x 8 to 24, y 8 to 40), in both modifier
+    // lists. Inside it each polygon shows its second volume.
+    {
+        ta::Scene sc;
+        const uint32_t two = 0x80u | 0x40u | gouraud;
+        const size_t oq = add_quad(sc, ta::kOpaque, two, 6u << 29, one_zero | no_fog, 0, 0, 64, 48, 0.1f, {1, 0, 0, 1});
+        const size_t t = add_quad(sc, ta::kTranslucent, two, always, one_zero | no_fog, 0, 0, 16, 48, 0.5f, {0, 1, 0, 1});
+        const float second[2][4] = {{0, 0, 1, 1}, {1, 1, 1, 1}};
+        for (int k = 0; k < 2; ++k) {
+            ta::Strip& s = sc.strips[k == 0 ? oq : t];
+            s.two_volumes = true, s.tsp[1] = s.tsp[0];
+            for (uint32_t i = 0; i < 4; ++i) std::memcpy(sc.vertices[s.first + i].base[1], second[k], sizeof second[k]);
+        }
+        sc.modifier_triangles = shadow.modifier_triangles;
+        sc.modifiers = shadow.modifiers;
+        const auto pic = draw(sc, [](dreamcast::renderer::Source&) {});
+        expect(pixel_is(pic, 40, 20, 255, 0, 0), "two volumes: the opaque polygon's first volume outside");
+        expect(pixel_is(pic, 20, 20, 0, 0, 255), "two volumes: the opaque polygon's second volume inside");
+        expect(pixel_is(pic, 4, 20, 0, 255, 0), "two volumes: the translucent polygon's first volume outside");
+        expect(pixel_is(pic, 12, 20, 255, 255, 255), "two volumes: the translucent polygon's second volume inside");
+        expect(pixel_is(pic, 12, 44, 0, 255, 0), "two volumes: the translucent polygon below the volume");
+    }
     return 0;
 }
 

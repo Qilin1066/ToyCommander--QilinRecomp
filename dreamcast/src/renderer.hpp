@@ -7,9 +7,11 @@
 // hardware's depth compare (z = 1/w, larger nearer), culling, flat and
 // Gouraud shading, the four texture shading instructions, the offset colour,
 // the blend instructions, and textures decoded from video memory
-// (texture.hpp). What it doesn't yet, each named once on stderr when a scene
-// asks for it: the two-volume mode, vertex fog and table fog's second mode, the translucent list's
-// per-pixel sorting, mip-mapping, the user tile clip.
+// (texture.hpp) with their mip-maps, the modifier volumes (cheap shadows and
+// the two-volume mode), table and vertex fog, the colour clamp and the user
+// tile clip. The translucent list in auto-sort mode is sorted triangle by
+// triangle, not pixel by pixel; a modifier volume's own user tile clip isn't
+// applied (named once on stderr if a scene has one).
 //
 // It knows the registers and video memory only through `Source`, so its test
 // draws scenes without the rest of the port.
@@ -47,9 +49,12 @@ struct Source {
     // SHADOW_SCALE: bit 8 cheap shadows (the modifier volumes darken), bits
     // 7-0 how much (256ths of the colour kept).
     uint32_t shadow_scale = 0;
-    // Table fog (a polygon's TSP fog mode 0): FOG_COL_RAM (0x00RRGGBB),
-    // FOG_DENSITY and FOG_TABLE's 128 entries (0x005F8200).
-    uint32_t fog_colour = 0, fog_density = 0;
+    // Table fog (a polygon's TSP fog modes 0 and 3): FOG_COL_RAM
+    // (0x00RRGGBB), FOG_DENSITY and FOG_TABLE's 128 entries (0x005F8200);
+    // vertex fog's colour, FOG_COL_VERT; the colour clamp's FOG_CLAMP_MAX
+    // and FOG_CLAMP_MIN (0xAARRGGBB).
+    uint32_t fog_colour = 0, fog_density = 0, fog_vertex_colour = 0;
+    uint32_t clamp_max = 0xFFFFFFFFu, clamp_min = 0;
     uint32_t fog_table[128] = {};
     const uint32_t* palette = nullptr;
     // Video memory as textures are addressed (pvr.hpp).

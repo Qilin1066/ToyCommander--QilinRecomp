@@ -45,6 +45,8 @@ struct Decoder {
     unsigned pending_bytes = 0, want = 0;
     // The modifier volume being gathered.
     bool open_modifier = false;
+    // The last user tile clip (tiles: x min, y min, x max, y max).
+    uint8_t clip[4] = {0, 0, 0x3F, 0x0F};
 
     void take(const uint8_t* block);  // 32 bytes
     void parameter(const uint32_t* w);
@@ -119,7 +121,9 @@ void Decoder::parameter(const uint32_t* w) {
     const uint32_t word = w[0];
     switch (para_type(word)) {
     case kEndOfList: end_list(); return;
-    case kUserTileClip: return;  // the clip is the whole screen's business: kept by the renderer later
+    case kUserTileClip:  // words 4-7: x min, y min, x max, y max (6 bits for x, 4 for y)
+        clip[0] = uint8_t(w[4] & 0x3Fu), clip[1] = uint8_t(w[5] & 0x0Fu), clip[2] = uint8_t(w[6] & 0x3Fu), clip[3] = uint8_t(w[7] & 0x0Fu);
+        return;
     case kPolygon:
     case kSprite: global(w); return;
     case kVertex: vertex(w); return;
@@ -184,7 +188,7 @@ void Decoder::vertex(const uint32_t* w) {
     }
     if (!open_strip) {
         scene.strips.push_back({list, sprite, two_volumes, textured, pcw, isp, {tsp[0], tsp[1]}, {tcw[0], tcw[1]},
-                                static_cast<uint32_t>(scene.vertices.size()), 0});
+                                static_cast<uint32_t>(scene.vertices.size()), 0, {clip[0], clip[1], clip[2], clip[3]}});
         open_strip = true;
     }
     Strip& s = scene.strips.back();
