@@ -6,6 +6,11 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-22
+
+### Tests
+- The five-controller regression identifies the promoted device by its input rather than its display name: SDL's Xbox mapping may give every virtual pad the same name. It checks admission before a new press, then verifies that the fifth pad's unique button reaches only port A. Controller runtime behaviour is unchanged from the preceding version.
+
 ## [0.5.0] - 2026-11-22
 
 ### Fixed

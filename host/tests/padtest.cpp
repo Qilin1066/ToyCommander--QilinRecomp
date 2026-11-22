@@ -142,9 +142,16 @@ int main() {
         d.poll();
         SDL_CloseJoystick(j2);
         SDL_DetachVirtualJoystick(second);
-        for (int i = 0; i < 20 && d.player_controller(0) != "Waiting fifth controller"; ++i) { d.poll(); SDL_Delay(5); }
-        check(d.player_controller(0) == "Waiting fifth controller" && d.pad_state(0).connected,
-              "fifth controller's earlier press claims the freed port without unplugging");
+        d.poll();
+        for (int i = 0; i < 20 && !d.pad_state(0).connected; ++i) { d.poll(); SDL_Delay(5); }
+        check(d.pad_state(0).connected, "the earlier press claims a free port before any new input");
+        // SDL's Xbox mapping can give every virtual gamepad the same public
+        // name. Identify the promoted device through its unique live input.
+        SDL_SetJoystickVirtualButton(jw, SDL_GAMEPAD_BUTTON_NORTH, true);
+        for (int i = 0; i < 20 && !(d.pad_state(0).buttons & h::kPadY); ++i) { d.poll(); SDL_Delay(5); }
+        check((d.pad_state(0).buttons & h::kPadY) && !(d.pad_state(1).buttons & h::kPadY) &&
+              !(d.pad_state(2).buttons & h::kPadY) && !(d.pad_state(3).buttons & h::kPadY),
+              "fifth controller's own input reaches only its newly assigned port");
         check(d.pad_state(1).connected && d.pad_state(2).connected && d.pad_state(3).connected, "other controllers keep their ports");
         SDL_CloseJoystick(j3); SDL_CloseJoystick(j4); SDL_CloseJoystick(jw);
         SDL_CloseJoystick(jo);

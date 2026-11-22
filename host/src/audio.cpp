@@ -16,8 +16,8 @@ namespace {
     std::fflush(nullptr);
     std::_Exit(70);
 }
-// SDL holds this same recursive lock while calling feed(). All producers
-// take it first as well: there is no second mutex whose order can invert.
+// SDL holds this recursive lock while calling feed(). Public methods take
+// the lifecycle mutex before this lock; callbacks never take that mutex.
 struct StreamLock {
     SDL_AudioStream* stream;
     explicit StreamLock(SDL_AudioStream* s) : stream(s) { if (!SDL_LockAudioStream(stream)) die("sound lock failed"); }

@@ -1,4 +1,4 @@
-# Toy Commander 0.12.0 / Toy Racer 0.5.0 validation
+# Toy Commander 0.12.1 / Toy Racer 0.5.1 validation
 
 This pass addresses controller admission, vibration lifetime, audio availability
 and save recovery in the runtime shared by both games. It follows the
@@ -73,3 +73,10 @@ and builds both Windows packages. Reproduction uses the
 The graphics algorithms, guest instructions and timing are unchanged. Full-game
 compatibility, real mission/race progression and hardware behaviour still need
 real-disc testing.
+
+The initial 0.12.0/0.5.0 CI run passed Windows, both macOS builds, both packages,
+and all Linux checks except the new controller-name assertion. SDL's mapping
+reported the same Xbox name for each virtual pad. The follow-up test verifies
+port admission before a new press, then identifies the promoted pad through its
+unique input. Rumble renewal/expiry and subsystem ownership passed in that run;
+the runtime controller change was retained.
