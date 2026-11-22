@@ -209,9 +209,13 @@ void render() {
     static const bool trace = std::getenv("QILIN_TRACE_RENDERS") != nullptr;
     if (trace) {
         static uint64_t renders = 0;
-        std::fprintf(stderr, "render %llu (picture %llu): FB_W_SOF1 %06X FB_W_CTRL %08X FB_W_LINESTRIDE %u, %ux%u, shown %06X\n",
+        std::fprintf(stderr,
+                     "render %llu (picture %llu): FB_W_SOF1 %06X FB_W_CTRL %08X FB_W_LINESTRIDE %u, %ux%u, clip x %08X y %08X, SCALER_CTL %08X, "
+                     "REGION_BASE %06X, GLOB_TILE_CLIP %08X; shown FB_R_SOF1 %06X SOF2 %06X FB_R_CTRL %08X FB_R_SIZE %08X VO_STARTY %08X\n",
                      static_cast<unsigned long long>(renders++), static_cast<unsigned long long>(g_pictures), src.frame_buffer,
-                     pvr_register(0x005F8048u), pvr_register(0x005F804Cu), src.width, src.height, pvr_register(kFbRSof1) & 0x00FFFFFCu);
+                     pvr_register(0x005F8048u), pvr_register(0x005F804Cu), src.width, src.height, pvr_register(kFbXClip), pvr_register(kFbYClip),
+                     pvr_register(0x005F80F4u), pvr_register(0x005F802Cu), pvr_register(0x005F813Cu), pvr_register(kFbRSof1),
+                     pvr_register(0x005F8054u), pvr_register(kFbRCtrl), pvr_register(kFbRSize), pvr_register(0x005F80F0u));
         for (const ta::Strip& s : src.scene->strips)
             if (s.textured) {
                 const uint32_t at = (s.tcw[0] & 0x1FFFFFu) << 3;

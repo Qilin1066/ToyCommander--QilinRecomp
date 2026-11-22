@@ -125,6 +125,9 @@ bool env(unsigned cmd, void* data) {
         if (!std::strcmp(v->key, "reicast_threaded_rendering")) return v->value = "disabled", true;
         // --fog renders into texture memory and reads the pixels back from video memory.
         if (!std::strcmp(v->key, "reicast_enable_rttb")) return v->value = "enabled", true;
+        // A VGA cable, as the port answers the cable query: the games then lay out the whole 640x480 picture
+        // (on a television they keep to its safe area, and Toy Racer first asks 50 or 60 Hz).
+        if (!std::strcmp(v->key, "reicast_cable_type")) return v->value = "VGA", true;
         return false;
     }
     case RETRO_ENVIRONMENT_SET_HW_RENDER: {
