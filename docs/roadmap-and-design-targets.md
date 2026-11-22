@@ -66,6 +66,6 @@ All enhancements live behind a settings file (`toycommander.ini`) with presets, 
 4. **Boot to first frame:** 🔨 ✅ the Vulkan 1.3 renderer of the tile accelerator's scenes, with the PowerVR2's texture formats, in a window on SDL3 (the host layer from the sister projects); the start-up logos are drawn. To do: modifier volumes, fog, translucent sorting, mip-maps.
 5. **Playable at original spec:** 640×480, 4:3, original frame rate, sound, music, movies, saves, four players; matches the original; tested on low-end reference hardware at every milestone. The settings menu arrives here, as in the sister projects.
 6. **Resolution / AF / MSAA:** scaled render targets, HUD half-pixel fixups, render-to-texture handled per target.
-7. **Widescreen 16:9 → 21:9:** Hor+ projection, a wider culling frustum, the HUD and menus re-anchored, movies pillarboxed, split-screen layouts checked one by one.
+7. **Widescreen 16:9 → 21:9:** 🔨 16:9 is the game's own option (Toy Commander and Toy Racer both have one: the camera widened by 4/3, the picture anamorphic), which the port now shows at 16:9 (`docs/runtime.md`, step 45). Still to do: wider than 16:9 (scaling the cameras further, the HUD and menus re-anchored, movies pillarboxed), split-screen layouts checked one by one.
 8. **High refresh rate:** investigate the game's tick model first (fixed step or variable); then pacing from the swapchain, or interpolation if the logic is tied to 60 Hz.
 9. **Extras:** texture replacement packs (hash on upload), etc.

@@ -274,7 +274,9 @@ void vblank() {
     g_drawn = false;
     ++g_pictures;
     if (!g_shot_folder.empty() && g_pictures % g_shot_every == 0) shot(g_renderer->read_back(), p.width, p.height);
-    g_display->present_image(p.image, p.view, p.width, p.height, 4.0f / 3.0f, p.height / g_scale);
+    // The game's own 16:9 option draws anamorphic: shown at 16:9 (game.hpp).
+    const float aspect = game::widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
+    g_display->present_image(p.image, p.view, p.width, p.height, aspect, p.height / g_scale);
 }
 
 namespace {

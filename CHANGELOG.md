@@ -6,6 +6,9 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+### Added
+- **Widescreen, the game's own**: its 16:9 screen mode option (in the game's options) draws the picture anamorphic, and the port now shows it at 16:9 while the option is on.
+
 ## [0.10.0] - 2026-11-22
 The game runs into its first mission and is played there with a controller: from the movies through the menus, drawn by the Vulkan 1.3 renderer with everything the PowerVR2 draws, with sound, CD music, saves, the settings menu, four controllers and the Jump Pack; Toy Racer joins it in this repository.
 
