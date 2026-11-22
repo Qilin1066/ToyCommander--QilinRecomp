@@ -6,6 +6,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "qilin/host/display.hpp"
@@ -43,19 +44,19 @@ bool reaches(qilin::host::Display& d, uint32_t want) {
 int main() {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::printf("padtest: no display here (%s): skipped\n", SDL_GetError());
-        return 77;
+        return std::getenv("QILIN_REQUIRE_GRAPHICS") ? 1 : 77;  // CI under Xvfb and Mesa: a skip is a failure
     }
     // The window is Vulkan: skip where there's no Vulkan loader (a macOS
     // runner without MoltenVK), as vktest does, rather than fail to open it.
     if (!SDL_Vulkan_LoadLibrary(nullptr)) {
         std::printf("padtest: no Vulkan here (%s): skipped\n", SDL_GetError());
-        return 77;
+        return std::getenv("QILIN_REQUIRE_GRAPHICS") ? 1 : 77;  // CI under Xvfb and Mesa: a skip is a failure
     }
     SDL_Vulkan_UnloadLibrary();
     const SDL_JoystickID first = attach_pad("Virtual Xbox controller");
     if (!first) {
         std::printf("padtest: SDL has no virtual joysticks here: skipped\n");
-        return 77;
+        return std::getenv("QILIN_REQUIRE_GRAPHICS") ? 1 : 77;  // CI under Xvfb and Mesa: a skip is a failure
     }
     SDL_Joystick* j = SDL_OpenJoystick(first);
     qilin::host::Display::Options o;

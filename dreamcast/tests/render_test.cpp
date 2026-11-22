@@ -158,7 +158,7 @@ ta::Vertex vertex(float x, float y, float z, float r, float g, float b, float u 
 int renderer() {
     if (!vulkan_13_device()) {
         std::puts("render_test: no Vulkan 1.3 device here: the renderer's part skipped");
-        return 77;
+        return std::getenv("QILIN_REQUIRE_GRAPHICS") ? 1 : 77;  // CI under Xvfb and Mesa: a skip is a failure
     }
     qilin::host::Display::Options o;
     o.headless = true, o.width = 64, o.height = 48;

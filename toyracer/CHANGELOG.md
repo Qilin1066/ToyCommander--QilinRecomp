@@ -10,6 +10,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
 
 ### Added
+- **CI runs the graphical tests**: on Linux, under Xvfb and Mesa's software Vulkan, the renderer's, the Vulkan layer's and the pads' tests run on every push instead of skipping (`QILIN_REQUIRE_GRAPHICS=1` makes a skip a failure), as in Punch-Out's CI.
 - **The saves' history** (from Punch-Out's): before the memory card or the console's flash memory changes, a copy is kept (the five latest of each); the menu's Game page lists them and can restore one and restart. The flash memory is now written through a temporary file, so a crash mid-write leaves the old one.
 - **A modifier volume's user tile clip**: the volume counts only inside (or outside) its clip, for the opaque volumes (in the stencil) and the translucent ones (in the fragment shader's test); the render test checks both.
 - **Controllers take their ports by their first press**: a virtual pad or a wheel listed first no longer takes port A from the real controller; a controller plugged in to replace an unplugged one takes its port; the menu shows each port's controller and can choose them again.

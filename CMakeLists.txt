@@ -229,7 +229,8 @@ if(QILIN_HOST)
     endif()
 
     # The Vulkan layer's own test: a device, an offscreen frame, read back. Skips
-    # (exit 77) where there's no Vulkan 1.3 device, as on CI runners.
+    # (exit 77) where there's no Vulkan 1.3 device; Linux CI runs it under Xvfb and
+    # Mesa with QILIN_REQUIRE_GRAPHICS=1, which makes a skip a failure.
     add_executable(qilin_vktest host/tests/vktest.cpp)
     target_link_libraries(qilin_vktest PRIVATE qilin_host_toycommander qilin_warnings)
     add_test(NAME qilin_vktest COMMAND qilin_vktest)
