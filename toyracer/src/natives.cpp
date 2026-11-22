@@ -90,9 +90,7 @@ struct Console {
     uint32_t sound = 0;        // the user's: 0 stereo, 1 mono
     uint32_t cable = 0;        // the port's bits 9-8: 0 VGA, 2 RGB, 3 composite
 } g_console;
-// Read by the set-sound-mode native, still to be written for this build (its
-// Shinobi 1.71 address needs the disc: natives.hpp).
-[[maybe_unused]] void (*g_save_sound_mode)(bool) = nullptr;
+void (*g_save_sound_mode)(bool) = nullptr;
 }  // namespace
 
 void set_console(unsigned language, bool stereo) {
@@ -245,6 +243,54 @@ void read_dbr(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C05E2F8u,
 // unit raises no interrupts: stop if one is ever reached.
 void shinobi_timer_interrupt_a(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C04D7E0u, 0}; }
 void shinobi_timer_interrupt_b(rt::Context&) { throw rt::Stop{rt::Stop::Unsupported, 0x8C04D916u, 0}; }
+
+// 0x8C0E00A0 (Toy Commander's 0x8C0C3C28, the same code): calls r4 with r5
+// and r6 as its arguments on Shinobi's own stack (top 0x8C1D9D60, the
+// caller's kept at 0x8C1D9D64), with PR and SZ cleared in FPSCR and the
+// current bank, MACH, MACL, FPSCR and PR as they were afterwards (Kamui 2's
+// interrupt handler calls the game's callbacks this way).
+void shinobi_call_on_own_stack(rt::Context& c) {
+    const rt::Context saved = c;
+    rt::st32(0x8C1D9D64u, c.r[15]);
+    c.r[15] = 0x8C1D9D60u - 4 * 20;  // where the guest code's pushes leave it
+    c.fpscr &= ~0x00180000u;
+    c.r[4] = saved.r[5], c.r[5] = saved.r[6];
+    rt::call_guest(c, saved.r[4]);
+    std::memcpy(c.fr, saved.fr, sizeof c.fr);
+    c.mach = saved.mach, c.macl = saved.macl, c.fpscr = saved.fpscr, c.pr = saved.pr;
+    c.r[15] = saved.r[15];
+}
+
+// 0x8C0C5F5A (Toy Commander's 0x8C0B426E), the real-time clock's exit:
+// clears the count it keeps (0x8C1BCAF4) and takes its refresh handler out
+// of the interrupt chain. The port's set-up (0x8C0C5F30) added no handler,
+// so only the count is cleared.
+void shinobi_rtc_exit(rt::Context& c) {
+    rt::st32(0x8C1BCAF4u, 0);
+    c.r[0] = 0;
+}
+
+// 0x8C0C78F6 (Toy Commander's 0x8C0BABAA): forgets the work area Shinobi was
+// given (0x8C0FD1F8; Shinobi's exit).
+void shinobi_clear_work_area(rt::Context& c) {
+    rt::st32(0x8C0FD1F8u, 0);
+    c.r[0] = 0;
+}
+
+// 0x8C0C7900 (Toy Commander's 0x8C0BABB4): sets the console's sound mode, r4
+// (0 stereo, 1 mono): the boot ROM's copy at 0x8C00007E, then the console's
+// flash memory through the work area (0x8C0D0B84). Fails (-1) without a work
+// area or for another value. The port's flash memory is the settings file.
+void shinobi_set_sound_mode(rt::Context& c) {
+    if (rt::ld32(0x8C0FD1F8u) == 0 || c.r[4] > 1) {
+        c.r[0] = 0xFFFFFFFFu;
+        return;
+    }
+    rt::st8(0x8C00007Eu, static_cast<uint8_t>(c.r[4]));
+    g_console.sound = c.r[4];
+    if (g_save_sound_mode) g_save_sound_mode(c.r[4] == 0);
+    c.r[0] = 0;
+}
 
 // 0x8C0A1DD4: a debugger's break (0x003B), which the engine's checks call
 // when one fails; 0x8C0A1DE0: trapa #2, the C runtime's default handler. On
@@ -422,6 +468,10 @@ const rt::Provided kNatives[] = {
     {0x8C05E2F8u, "read_dbr", read_dbr},
     {0x8C04D7E0u, "shinobi_timer_interrupt_a", shinobi_timer_interrupt_a},
     {0x8C04D916u, "shinobi_timer_interrupt_b", shinobi_timer_interrupt_b},
+    {0x8C0E00A0u, "shinobi_call_on_own_stack", shinobi_call_on_own_stack},
+    {0x8C0C5F5Au, "shinobi_rtc_exit", shinobi_rtc_exit},
+    {0x8C0C78F6u, "shinobi_clear_work_area", shinobi_clear_work_area},
+    {0x8C0C7900u, "shinobi_set_sound_mode", shinobi_set_sound_mode},
     {0x8C0A1DD4u, "debug_break", debug_break},
     {0x8C0A1DE0u, "debug_trap", debug_trap},
     {0x8C09A900u, "debug_adapter_check", debug_adapter_check},

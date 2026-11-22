@@ -14,8 +14,7 @@ uint32_t interrupt_handler(uint32_t offset);
 // 2 German, 3 French, 4 Spanish) and stereo or mono sound.
 void set_console(unsigned language, bool stereo);
 // Called when the game changes the console's sound mode (Shinobi writes it
-// to the console's flash memory): the settings file keeps it. (The native
-// for Toy Racer's Shinobi function that does it is still to be written.)
+// to the console's flash memory, 0x8C0C7900): the settings file keeps it.
 void on_sound_mode(void (*save)(bool stereo));
 
 }  // namespace toyracer

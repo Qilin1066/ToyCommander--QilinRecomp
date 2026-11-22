@@ -83,7 +83,27 @@ void shinobi_rtc_get_date(rt::Context& c) {
     c.r[0] = 0;
 }
 
+// 0x8C0C6088: a date at r4 (as 0x8C0C5F92 writes one) into the clock's
+// count at r5, seconds since 1950, as the code computes it: 365 days a
+// year plus a leap day every fourth from 1950 + 2 (one less in January and
+// February of a leap year), the days before the month from the table at
+// 0x8C0F9E8C (copied to the stack first), then hours, minutes and seconds,
+// all in 32 bits. The game calls it. r0 ends as the seconds byte.
+void shinobi_rtc_date_to_count(rt::Context& c) {
+    const uint32_t at = c.r[4];
+    const uint32_t years = rt::ld16(at) + 0xF862u, month = rt::ld8(at + 2);
+    const uint32_t shifted = years + 2;
+    uint32_t days = years * 0x16Du + (shifted >> 2);
+    if ((shifted & 3u) == 0 && month <= 2) --days;
+    days += rt::ld32(0x8C0F9E8Cu + 4 * (month - 1)) + rt::ld8(at + 3) - 1;
+    const uint32_t second = rt::ld8(at + 6);
+    const uint32_t count = ((days * 24 + rt::ld8(at + 4)) * 60 + rt::ld8(at + 5)) * 60 + second;
+    rt::st32(c.r[5], count);
+    c.r[0] = second, c.r[6] = count, c.r[7] = 60;
+}
+
 constexpr rt::Provided kNatives[] = {
+    {0x8C0C6088u, "shinobi_rtc_date_to_count", shinobi_rtc_date_to_count},
     {0x8C0C5F68u, "shinobi_rtc_refresh", shinobi_rtc_refresh},
     {0x8C0C5F92u, "shinobi_rtc_get_date", shinobi_rtc_get_date},
 };
