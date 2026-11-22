@@ -266,6 +266,7 @@ int run_game(const char* core_path, const std::filesystem::path& disc, int frame
     SYM(retro_set_input_state);
     SYM(retro_init);
     SYM(retro_load_game);
+    SYM(retro_set_controller_port_device);
     SYM(retro_run);
     SYM(retro_get_memory_data);
     SYM(retro_get_memory_size);
@@ -278,6 +279,8 @@ int run_game(const char* core_path, const std::filesystem::path& disc, int frame
     const std::string path = std::filesystem::absolute(disc).string();
     retro_game_info game{path.c_str(), nullptr, 0, nullptr};
     if (!retro_load_game(&game)) throw std::runtime_error("the core didn't load the disc");
+    // A standard controller in port A, or the core never reads the pad (QILIN_DCREF_PRESS).
+    retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
     if (!make_gl()) throw std::runtime_error("no OpenGL context (EGL surfaceless)");
     if (g_hw.context_reset) g_hw.context_reset();
     const auto* ram = static_cast<const uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
