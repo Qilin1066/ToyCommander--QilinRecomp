@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,7 @@
 #include "clock.hpp"
 #include "guest.hpp"
 #include "pvr.hpp"
+#include "save_history.hpp"
 #include "qilin/host/paths.hpp"
 #include "system.hpp"
 #include "video.hpp"
@@ -99,7 +101,19 @@ constexpr uint32_t kBlocks = 256, kBlockBytes = 512, kWriteParts = 4;
 std::vector<uint8_t> g_card;
 std::filesystem::path g_card_file;
 
+// A save is many block writes: the card as it was before the first of them
+// (the first after two seconds without one) is kept in the saves' history
+// (save_history.hpp), so a save cut short can be undone from the menu.
+std::chrono::steady_clock::time_point g_last_write{};
+
 void save_card(uint32_t at, uint32_t bytes) {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_last_write == std::chrono::steady_clock::time_point{} || now - g_last_write > std::chrono::seconds(2)) {
+        std::string error;
+        if (!backup_save(g_card_file.parent_path(), g_card_file.filename().string(), error))
+            rt::fatal("cannot keep a copy of %s before saving: %s", g_card_file.string().c_str(), error.c_str());
+    }
+    g_last_write = now;
     std::FILE* f = std::fopen(g_card_file.string().c_str(), "r+b");
     if (!f) f = std::fopen(g_card_file.string().c_str(), "w+b");
     if (!f) rt::fatal("cannot write %s", g_card_file.string().c_str());

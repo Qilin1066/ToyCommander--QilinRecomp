@@ -541,6 +541,27 @@ void Menu::display_page() {
 }
 
 void Menu::game_page() {
+    ImGui::SeparatorText("Save recovery");
+    ImGui::TextWrapped("The five latest previous copies of the memory card and of the console's flash memory are kept, each from "
+                       "before a save. Restore restarts the game; the present save is kept as a copy first.");
+    if (ImGui::TreeNode("Previous saves")) {
+        if (!history_loaded_ || ImGui::Button("Refresh previous saves")) save_history_ = save_backups(folder_), history_loaded_ = true;
+        if (save_history_.empty()) ImGui::TextDisabled("No previous saves yet.");
+        for (size_t i = 0; i < save_history_.size(); ++i) {
+            ImGui::PushID(int(i));
+            ImGui::TextWrapped("%s", save_history_[i].label.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Restore and restart")) {
+                s_.fullscreen = display_.fullscreen();
+                if (!save_settings(folder_, s_)) note_ = "The settings couldn't be saved: the restore wasn't asked for.";
+                else if (request_save_restore(folder_, save_history_[i].file, note_)) restart_program();
+            }
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+    if (!note_.empty()) ImGui::TextWrapped("%s", note_.c_str());
+
     ImGui::SeparatorText("The Dreamcast's own settings (read the next time the game starts)");
     const int lang = std::clamp(int(s_.language), 1, 4);  // the disc's languages
     if (ImGui::BeginCombo("Language", kLanguages[lang])) {

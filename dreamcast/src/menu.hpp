@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "qilin/host/display.hpp"
+#include "save_history.hpp"
 #include "settings.hpp"
 
 namespace dreamcast {
@@ -79,6 +80,8 @@ private:
     uint64_t capture_until_ = 0;
     uint32_t capture_held_ = 0;  // the pad's buttons held when it began (they don't count)
     bool wait_release_ = false;  // after a pad button was taken: gamepad navigation back once it's let go
+    bool history_loaded_ = false;
+    std::vector<SaveBackup> save_history_;
     std::string note_;           // said under the table (what moved where)
     unsigned running_scale_ = 1;
 };

@@ -34,6 +34,7 @@
 #include "system.hpp"
 #include "ta.hpp"
 #include "threads.hpp"
+#include "save_history.hpp"
 #include "video.hpp"
 
 namespace rt = qilin::rt;
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: " QILIN_APP " <the game's .cue>\n");
         return 2;
     }
+    dreamcast::set_command_line(argc, argv);  // for the menu's "Restore and restart"
     auto disc = qilin::gdrom::Disc::open(argv[1]);
     if (!disc) rt::fatal("%s", disc.error().c_str());
     const auto ip = disc->bootstrap();

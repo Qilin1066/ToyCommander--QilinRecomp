@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <iterator>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "guest.hpp"
 #include "qilin/host/paths.hpp"
+#include "save_history.hpp"
 #include "system.hpp"
 
 namespace dreamcast::flash {
@@ -39,11 +41,13 @@ void load() {
     }
 }
 
+// The whole file, through a temporary one (a crash leaves the old), the old
+// kept in the saves' history first (save_history.hpp).
 void save() {
-    std::FILE* f = std::fopen(g_file.string().c_str(), "wb");
-    if (!f) rt::fatal("cannot write %s", g_file.string().c_str());
-    std::fwrite(g_flash.data(), 1, g_flash.size(), f);
-    if (std::fclose(f) != 0) rt::fatal("cannot write %s", g_file.string().c_str());
+    std::string error;
+    if (!backup_save(g_file.parent_path(), g_file.filename().string(), error))
+        rt::fatal("cannot keep a copy of %s before saving: %s", g_file.string().c_str(), error.c_str());
+    if (!write_file_safely(g_file, g_flash.data(), g_flash.size(), error)) rt::fatal("%s", error.c_str());
 }
 
 bool inside(uint32_t offset, uint32_t n) { return offset <= kBytes && n <= kBytes - offset; }

@@ -22,6 +22,7 @@
 #include "qilin/host/display.hpp"
 #include "qilin/host/paths.hpp"
 #include "renderer.hpp"
+#include "save_history.hpp"
 #include "sound.hpp"
 #include "settings.hpp"
 #include "system.hpp"
@@ -126,6 +127,9 @@ void shot(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
 
 void start() {
     g_data = qilin::host::user_folder();
+    // A restore asked for from the menu: before anything reads the saves.
+    if (std::string error; !apply_save_restore(g_data, error))
+        rt::log("saves: the restore asked for wasn't done (%s); restore-save.txt is kept", error.c_str());
     g_settings = load_settings(g_data);
     game::set_console(g_settings.language, g_settings.stereo);
     // The game's own sound option writes the console's setting: keep it.
