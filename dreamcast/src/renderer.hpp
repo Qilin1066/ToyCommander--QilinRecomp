@@ -47,6 +47,10 @@ struct Source {
     // SHADOW_SCALE: bit 8 cheap shadows (the modifier volumes darken), bits
     // 7-0 how much (256ths of the colour kept).
     uint32_t shadow_scale = 0;
+    // FOG_TABLE (0x005F8200, 128 entries): whether every entry is 0. Table
+    // fog (a polygon's TSP fog mode 0) then gives a fog factor of 0 at every
+    // depth, whatever the depth's entry: the polygon unfogged, exactly.
+    bool fog_table_clear = false;
     const uint32_t* palette = nullptr;
     // Video memory as textures are addressed (pvr.hpp).
     void (*read)(uint32_t offset, uint8_t* out, uint32_t n) = nullptr;

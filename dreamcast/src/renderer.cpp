@@ -472,7 +472,9 @@ struct Renderer::Impl {
     void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background) {
         if (s.count < 3) return;
         if (s.two_volumes) once(said_two_volumes, "a polygon's second volume (it draws the first)");
-        if (fog_mode(s.tsp[0]) != 2) once(said_fog, "fog");
+        // Fog isn't drawn yet but where it can't show: none (mode 2), or the
+        // table's (mode 0) with every entry 0.
+        if (const uint32_t fog = fog_mode(s.tsp[0]); fog != 2 && !(fog == 0 && src.fog_table_clear)) once(said_fog, "fog");
         const uint32_t tsp = s.tsp[0];
         const bool translucent = s.list == ta::kTranslucent, punch = s.list == ta::kPunchThrough;
         Draw d;

@@ -47,7 +47,7 @@ bool g_drawn = false;  // a render since the last picture shown
 constexpr uint32_t kFbRCtrl = 0x005F8044u, kFbRSof1 = 0x005F8050u, kFbRSize = 0x005F805Cu, kFbWSof1 = 0x005F8060u,
                    kSpgControl = 0x005F80D0u;
 constexpr uint32_t kParamBase = 0x005F8020u, kFbXClip = 0x005F8068u, kFbYClip = 0x005F806Cu, kIspBackgndD = 0x005F8088u,
-                   kIspBackgndT = 0x005F808Cu, kTextControl = 0x005F80E4u, kIspFeedCfg = 0x005F8098u, kShadowScale = 0x005F8074u, kPalRamCtrl = 0x005F8108u, kPtAlphaRef = 0x005F811Cu;
+                   kIspBackgndT = 0x005F808Cu, kTextControl = 0x005F80E4u, kIspFeedCfg = 0x005F8098u, kShadowScale = 0x005F8074u, kPalRamCtrl = 0x005F8108u, kPtAlphaRef = 0x005F811Cu, kFogTable = 0x005F8200u;
 
 float as_float(uint32_t w) {
     float f;
@@ -188,6 +188,8 @@ void render() {
     src.punch_alpha_ref = pvr_register(kPtAlphaRef);
     src.presort = pvr_register(kIspFeedCfg) & 1u;
     src.shadow_scale = pvr_register(kShadowScale);
+    src.fog_table_clear = true;
+    for (uint32_t k = 0; k < 128; ++k) src.fog_table_clear = src.fog_table_clear && (pvr_register(kFogTable + 4 * k) & 0xFFFFu) == 0;
     src.palette = pvr_palette();
     src.read = vram64_read;
     src.generation = vram64_generation;
