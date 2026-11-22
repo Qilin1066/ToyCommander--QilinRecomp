@@ -89,6 +89,13 @@ constexpr uint32_t kVolumeKey = 0x100u;
 // A draw's flag (pvr.frag's bit 6): darken where inside a translucent modifier volume.
 constexpr uint32_t kInVolumesFlag = 0x40u;
 constexpr uint32_t kMaxVolumes = 64;  // pvr.frag's array
+// A draw's flag (pvr.frag's bit 7): table fog.
+constexpr uint32_t kTableFogFlag = 0x80u;
+// The frame's buffer for pvr.frag, in floats: a header of 8, the table fog's
+// colour (4), density (1, then 3 unused) and table (128 words), then the
+// translucent modifier volumes (8 each, kMaxVolumes of them), then their
+// triangles.
+constexpr size_t kFogColourAt = 8, kFogDensityAt = 12, kFogTableAt = 16, kVolumesAt = 144, kTrianglesAt = kVolumesAt + kMaxVolumes * 8;
 
 VkBlendFactor blend_factor(uint32_t f, bool source) {
     switch (f) {
@@ -124,6 +131,22 @@ void once(bool& said, const char* what) {
 }
 
 }  // namespace
+
+float fog_density(uint32_t reg) { return float(reg >> 8 & 0xFFu) / 128.0f * std::exp2(float(static_cast<int8_t>(reg & 0xFFu))); }
+
+float table_fog(float density, const uint32_t* table, float inv_w) {
+    const float coef = density * inv_w;
+    if (!(coef >= 1.0f)) return float(table[0] >> 8 & 0xFFu);
+    int index = 127;
+    float frac = 1.0f;
+    if (coef < 256.0f) {
+        int e = 0;
+        const float steps = (std::frexp(coef, &e) * 2.0f - 1.0f) * 16.0f;
+        index = 16 * (e - 1) + int(steps), frac = steps - std::floor(steps);
+    }
+    const float hi = float(table[index] >> 8 & 0xFFu), lo = float(table[index] & 0xFFu);
+    return hi + (lo - hi) * frac;
+}
 
 struct Renderer::Impl {
     Gpu& gpu;
@@ -472,9 +495,9 @@ struct Renderer::Impl {
     void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background) {
         if (s.count < 3) return;
         if (s.two_volumes) once(said_two_volumes, "a polygon's second volume (it draws the first)");
-        // Fog isn't drawn yet but where it can't show: none (mode 2), or the
-        // table's (mode 0) with every entry 0.
-        if (const uint32_t fog = fog_mode(s.tsp[0]); fog != 2 && !(fog == 0 && src.fog_table_clear)) once(said_fog, "fog");
+        // Table fog (mode 0) is drawn; none is mode 2. Vertex fog (1) and the
+        // table's second mode (3) aren't yet, and neither game uses them.
+        if (const uint32_t fog = fog_mode(s.tsp[0]); fog == 1 || fog == 3) once(said_fog, "vertex fog or table fog's second mode");
         const uint32_t tsp = s.tsp[0];
         const bool translucent = s.list == ta::kTranslucent, punch = s.list == ta::kPunchThrough;
         Draw d;
@@ -487,6 +510,7 @@ struct Renderer::Impl {
         // A translucent polygon that takes shadows tests itself against the
         // translucent modifier volumes, pixel by pixel (pvr.frag).
         if (translucent_volumes && translucent && (s.pcw & 0x80u)) d.flags |= kInVolumesFlag;
+        if (fog_mode(tsp) == 0) d.flags |= kTableFogFlag;
         d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[0]), sampler_bits(tsp)) : set_for(white, 0);
         d.first = uint32_t(vertices.size());
         const bool gouraud = s.pcw & 0x02u;
@@ -531,7 +555,7 @@ struct Renderer::Impl {
     // bounds on screen and its triangles' range, then the triangles (three
     // vec4s each: x, y, z). False if there are none.
     bool collect_translucent_volumes(const Source& src, const ta::Scene& scene) {
-        volume_data.assign(8 + kMaxVolumes * 8, 0.0f);
+        volume_data.assign(kTrianglesAt, 0.0f);
         std::vector<float> triangles;
         uint32_t volumes = 0, first = 0;
         float box[4] = {1e30f, 1e30f, -1e30f, -1e30f};
@@ -539,7 +563,7 @@ struct Renderer::Impl {
             const uint32_t count = uint32_t(triangles.size() / 12) - first;
             if (count == 0) return;
             if (volumes == kMaxVolumes) throw rt::Stop{rt::Stop::Unsupported, 0, volumes};
-            float* v = volume_data.data() + 8 + volumes * 8;
+            float* v = volume_data.data() + kVolumesAt + volumes * 8;
             std::memcpy(v, box, sizeof box);
             const uint32_t range[2] = {first, count};
             std::memcpy(v + 4, range, sizeof range);
@@ -559,7 +583,10 @@ struct Renderer::Impl {
             if (m.isp & 0x60000000u) end_volume();
         }
         end_volume();
-        if (volumes == 0) return false;
+        if (volumes == 0) {
+            volume_data.resize(kTrianglesAt);
+            return false;
+        }
         const uint32_t head[2] = {volumes, 0};
         std::memcpy(volume_data.data(), head, sizeof head);
         volume_data[2] = float(src.shadow_scale & 0xFFu) / 256.0f;
@@ -731,15 +758,17 @@ struct Renderer::Impl {
 
         grow(vertex_buffer, vertices.size() * sizeof(HostVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         if (!vertices.empty()) std::memcpy(vertex_buffer.mapped, vertices.data(), vertices.size() * sizeof(HostVertex));
-        if (translucent_volumes) {
-            volume_data[3] = push.screen[2];  // the depth scale, for the volumes' z
-            volume_data[4] = float(scale);
-            grow(volume_buffer, volume_data.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-            std::memcpy(volume_buffer.mapped, volume_data.data(), volume_data.size() * sizeof(float));
-        } else if (!volume_buffer.buffer) {
-            grow(volume_buffer, 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);  // something to bind
-            std::memset(volume_buffer.mapped, 0, 64);
-        }
+        // The frame's buffer: the volumes (if any) and the table fog's registers, every frame.
+        if (!translucent_volumes) volume_data.assign(kTrianglesAt, 0.0f);
+        volume_data[3] = push.screen[2];  // the depth scale, for the volumes' z
+        volume_data[4] = float(scale);
+        volume_data[kFogColourAt] = float(src.fog_colour >> 16 & 0xFFu) / 255.0f;
+        volume_data[kFogColourAt + 1] = float(src.fog_colour >> 8 & 0xFFu) / 255.0f;
+        volume_data[kFogColourAt + 2] = float(src.fog_colour & 0xFFu) / 255.0f;
+        volume_data[kFogDensityAt] = fog_density(src.fog_density);
+        std::memcpy(volume_data.data() + kFogTableAt, src.fog_table, sizeof src.fog_table);
+        grow(volume_buffer, volume_data.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        std::memcpy(volume_buffer.mapped, volume_data.data(), volume_data.size() * sizeof(float));
         if (volume_set_buffer != volume_buffer.buffer) {
             const VkDescriptorBufferInfo bi{volume_buffer.buffer, 0, VK_WHOLE_SIZE};
             VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};

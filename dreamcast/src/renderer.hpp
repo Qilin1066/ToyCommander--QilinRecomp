@@ -8,7 +8,7 @@
 // Gouraud shading, the four texture shading instructions, the offset colour,
 // the blend instructions, and textures decoded from video memory
 // (texture.hpp). What it doesn't yet, each named once on stderr when a scene
-// asks for it: modifier volumes (shadows), fog, the translucent list's
+// asks for it: the two-volume mode, vertex fog and table fog's second mode, the translucent list's
 // per-pixel sorting, mip-mapping, the user tile clip.
 //
 // It knows the registers and video memory only through `Source`, so its test
@@ -47,10 +47,10 @@ struct Source {
     // SHADOW_SCALE: bit 8 cheap shadows (the modifier volumes darken), bits
     // 7-0 how much (256ths of the colour kept).
     uint32_t shadow_scale = 0;
-    // FOG_TABLE (0x005F8200, 128 entries): whether every entry is 0. Table
-    // fog (a polygon's TSP fog mode 0) then gives a fog factor of 0 at every
-    // depth, whatever the depth's entry: the polygon unfogged, exactly.
-    bool fog_table_clear = false;
+    // Table fog (a polygon's TSP fog mode 0): FOG_COL_RAM (0x00RRGGBB),
+    // FOG_DENSITY and FOG_TABLE's 128 entries (0x005F8200).
+    uint32_t fog_colour = 0, fog_density = 0;
+    uint32_t fog_table[128] = {};
     const uint32_t* palette = nullptr;
     // Video memory as textures are addressed (pvr.hpp).
     void (*read)(uint32_t offset, uint8_t* out, uint32_t n) = nullptr;
@@ -64,6 +64,17 @@ struct Picture {
     VkImageView view = VK_NULL_HANDLE;
     uint32_t width = 0, height = 0;
 };
+
+// Table fog's value at depth `inv_w` (1/w), 0 to 255 (pvr.frag's
+// table_fog, the same in C++): the coefficient, FOG_DENSITY (its high byte a
+// 1.7 fixed-point mantissa, its low byte a signed power of 2) times 1/w,
+// picks an entry by its exponent and the top 4 bits of its mantissa (16
+// entries an octave from 1; below 1, entry 0's high byte; from 256, entry
+// 127's low byte), and the value goes from the entry's high byte to its low
+// byte by the mantissa's next bits. Our own definition, from what the
+// emulator's pictures show (tools/dcref, --fog).
+float fog_density(uint32_t reg);
+float table_fog(float density, const uint32_t* table, float inv_w);
 
 class Renderer {
 public:

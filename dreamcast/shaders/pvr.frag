@@ -8,9 +8,11 @@ layout(location = 2) in vec4 v_offset;
 
 layout(set = 0, binding = 0) uniform sampler2D tex;
 
-// The translucent modifier volumes (renderer.cpp's collect_translucent_volumes):
-// the count, the shadow's factor, the depth scale and the picture's pixels per
-// scene pixel; each volume's bounds on screen (scene pixels) and its
+// The frame's buffer (renderer.cpp's frame_data): the translucent modifier
+// volumes' count, the shadow's factor, the depth scale and the picture's
+// pixels per scene pixel; the table fog's colour (FOG_COL_RAM), density
+// (FOG_DENSITY as a number) and table (FOG_TABLE's 128 entries); then each
+// translucent modifier volume's bounds on screen (scene pixels) and its
 // triangles; the triangles, three corners of x, y (scene pixels) and z (1/w).
 struct Volume {
     vec4 box;     // x0, y0, x1, y1
@@ -23,6 +25,10 @@ layout(std430, set = 1, binding = 0) readonly buffer Volumes {
     float depth_scale;
     float pixel_scale;
     float unused2[3];
+    vec4 fog_colour;
+    float fog_density;
+    float unused3[3];
+    uint fog_table[128];
     Volume volume[64];
     vec4 corner[];
 } volumes;
@@ -52,10 +58,30 @@ bool in_volume(vec2 p, float depth) {
     return false;
 }
 
+// Table fog's value for a pixel at depth z (1/w), 0 to 1: the coefficient,
+// FOG_DENSITY times 1/w, picks an entry by its exponent and the top 4 bits of
+// its mantissa (16 entries an octave from 1, clamped to the table), and the
+// value goes from the entry's high byte to its low byte by the mantissa's
+// next bits. Our own definition, from what the emulator's pictures show
+// (tools/dcref, --fog; renderer.cpp's table_fog is the same in C++).
+float table_fog(float z) {
+    const float coef = volumes.fog_density * z;
+    if (!(coef >= 1.0)) return float(volumes.fog_table[0] >> 8 & 255u) / 255.0;
+    int index = 127;
+    float frac = 1.0;
+    if (coef < 256.0) {
+        int e;
+        const float steps = (frexp(coef, e) * 2.0 - 1.0) * 16.0;
+        index = 16 * (e - 1) + int(steps), frac = fract(steps);
+    }
+    const uint t = volumes.fog_table[index];
+    return mix(float(t >> 8 & 255u), float(t & 255u), frac) / 255.0;
+}
+
 layout(push_constant) uniform Push {
     vec4 screen;
     uint flags;       // bit 0 textured, 1 offset colour, 2 use alpha, 3 ignore the texture's alpha, 4-5 the shading instruction,
-                      // 6 darken inside a translucent modifier volume
+                      // 6 darken inside a translucent modifier volume, 7 table fog
     float alpha_ref;  // punch-through: texels below it are dropped
 } push;
 
@@ -78,6 +104,8 @@ void main() {
     }
     c = clamp(c, 0.0, 1.0);
     if ((push.flags & 64u) != 0u && in_volume(gl_FragCoord.xy / volumes.pixel_scale, gl_FragCoord.z)) c.rgb *= volumes.shade;
+    // gl_FragCoord.w is 1 / the clip w, which pvr.vert makes the vertex's z: the pixel's 1/w.
+    if ((push.flags & 128u) != 0u) c.rgb = mix(c.rgb, volumes.fog_colour.rgb, table_fog(gl_FragCoord.w));
 #ifdef PUNCH_THROUGH
     if (c.a < push.alpha_ref) discard;
     c.a = 1.0;

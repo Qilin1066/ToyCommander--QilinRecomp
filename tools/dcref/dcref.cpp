@@ -8,6 +8,12 @@
 // our own, and this tool only says which of them agrees with the emulator.
 //
 //   qilin_dcref <flycast_libretro.so> [--cases N] [--examples K]
+//   qilin_dcref <flycast_libretro.so> --fog [density ... | random]
+//
+// --fog does the same for the PowerVR2's table fog: how a pixel's depth picks
+// its value from the fog table, against renderer::table_fog's definition
+// (below, "--fog"). And --game runs the player's own disc, for comparing RAM
+// and pictures with the port's.
 //
 // Linux x86-64 only (dlopen, EGL's surfaceless platform with Mesa's software
 // renderer: the core needs an OpenGL context to boot). A developer tool, not
@@ -117,6 +123,8 @@ bool env(unsigned cmd, void* data) {
         // The emulator's own BIOS replacement (no Dreamcast BIOS needed), rendering on this thread.
         if (!std::strcmp(v->key, "reicast_hle_bios")) return v->value = "enabled", true;
         if (!std::strcmp(v->key, "reicast_threaded_rendering")) return v->value = "disabled", true;
+        // --fog renders into texture memory and reads the pixels back from video memory.
+        if (!std::strcmp(v->key, "reicast_enable_rttb")) return v->value = "enabled", true;
         return false;
     }
     case RETRO_ENVIRONMENT_SET_HW_RENDER: {
@@ -316,6 +324,185 @@ std::vector<uint8_t> elf(const std::vector<uint8_t>& image) {
     return out;
 }
 
+// ---------------------------------------------------------------- --fog
+// How the PowerVR2's table fog picks its fog value from a pixel's depth, as
+// the emulator does it, measured as a black box: a probe program sets the
+// chip up itself (registers, a region array, an opaque list through the
+// store queues) and draws horizontal bands, each a black polygon at its own
+// 1/w with white table fog, for each fog table and density asked for; the
+// tool reads each picture back and prints the fog value (the white) of every
+// band. No emulator code: only what its pictures show.
+//
+// The probe is a small interpreter over a command list in guest RAM, so each
+// scene is data the tool builds:
+//   {0}                 done
+//   {1, address, value} store a word
+//   {2, address, mask}  wait until (word & mask) != 0
+//   {3, w0..w7}         32 bytes to the tile accelerator (store queue 0)
+//   {4}                 a picture: count it, wait for the tool's answer
+//   {5, from, to}       copy a word (the rendered pixels into main RAM)
+using namespace qilin::test;
+constexpr uint32_t kFogResults = 0x8C800000u, kFogCommands = 0x8C100000u, kFogCount = 0x8C0FFFE0u, kFogAck = 0x8C0FFFE4u, kFogDone = 0x8C0FFFF0u, kFogMagic = 0xF06F06F0u;
+
+std::vector<uint16_t> fog_interpreter() {
+    Asm a;
+    a.movl(4, kFogCommands);
+    a.label("loop");
+    a.word(nm(0x6006, 0, 4));  // mov.l @r4+,r0
+    a.word(imm(0x8800, 0, 0)), a.b8(0x8900, "done");  // cmp/eq #0,r0 ; bt done
+    a.word(imm(0x8800, 0, 1)), a.b8(0x8900, "store");
+    a.word(imm(0x8800, 0, 2)), a.b8(0x8900, "wait");
+    a.word(imm(0x8800, 0, 3)), a.b8(0x8900, "burst");
+    a.word(imm(0x8800, 0, 4)), a.b8(0x8900, "picture");
+    a.word(imm(0x8800, 0, 5)), a.b8(0x8900, "copy");
+    a.label("stuck"), a.b12(0xA000, "stuck"), a.word(kNop);
+    a.label("store");
+    a.word(nm(0x6006, 1, 4)), a.word(nm(0x6006, 2, 4)), a.word(nm(0x2002, 1, 2));  // r1 = address, r2 = value, mov.l r2,@r1
+    a.b12(0xA000, "loop"), a.word(kNop);
+    a.label("wait");
+    a.word(nm(0x6006, 1, 4)), a.word(nm(0x6006, 2, 4));
+    a.label("wait_again");
+    a.word(nm(0x6002, 3, 1)), a.word(nm(0x2008, 3, 2));  // mov.l @r1,r3 ; tst r2,r3
+    a.b8(0x8900, "wait_again");
+    a.b12(0xA000, "loop"), a.word(kNop);
+    a.label("burst");
+    a.movl(1, 0xE0000000u);
+    for (int k = 0; k < 8; ++k) a.word(nm(0x6006, 2, 4)), a.word(nm(0x2002, 1, 2)), a.word(imm(0x7000, 1, 4));
+    a.movl(1, 0xE0000000u), a.word(n_(0x0083, 1));  // pref @r1: the queue to the tile accelerator
+    a.b12(0xA000, "loop"), a.word(kNop);
+    a.label("copy");
+    a.word(nm(0x6006, 1, 4)), a.word(nm(0x6006, 2, 4)), a.word(nm(0x6002, 3, 1)), a.word(nm(0x2002, 2, 3));  // *r2 = *r1
+    a.b12(0xA000, "loop"), a.word(kNop);
+    a.label("picture");
+    a.movl(1, kFogCount), a.word(nm(0x6002, 2, 1)), a.word(imm(0x7000, 2, 1)), a.word(nm(0x2002, 1, 2));  // ++count
+    a.movl(1, kFogAck);
+    a.label("ack");
+    a.word(nm(0x6002, 3, 1)), a.word(nm(0x3000, 3, 2));  // mov.l @r1,r3 ; cmp/eq r2,r3
+    a.b8(0x8B00, "ack");  // bf ack
+    a.b12(0xA000, "loop"), a.word(kNop);
+    a.label("done");
+    a.movl(0, kFogDone), a.movl(1, kFogMagic), a.word(nm(0x2002, 0, 1));
+    a.label("end"), a.b12(0xA000, "end"), a.word(kNop);
+    a.pool();
+    return a.finish();
+}
+
+struct FogScene {
+    uint32_t density;        // FOG_DENSITY
+    uint32_t table[128];     // FOG_TABLE's entries
+    std::vector<float> inv_w;  // one band each, top down
+};
+
+// The commands for one scene: the chip set up for a 640x480 picture (the
+// video timing of an ordinary NTSC 640x480 interlaced mode), the bands sent
+// as opaque polygons with table fog (or none, `fog_mode` 2), rendered, shown,
+// and a picture taken.
+void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t fog_mode, uint32_t out) {
+    const auto st = [&](uint32_t a, uint32_t v) { c.insert(c.end(), {1u, a, v}); };
+    const auto wait = [&](uint32_t a, uint32_t m) { c.insert(c.end(), {2u, a, m}); };
+    const auto burst = [&](std::initializer_list<uint32_t> w) { c.push_back(3u), c.insert(c.end(), w); };
+    const auto fl = [](float x) { return std::bit_cast<uint32_t>(x); };
+    constexpr uint32_t R = 0xA05F8000u, VRAM = 0xA5000000u, ISTNRM = 0xA05F6900u;
+    constexpr uint32_t kOl = 0x12A580u, kRegion = 0x141D80u, kBackground = 0x141C80u, kFrame = 0x200000u;
+    // Display: 16 bits a pixel, 640x480, the frame shown from kFrame.
+    st(R + 0x044, 0x00800005u), st(R + 0x04C, 0xA0u), st(R + 0x05C, 0x0017753Fu), st(R + 0x0D0, 0x100u);
+    st(R + 0x0C8, 0x03450000u), st(R + 0x0CC, 0x00150208u), st(R + 0x0D4, 0x007E0345u), st(R + 0x0D8, 0x020C0359u);
+    st(R + 0x0DC, 0x00280208u), st(R + 0x0E0, 0x03F1933Fu), st(R + 0x0E8, 0x00160000u), st(R + 0x0EC, 0xA8u), st(R + 0x0F0, 0x00280028u), st(R + 0x0F4, 0x400u);
+    // Rendering: into texture memory at kFrame, RGB565 (the emulator renders to texture memory only in 16 bits), the whole picture.
+    st(R + 0x048, 0x1u), st(R + 0x04C, 640 * 2 / 8), st(R + 0x060, 0x01000000u | kFrame), st(R + 0x068, 0x027F0000u), st(R + 0x06C, 0x01DF0000u);
+    st(R + 0x074, 0), st(R + 0x078, fl(0.001f)), st(R + 0x07C, 0x0027DF77u), st(R + 0x080, 7u), st(R + 0x098, 0x00800408u), st(R + 0x108, 0);
+    // Fog: white from the table; the table and density asked for.
+    st(R + 0x0B0, 0x00FFFFFFu), st(R + 0x0B4, 0x00FFFFFFu), st(R + 0x0B8, sc.density), st(R + 0x0BC, 0xFFFFFFFFu), st(R + 0x0C0, 0);
+    for (unsigned k = 0; k < 128; ++k) st(R + 0x200 + 4 * k, sc.table[k]);
+    // The background: black and far, its plane in video memory before the region array.
+    const uint32_t bg[] = {0xF0000000u, 0x20800000u, 0, fl(0), fl(0), fl(1e-9f), 0xFF000000u, fl(640), fl(0), fl(1e-9f), 0xFF000000u, fl(0), fl(480), fl(1e-9f), 0xFF000000u};
+    for (unsigned k = 0; k < std::size(bg); ++k) st(VRAM + kBackground + 4 * k, bg[k]);
+    st(R + 0x088, fl(1e-9f)), st(R + 0x08C, 0x01000000u | (kBackground / 4) << 3);
+    // The region array: 20 x 15 tiles, each with an opaque list only.
+    for (uint32_t t = 0; t < 300; ++t) {
+        const uint32_t x = t % 20, y = t / 20, a = VRAM + kRegion + 24 * t;
+        st(a, (t == 299 ? 0x80000000u : 0u) | y << 8 | x << 2), st(a + 4, kOl + 128 * t);
+        for (unsigned l = 2; l < 6; ++l) st(a + 4 * l, 0x80000000u);
+    }
+    // The tile accelerator: parameters from 0, object lists from kOl, 32 words a tile's opaque list.
+    st(R + 0x124, kOl), st(R + 0x128, 0), st(R + 0x12C, 0x000DFCE0u), st(R + 0x130, 0x000DFBE0u), st(R + 0x13C, 0x000E0013u);
+    st(R + 0x140, 0x00100003u), st(R + 0x164, kOl), st(0xFF000038u, 0x10u), st(ISTNRM, 0xFFFFFFFFu), st(R + 0x144, 0x80000000u);
+    // The bands.
+    const unsigned n = static_cast<unsigned>(sc.inv_w.size()), h = 480 / n;
+    for (unsigned k = 0; k < n; ++k) {
+        const float y0 = float(k * h), y1 = float(k * h + h), z = sc.inv_w[k];
+        burst({0x80800000u, 0xE0000000u, 0x20000000u | fog_mode << 22, 0, 0, 0, 0, 0});
+        burst({0xE0000000u, fl(0), fl(y0), fl(z), 0, 0, 0xFF000000u, 0});
+        burst({0xE0000000u, fl(640), fl(y0), fl(z), 0, 0, 0xFF000000u, 0});
+        burst({0xE0000000u, fl(0), fl(y1), fl(z), 0, 0, 0xFF000000u, 0});
+        burst({0xF0000000u, fl(640), fl(y1), fl(z), 0, 0, 0xFF000000u, 0});
+    }
+    burst({0, 0, 0, 0, 0, 0, 0, 0});  // the list's end
+    wait(ISTNRM, 0x80u);              // the opaque list's end
+    st(R + 0x020, 0), st(R + 0x02C, kRegion), st(ISTNRM, 0xFFFFFFFFu), st(R + 0x014, 1);
+    wait(ISTNRM, 0x4u);  // the render's end
+    // Each band's middle two pixels into main RAM (a word: 2 pixels of 16 bits).
+    for (unsigned k = 0; k < n; ++k) c.insert(c.end(), {5u, 0xA4000000u + kFrame + ((k * h + h / 2) * 640 + 320) * 2, out + 4 * k});
+    c.push_back(4u);
+}
+
+// Runs the scenes; `pictures` gets each one's 60 band pixels (RGB565, two to a word, the left one first).
+int run_fog(const char* core_path, const std::vector<FogScene>& scenes, uint32_t fog_mode, std::vector<std::vector<uint8_t>>& pictures) {
+    const std::vector<uint16_t> code = fog_interpreter();
+    std::vector<uint32_t> cmds;
+    for (size_t i = 0; i < scenes.size(); ++i) fog_scene(cmds, scenes[i], fog_mode, kFogResults + 256 * static_cast<uint32_t>(i));
+    cmds.push_back(0u);
+    std::vector<uint8_t> image(kFogCommands - kBase + cmds.size() * 4, 0);
+    std::memcpy(image.data(), code.data(), code.size() * 2);
+    std::memcpy(image.data() + (kFogCommands - kBase), cmds.data(), cmds.size() * 4);
+    const std::filesystem::path elf_path = std::filesystem::temp_directory_path() / "qilin_dcref_fog.elf";
+    {
+        const std::vector<uint8_t> e = elf(image);
+        std::FILE* file = std::fopen(elf_path.string().c_str(), "wb");
+        if (!file || std::fwrite(e.data(), 1, e.size(), file) != e.size()) throw std::runtime_error("cannot write the probe");
+        std::fclose(file);
+    }
+    void* h = dlopen(core_path, RTLD_NOW);
+    if (!h) throw std::runtime_error(dlerror());
+#define SYM(n) const auto n = reinterpret_cast<decltype(&::n)>(dlsym(h, #n))
+    SYM(retro_set_environment);
+    SYM(retro_set_video_refresh);
+    SYM(retro_set_audio_sample);
+    SYM(retro_set_audio_sample_batch);
+    SYM(retro_set_input_poll);
+    SYM(retro_set_input_state);
+    SYM(retro_init);
+    SYM(retro_load_game);
+    SYM(retro_run);
+    SYM(retro_get_memory_data);
+#undef SYM
+    g_sys = (std::filesystem::temp_directory_path() / "qilin_dcref_sys").string();
+    std::filesystem::create_directories(g_sys);
+    retro_set_environment(env), retro_set_video_refresh(video), retro_set_audio_sample(audio);
+    retro_set_audio_sample_batch(audio_batch), retro_set_input_poll(poll), retro_set_input_state(input);
+    retro_init();
+    const std::string path = std::filesystem::absolute(elf_path).string();
+    retro_game_info game{path.c_str(), nullptr, 0, nullptr};
+    if (!retro_load_game(&game)) throw std::runtime_error("the core didn't load the probe");
+    if (!make_gl()) throw std::runtime_error("no OpenGL context (EGL surfaceless)");
+    if (g_hw.context_reset) g_hw.context_reset();
+    auto* ram = static_cast<uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+    const auto word = [&](uint32_t a) { uint32_t v; std::memcpy(&v, ram + (a - 0x8C000000u), 4); return v; };
+    uint32_t taken = 0;
+    for (int frame = 0; frame < 20000 && word(kFogDone) != kFogMagic; ++frame) {
+        retro_run();
+        if (word(kFogCount) > taken) {
+            std::vector<uint8_t> px(240);
+            std::memcpy(px.data(), ram + (kFogResults + 256 * taken - 0x8C000000u), px.size());
+            pictures.push_back(px);
+            ++taken;
+            std::memcpy(ram + (kFogAck - 0x8C000000u), &taken, 4);
+        }
+    }
+    if (word(kFogDone) != kFogMagic) throw std::runtime_error(std::format("the fog probe didn't finish ({} pictures)", taken));
+    return 0;
+}
+
 // ---------------------------------------------------------------- the probes
 
 using namespace qilin::test;
@@ -352,6 +539,71 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::println(stderr, "usage: qilin_dcref <flycast_libretro.so> [--cases N] [--examples K]");
         return 2;
+    }
+    if (argc >= 3 && !std::strcmp(argv[2], "--fog")) {
+        // qilin_dcref <core> --fog [density ...]: bands at 1/w = 2^(2 - k/4), k = 0..59, under three tables
+        // (entry i = 2i in both bytes; 0xFF00 in every entry; 0x00FF in every entry), for each density.
+        std::vector<uint32_t> densities;
+        for (int i = 3; i < argc; ++i) densities.push_back(static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 16)));
+        if (densities.empty()) densities = {0x8000u};
+        std::vector<FogScene> scenes;
+        if (argc == 4 && !std::strcmp(argv[3], "random")) {  // random tables, densities and depths
+            densities.clear();
+            std::mt19937 rng(20261122);
+            for (int i = 0; i < 40; ++i) {
+                FogScene sc{static_cast<uint32_t>(rng() & 0xFFFFu), {}, {}};
+                if (i % 2) sc.density = (sc.density & 0xFF00u) | static_cast<uint8_t>(int8_t(rng() % 25) - 12);  // exponents a game would use
+                for (unsigned k = 0; k < 128; ++k) sc.table[k] = rng() & 0xFFFFu;
+                for (int k = 0; k < 60; ++k) sc.inv_w.push_back(std::exp2(float(int(rng() % 4000)) / 100.0f - 25.0f));
+                scenes.push_back(sc);
+            }
+        }
+        for (uint32_t d : densities)
+            for (int t = 0; t < 3; ++t) {
+                FogScene sc{d, {}, {}};
+                for (unsigned i = 0; i < 128; ++i) sc.table[i] = t == 0 ? (2 * i) << 8 | 2 * i : t == 1 ? 0xFF00u : 0x00FFu;
+                for (int k = 0; k < 60; ++k) sc.inv_w.push_back(std::exp2(2.0f - float(k) / 4.0f));
+                scenes.push_back(sc);
+            }
+        std::vector<std::vector<uint8_t>> pictures;
+        try {
+            run_fog(argv[1], scenes, 0, pictures);
+        } catch (const std::exception& e) {
+            std::println(stderr, "dcref: {}", e.what());
+            return 1;
+        }
+        // The candidate: the fog coefficient is FOG_DENSITY (mantissa bits 15-8 as 1.7 fixed point, times 2 to
+        // the signed exponent in bits 7-0) times 1/w; its exponent e and mantissa m (1 <= m < 2) pick entry
+        // 16 e + the top 4 bits of m's fraction, clamped to 0..127 (below 1: entry 0, at its high byte), and the
+        // value goes from the entry's high byte to its low byte by m's next bits.
+        const auto candidate = [](uint32_t density, const uint32_t* table, float inv_w) {
+            const float d = float((density >> 8) & 0xFFu) / 128.0f * std::exp2(float(static_cast<int8_t>(density & 0xFFu)));
+            const float coef = d * inv_w;
+            if (!(coef >= 1.0f)) return float(table[0] >> 8);
+            int e = 0;
+            const float m = std::frexp(coef, &e) * 2.0f;  // [1, 2)
+            const float steps = (m - 1.0f) * 16.0f;
+            int index = 16 * (e - 1) + int(steps);
+            float frac = steps - std::floor(steps);
+            if (index > 127) index = 127, frac = 1.0f;
+            const float hi = float(table[index] >> 8), lo = float(table[index] & 0xFFu);
+            return hi * (1.0f - frac) + lo * frac;
+        };
+        int worst = 0, off = 0;
+        for (size_t p = 0; p < pictures.size(); ++p) {
+            const FogScene& sc = scenes[p];
+            std::print("density {:04X} scene {}:", sc.density, p);
+            for (int k = 0; k < 60; ++k) {
+                const int got = (pictures[p][4 * k] | pictures[p][4 * k + 1] << 8) >> 5 & 63;  // 565's green
+                const int want = int(std::lround(candidate(sc.density, sc.table, sc.inv_w[k]) * 63.0f / 255.0f));
+                worst = std::max(worst, std::abs(got - want)), off += std::abs(got - want) > 1;
+                if (std::abs(got - want) > 1) std::print(" {}[{}]", got, want);
+                else std::print(" {}", got);
+            }
+            std::println("");
+        }
+        std::println("the candidate against the emulator: {} of {} bands more than 1/63 off, at worst {}/63", off, pictures.size() * 60, worst);
+        return off == 0 ? 0 : 1;
     }
     if (argc >= 4 && !std::strcmp(argv[2], "--game")) {
         // qilin_dcref <core> --game <disc> <frames> <every> <dump prefix>

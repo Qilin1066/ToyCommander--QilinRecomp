@@ -2,6 +2,7 @@
 // decoded and checked texel by texel, then a scene drawn headless and read
 // back. The renderer's part skips (exit 77) where there's no Vulkan 1.3
 // device, as on CI runners; the decoder's part always runs.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -253,6 +254,40 @@ int renderer() {
     expect(near(4, 20, 0, 255, 0), "shadows: the translucent surface outside the volume");
     expect(near(12, 20, 0, 128, 0), "shadows: the translucent surface inside the volume, halved");
     expect(near(12, 44, 0, 255, 0), "shadows: the translucent surface below the volume");
+
+    // Table fog: black opaque quads side by side, 8 pixels wide, each at its
+    // own depth, with white fog from an irregular table; each pixel should be
+    // the table's value at that depth (renderer::table_fog, the definition
+    // the emulator's pictures gave, tools/dcref --fog), to within rounding.
+    ta::Scene fog;
+    const float depths[8] = {0.3f, 1.0f, 1.19f, 1.5f, 2.7f, 9.3f, 40.0f, 300.0f};
+    for (int k = 0; k < 8; ++k) {
+        ta::Strip s{};
+        s.list = ta::kOpaque;
+        s.isp = 7u << 29;              // always
+        s.tsp[0] = 1u << 29 | 0u << 22;  // one, zero; table fog
+        s.first = uint32_t(fog.vertices.size()), s.count = 4;
+        const float x0 = float(8 * k), x1 = x0 + 8, z = depths[k];
+        fog.vertices.push_back(vertex(x0, 0, z, 0, 0, 0)), fog.vertices.push_back(vertex(x1, 0, z, 0, 0, 0));
+        fog.vertices.push_back(vertex(x0, 48, z, 0, 0, 0)), fog.vertices.push_back(vertex(x1, 48, z, 0, 0, 0));
+        fog.strips.push_back(s);
+    }
+    dreamcast::renderer::Source fsrc;
+    fsrc.scene = &fog, fsrc.width = 64, fsrc.height = 48, fsrc.frame_buffer = 0x300000;
+    fsrc.read = read_vram, fsrc.generation = generation;
+    fsrc.fog_colour = 0x00FFFFFFu, fsrc.fog_density = 0x9F00u;  // 1.24
+    for (uint32_t i = 0; i < 128; ++i) fsrc.fog_table[i] = ((i * 37u + 11u) & 0xFFu) << 8 | ((i * 91u + 5u) & 0xFFu);
+    r.draw(fsrc);
+    const std::vector<uint8_t> fp = r.read_back();
+    const float density = dreamcast::renderer::fog_density(fsrc.fog_density);
+    expect(std::fabs(density - 1.2421875f) < 1e-6f, "fog: FOG_DENSITY 0x9F00 is 159/128");
+    bool all = true;
+    for (int k = 0; k < 8; ++k) {
+        const float want = dreamcast::renderer::table_fog(density, fsrc.fog_table, depths[k]);
+        const uint8_t* p = &fp[size_t(24 * 64 + 8 * k + 4) * 4];
+        if (std::fabs(float(p[1]) - want) > 1.5f) all = false, std::printf("render_test: fog at z %g: %u, wanted %.1f\n", double(depths[k]), p[1], double(want));
+    }
+    expect(all, "fog: each depth's pixel is the table's value there");
     return 0;
 }
 
