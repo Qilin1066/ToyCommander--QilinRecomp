@@ -204,6 +204,21 @@ void render() {
     src.read = vram64_read;
     src.generation = vram64_generation;
     background(src);
+    // QILIN_TRACE_RENDERS: each render's frame buffer and format, the frame
+    // buffer the display reads, and any texture read from where a render wrote.
+    static const bool trace = std::getenv("QILIN_TRACE_RENDERS") != nullptr;
+    if (trace) {
+        static uint64_t renders = 0;
+        std::fprintf(stderr, "render %llu (picture %llu): FB_W_SOF1 %06X FB_W_CTRL %08X FB_W_LINESTRIDE %u, %ux%u, shown %06X\n",
+                     static_cast<unsigned long long>(renders++), static_cast<unsigned long long>(g_pictures), src.frame_buffer,
+                     pvr_register(0x005F8048u), pvr_register(0x005F804Cu), src.width, src.height, pvr_register(kFbRSof1) & 0x00FFFFFCu);
+        for (const ta::Strip& s : src.scene->strips)
+            if (s.textured) {
+                const uint32_t at = (s.tcw[0] & 0x1FFFFFu) << 3;
+                if (at >= 0x100000u && at < 0x800000u && (at & 0xFFF00000u) != 0 && at % 0x1000u == 0)
+                    std::fprintf(stderr, "  texture at %06X (TCW %08X)\n", at, s.tcw[0]);
+            }
+    }
     g_renderer->draw(src);
     g_last_drawn = src.frame_buffer;
     g_drawn = true;
