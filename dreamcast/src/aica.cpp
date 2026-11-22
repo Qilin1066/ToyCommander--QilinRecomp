@@ -35,7 +35,14 @@ void wr32(uint32_t off, uint32_t v) { std::memcpy(g_ram + off, &v, 4); }
 // same writes to the chip's channel registers, which the port's chip
 // (sound.cpp) then plays.
 //
-// The driver's records:
+// Two versions of the driver are known, and each game has its own: 1.80d.2
+// (Toy Commander's) and 1.90h.2 (Toy Racer's). Their commands are the same
+// but for a few (below, "1.90"), and 1.90 keeps its records lower in sound
+// RAM. The stand-in knows which it stands for by the table of offsets the
+// driver's image publishes at 0xE0-0xE8 (which the audio manager reads),
+// and stops on any other.
+//
+// The driver's records (1.80's offsets; 1.90's in kDriver190):
 //   0xB200  the command queue: 32 slots of 16 bytes; 0xB400 the flag that
 //           says there are commands. A command is [0] its code, [2] the
 //           port (a channel: port n plays on channel n); a slot is free
@@ -49,13 +56,27 @@ void wr32(uint32_t off, uint32_t v) { std::memcpy(g_ram + off, &v, 4); }
 //   0x1468  a byte per port, 0xFF while it plays; 0x14F0 + 4 n port n's
 //           position (the channel's CA, in samples); 0x15F0 + 4 n the one
 //           before it.
-//   0x14A8  64 bytes of messages to the SH-4 (0x9E); 0xE4 where the next
-//           goes. Each is followed by the sound chip's interrupt.
+//   0x14A8  64 bytes of messages to the SH-4 (0x9E, and position events);
+//           0xE4 where the next goes. Each is followed by the sound chip's
+//           interrupt.
+//   0x16F0 + 4 n  port n's position event (0x92, 0xAD), pending while its bit
+//           is set in 0x14E8 (ports 0-31) or 0x14EC (32-63). Each frame, a
+//           pending port whose channel has passed the position since the
+//           last frame posts its number as a message.
 constexpr uint32_t kQueue = 0xB200u, kSlots = 32, kFlag = 0xB400u;
 constexpr uint32_t kLog = 0xC800u, kLogIndex = 0xB40Cu, kLogExtra = 0xB410u, kLogMask = 0x7FFu;
-constexpr uint32_t kTemplate = 0x1AF0u, kShadows = 0x1B38u, kShadowBytes = 0x48u, kRegisters = 18;
-constexpr uint32_t kActive = 0x1468u, kPositions = 0x14F0u, kPrevious = 0x15F0u;
-constexpr uint32_t kMessages = 0x14A8u, kMessageNext = 0xE4u;
+constexpr uint32_t kShadowBytes = 0x48u, kRegisters = 18;
+constexpr uint32_t kMessageNext = 0xE4u, kInterface = 0xE0u;
+
+struct Driver {
+    const char* version;
+    uint32_t active, messages, positions;  // the interface table's last three words (0xE0, 0xE4, 0xE8)
+    uint32_t templ, shadows, previous, events, pending;
+    bool v190;  // the commands' differences: open closes first; level is the total level; the sends set the direct level; ...
+};
+constexpr Driver kDriver180{"1.80d.2", 0x1468u, 0x14A8u, 0x14F0u, 0x1AF0u, 0x1B38u, 0x15F0u, 0x16F0u, 0x14E8u, false};
+constexpr Driver kDriver190{"1.90h.2", 0x0BACu, 0x0BECu, 0x0C34u, 0x1234u, 0x127Cu, 0x0D34u, 0x0E34u, 0x0C2Cu, true};
+Driver g_driver{};  // the one installed, from its start
 
 bool g_driver_started = false;
 uint32_t g_next_slot = 0;
@@ -64,8 +85,8 @@ bool g_deferred_key_on = false;  // while several channels start together (0x9C)
 // QILIN_TRACE_SOUND: each command the driver takes, as its 16 bytes.
 const bool g_trace = std::getenv("QILIN_TRACE_SOUND") != nullptr;
 
-uint32_t shadow(unsigned port, unsigned word) { return rd32(kShadows + kShadowBytes * port + 4 * word); }
-void set_shadow(unsigned port, unsigned word, uint32_t v) { wr32(kShadows + kShadowBytes * port + 4 * word, v); }
+uint32_t shadow(unsigned port, unsigned word) { return rd32(g_driver.shadows + kShadowBytes * port + 4 * word); }
+void set_shadow(unsigned port, unsigned word, uint32_t v) { wr32(g_driver.shadows + kShadowBytes * port + 4 * word, v); }
 
 // The chip's channel registers. Writing word 0 with KYONEX (bit 15) keys
 // every channel on or off by its KYONB.
@@ -89,14 +110,14 @@ void load_channel(unsigned port) {
 }
 
 void mark_started(unsigned port) {
-    wr32(kPrevious + 4 * port, 0xFFFFFFFFu);
-    wr32(kPositions + 4 * port, 0);
+    wr32(g_driver.previous + 4 * port, 0xFFFFFFFFu);
+    wr32(g_driver.positions + 4 * port, 0);
 }
 
 // Play (0x93, and the end of 0xAD): `loop` the loop flag, `points` the
 // loop's start (low half) and end (high half) if not 0.
 void play(unsigned port, bool loop, uint32_t points) {
-    g_ram[kActive + port] = 0xFF;
+    g_ram[g_driver.active + port] = 0xFF;
     if (points != 0) set_shadow(port, 3, points >> 16), set_shadow(port, 2, points & 0xFFFFu);
     const uint32_t w0 = (shadow(port, 0) & ~0x200u) | (loop ? 0x200u : 0u);
     set_shadow(port, 0, w0);
@@ -134,6 +155,36 @@ void set_send(unsigned port, uint32_t level, uint32_t select) {
     set_shadow(port, 8, v);
     set_hw(port, 8, v);
 }
+// 1.90's sends also set the direct level (DISDL, word 9's bits 11-8).
+void set_direct_level(unsigned port, uint32_t level) {
+    const uint32_t v = (shadow(port, 9) & ~0xF00u) | (level & 15u) << 8;
+    set_shadow(port, 9, v);
+    set_hw(port, 9, v);
+}
+// 1.90's level (0x96, 0xAD): the total level, an attenuation (TL, word 10's
+// high byte), where 1.80's is the direct level.
+void set_total_level(unsigned port, uint32_t level) {
+    const uint32_t v = (shadow(port, 10) & 0xFFu) | (level & 0xFFu) << 8;
+    set_shadow(port, 10, v);
+    set_hw(port, 10, v);
+}
+
+// A message for the SH-4 (0x9E, a position event): a byte in the ring, then
+// the sound chip's interrupt.
+void post_message(uint8_t byte);
+
+// A position event (0x92, 0xAD): `at` in samples, pending until passed.
+void request_event(unsigned port, uint32_t at) {
+    wr32(g_driver.events + 4 * port, at);
+    const uint32_t mask = g_driver.pending + 4 * (port / 32);
+    wr32(mask, rd32(mask) | 1u << (port % 32));
+}
+// 1.90's stops also drop a port's pending event.
+void drop_event(unsigned port) {
+    if (!g_driver.v190) return;
+    const uint32_t mask = g_driver.pending + 4 * (port / 32);
+    wr32(mask, rd32(mask) & ~(1u << (port % 32)));
+}
 
 // The CD inputs' level (0-127) and pan (0-127, 64 the centre) as EFSDL and EFPAN.
 void set_cd_level(unsigned input, uint32_t value) { g_regs[0x2040u + 4 * input + 1] = static_cast<uint8_t>((value & 0x7Fu) >> 3); }
@@ -146,6 +197,22 @@ void set_cd_pan(unsigned input, uint32_t value) {
 // The sound chip's interrupt to the SH-4 (MCIPD's bit 5): the system bus's
 // external event 1.
 void interrupt_sh4() { raise_external_event(1); }
+
+void post_message(uint8_t byte) {
+    uint32_t at = rd32(kMessageNext);
+    if (at < g_driver.messages || at >= g_driver.messages + 64) throw rt::Stop{rt::Stop::Unsupported, 0, at};
+    g_ram[at] = byte;
+    if (++at > g_driver.messages + 0x3F) at = g_driver.messages;
+    wr32(kMessageNext, at);
+    interrupt_sh4();
+}
+
+// CD audio's set-up (0x3E): the inputs panned apart; 1.80 at full level,
+// 1.90 silent until a level (0x35).
+void cd_set_up() {
+    const uint32_t level = g_driver.v190 ? 0u : 0x1F00u, a = level | 0x0Fu, b = level | 0x1Fu;
+    std::memcpy(g_regs + 0x2040u, &a, 4), std::memcpy(g_regs + 0x2044u, &b, 4);
+}
 
 // Each port of a 64-bit mask, [4] ports 32-63, [8] 0-31, from the highest down.
 template <class F>
@@ -178,6 +245,10 @@ void run_command(const uint8_t* cmd) {
     if (code >= 0x90u && code != 0x9Cu && code != 0x9Du && code != 0x9Eu && code != 0x9Fu && port >= 64) unknown_command(cmd);
     switch (code) {
     case 0x90: {  // open: [4] the address (the SH-4's), [8] bytes, [12] PCMS, [13] the pitch, high byte first
+        if (g_driver.v190) {  // 1.90 closes the port first
+            for (unsigned w = 0; w < kRegisters; ++w) set_shadow(port, w, rd32(g_driver.templ + 4 * w));
+            wr32(g_driver.previous + 4 * port, 0xFFFFFFFFu);
+        }
         const uint32_t address = u32(4), format = cmd[12];
         uint32_t samples = u32(8);
         if (format == 0) samples >>= 1;
@@ -190,12 +261,16 @@ void run_command(const uint8_t* cmd) {
         break;
     }
     case 0x91:  // close: the registers as the driver's image has them
-        for (unsigned w = 0; w < kRegisters; ++w) set_shadow(port, w, rd32(kTemplate + 4 * w));
+        for (unsigned w = 0; w < kRegisters; ++w) set_shadow(port, w, rd32(g_driver.templ + 4 * w));
         break;
     case 0x93: play(port, u32(8) & 1u, u32(12)); break;  // [8] loop, [12] the loop's points
-    case 0x94: set_hw(port, 0, shadow(port, 0) & ~0x4200u); break;  // stop
-    case 0x95: set_send(port, cmd[3], cmd[4]); break;
-    case 0x96: set_level(port, cmd[3]); break;
+    case 0x92: request_event(port, u32(4)); break;  // [4] a position, in samples
+    case 0x94: set_hw(port, 0, shadow(port, 0) & ~0x4200u), drop_event(port); break;  // stop
+    case 0x95:  // sends: [3] level, [4] select; 1.90: [5] the direct level
+        set_send(port, cmd[3], cmd[4]);
+        if (g_driver.v190) set_direct_level(port, cmd[5]);
+        break;
+    case 0x96: g_driver.v190 ? set_total_level(port, cmd[3]) : set_level(port, cmd[3]); break;
     case 0x97: set_pan(port, cmd[3]); break;
     case 0x98: set_pitch(port, static_cast<int32_t>(u32(8)), u32(4), false, false); break;  // relative, for now
     case 0xAC: set_pitch(port, static_cast<int32_t>(u32(8)), u32(4), true, true); break;    // [4] FNS, [8] octave
@@ -204,7 +279,7 @@ void run_command(const uint8_t* cmd) {
         {
             int last = -1;
             each_port(cmd, [&](unsigned p) {
-                g_ram[kActive + p] = 0xFF;
+                g_ram[g_driver.active + p] = 0xFF;
                 set_shadow(p, 0, (shadow(p, 0) & ~0x200u) | (cmd[2] & 1u) << 9);
                 load_channel(p);
                 mark_started(p);
@@ -214,22 +289,16 @@ void run_command(const uint8_t* cmd) {
             if (last >= 0) set_hw(static_cast<unsigned>(last), 0, shadow(static_cast<unsigned>(last), 0));
         }
         break;
-    case 0x9D: each_port(cmd, [&](unsigned p) { set_hw(p, 0, shadow(p, 0) & ~0x4200u); }); break;  // stop several
-    case 0x9E: {  // a message for the SH-4: [2]
-        uint32_t at = rd32(kMessageNext);
-        if (at < kMessages || at >= kMessages + 64) unknown_command(cmd);
-        g_ram[at] = cmd[2];
-        if (++at > kMessages + 0x3F) at = kMessages;
-        wr32(kMessageNext, at);
-        interrupt_sh4();
-        break;
-    }
+    case 0x9D: each_port(cmd, [&](unsigned p) { set_hw(p, 0, shadow(p, 0) & ~0x4200u), drop_event(p); }); break;  // stop several
+    case 0x9E: post_message(cmd[2]); break;  // a message for the SH-4: [2] (1.90 frees the slot first: nothing here can see that)
     case 0x9F: interrupt_sh4(); break;
     case 0xAD: {  // play with parameters: [3] level, [4] pan, [5] sends, [6] pitch, [8] an event, [12] the loop's points
-        set_level(port, cmd[3]);
+        // 1.90: [10] the direct level, and only [8]'s low half is the event.
+        g_driver.v190 ? set_total_level(port, cmd[3]) : set_level(port, cmd[3]);
         set_pan(port, cmd[4]);
         set_send(port, cmd[5] & 15u, cmd[5] >> 4);
-        if (u32(8) != 0) unknown_command(cmd);  // a position event (0x92): not yet
+        if (g_driver.v190) set_direct_level(port, cmd[10]);
+        if (const uint32_t event = g_driver.v190 ? u32(8) & 0xFFFFu : u32(8); event != 0) request_event(port, event);
         play(port, u32(12) != 0, u32(12));
         const uint32_t pitch = static_cast<uint32_t>(cmd[6]) << 8 | cmd[7];
         if (pitch != 0) {
@@ -241,11 +310,7 @@ void run_command(const uint8_t* cmd) {
     }
     case 0x35: set_cd_level(0, cmd[2]), set_cd_level(1, cmd[3]); break;  // CD audio's level, left and right
     case 0x36: set_cd_pan(0, cmd[2]), set_cd_pan(1, cmd[3]); break;      // and its pan
-    case 0x3E: {  // CD audio's set-up: both inputs at full level, panned apart
-        const uint32_t a = 0x1F0Fu, b = 0x1F1Fu;
-        std::memcpy(g_regs + 0x2040u, &a, 4), std::memcpy(g_regs + 0x2044u, &b, 4);
-        break;
-    }
+    case 0x3E: cd_set_up(); break;
     default: unknown_command(cmd);
     }
 }
@@ -274,20 +339,46 @@ void take_commands() {
     }
 }
 
+// Whether a port's channel passed its event's position between the last
+// frame (`before`) and this one (`now`), allowing for a loop back. The two
+// versions compare differently (signed, as the driver does).
+bool passed(int32_t event, int32_t before, int32_t now) {
+    if (g_driver.v190) {
+        if (before == -1) return false;  // started since: the next frame
+        return before >= now ? event < now || event > before : event > before && event <= now;
+    }
+    if (now >= event) return before <= event || now < before;
+    return before < event && now < before;
+}
+
 // The driver's per-frame work: each playing port's position, and a port
 // whose channel played to its end without a loop is keyed off and no longer
-// playing. (Position events, which the game doesn't ask for, aren't here.)
+// playing; then the pending position events, ports 31 down to 0, then 63
+// down to 32.
 void driver_frame() {
     if (!g_driver_started) return;
     for (unsigned port = 0; port < 64; ++port) {
-        if (g_ram[kActive + port] != 0xFF) continue;
+        if (g_ram[g_driver.active + port] != 0xFF) continue;
         const uint32_t at = sound::position(port);
-        wr32(kPrevious + 4 * port, rd32(kPositions + 4 * port));
-        wr32(kPositions + 4 * port, at);
+        wr32(g_driver.previous + 4 * port, rd32(g_driver.positions + 4 * port));
+        wr32(g_driver.positions + 4 * port, at);
         if (sound::finished(port) && !(hw(port, 0) & 0x200u)) {
             set_hw(port, 0, hw(port, 0) & 0x87FFu);
-            g_ram[kActive + port] = 0;
+            g_ram[g_driver.active + port] = 0;
         }
+    }
+    for (unsigned group = 0; group < 2; ++group) {
+        const uint32_t mask_at = g_driver.pending + 4 * group;
+        uint32_t mask = rd32(mask_at);
+        for (int bit = 31; bit >= 0; --bit) {
+            if (!(mask >> bit & 1u)) continue;
+            const unsigned port = 32 * group + static_cast<unsigned>(bit);
+            const auto word = [&](uint32_t base) { return static_cast<int32_t>(rd32(base + 4 * port)); };
+            if (!passed(word(g_driver.events), word(g_driver.previous), word(g_driver.positions))) continue;
+            post_message(static_cast<uint8_t>(port));
+            mask &= ~(1u << bit);
+        }
+        wr32(mask_at, mask);
     }
 }
 
@@ -295,7 +386,7 @@ uint32_t ram_read(uint32_t a, unsigned n) {
     const uint32_t off = a - kRamLo;
     if (off + n > kRamBytes) throw rt::Stop{rt::Stop::Unsupported, 0, a};
     auto held = sound::lock();
-    if (off >= kActive && off < kPrevious + 256u) driver_frame();
+    if (g_driver_started && off >= g_driver.active && off < g_driver.previous + 256u) driver_frame();
     uint32_t v = 0;
     std::memcpy(&v, g_ram + off, n);
     return v;
@@ -325,20 +416,28 @@ uint32_t reg_read(uint32_t a, unsigned n) {
 }
 
 // The ARM's reset (0x00702C00, bit 0: held in reset while set). Releasing
-// it starts the driver; the stand-in does what the driver's start-up does
+// it starts the driver the audio manager has copied in; the stand-in knows
+// which by its table of offsets, and does what the driver's start-up does
 // that matters here: every port's copy of its registers from the template,
-// the master volume at full and the CD inputs off, and where the sound RAM
-// it doesn't use begins (0x30040) at 0xB408 and at 0xEC, which the audio
-// manager's install waits on (docs/runtime.md, the audio manager).
+// the master volume at full and the CD inputs off (1.90 then does its CD
+// set-up), and where the sound RAM it doesn't use begins (0x30040) at 0xB408
+// and at 0xEC, which the audio manager's install waits on (docs/runtime.md,
+// the audio manager).
 constexpr uint32_t kArmReset = 0x00702C00u;
 void start_driver() {
+    const uint32_t table[3] = {rd32(kInterface), rd32(kInterface + 4), rd32(kInterface + 8)};
+    if (table[0] == kDriver180.active && table[1] == kDriver180.messages && table[2] == kDriver180.positions) g_driver = kDriver180;
+    else if (table[0] == kDriver190.active && table[1] == kDriver190.messages && table[2] == kDriver190.positions) g_driver = kDriver190;
+    else throw rt::Stop{rt::Stop::Unsupported, 0, table[0]};  // a sound driver the stand-in doesn't know
+    if (std::getenv("QILIN_TRACE_SOUND")) std::fprintf(stderr, "sound: the driver is version %s\n", g_driver.version);
     g_driver_started = true;
     for (unsigned port = 0; port < 64; ++port)
-        for (unsigned w = 0; w < kRegisters; ++w) set_shadow(port, w, rd32(kTemplate + 4 * w));
+        for (unsigned w = 0; w < kRegisters; ++w) set_shadow(port, w, rd32(g_driver.templ + 4 * w));
     const uint32_t full = 0xFu, zero = 0;
     std::memcpy(g_regs + 0x2800u, &full, 4);
     std::memcpy(g_regs + 0x2040u, &zero, 4), std::memcpy(g_regs + 0x2044u, &zero, 4);
-    wr32(kMessageNext, kMessages);
+    if (g_driver.v190) cd_set_up();
+    wr32(kMessageNext, g_driver.messages);
     const uint32_t free_from = 0x30040u;
     wr32(0xB408u, free_from);
     wr32(0xECu, free_from);

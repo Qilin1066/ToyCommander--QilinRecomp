@@ -339,7 +339,8 @@ function(qilin_game game title boot version)
         OUTPUT ${gen}/functions.hpp ${gen_sources}
         COMMAND qilin lift ${boot} --out ${gen} --files ${QILIN_LIFT_FILES}
         DEPENDS qilin ${boot}
-        COMMENT "Lifting ${title}'s boot file to C++")
+        COMMENT "Lifting ${title}'s boot file to C++"
+        VERBATIM)  # quoted for the shell: a Redump dump's name has parentheses and commas
     add_executable(${game} ${gen_sources})
     target_include_directories(${game} PRIVATE ${gen})
     target_link_libraries(${game} PRIVATE ${game}_game)
