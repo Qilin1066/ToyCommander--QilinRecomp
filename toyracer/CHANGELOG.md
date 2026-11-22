@@ -6,8 +6,8 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
-### Changed
-- **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
+## [0.3.0] - 2026-11-22
+The game runs into a race and is driven there with a controller: from its start-up through the menus, drawn by the Vulkan 1.3 renderer with everything the PowerVR2 draws, with sound, CD music, saves, the settings menu, four controllers and the Jump Pack, built in Toy Commander's repository from the code the two games share.
 
 ### Added
 - **The translucent list sorted for each pixel** in auto-sort mode, as the hardware does: where translucent surfaces cross (smoke, glass, effects in Toy Commander's missions) each pixel blends them from the farthest. Devices without fragment-shader atomics keep the sort by triangle.
@@ -42,6 +42,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **The game reaches its menu's main loop** and keeps running: it builds about 51 scenes a second, unrendered (no renderer, sound output or controller yet).
 
 ### Changed
+- **The game's program is `toycommander`** (Toy Racer's `toyracer`), no longer `qilin_run`, built with `-DQILIN_TOYCOMMANDER_BOOT=<1GUTH.BIN or the .cue>` (`-DQILIN_TOYRACER_BOOT`) in place of `-DQILIN_GAME_BOOT`. Its window, data folder (`qilin/<game>`) and settings file are each game's own.
 - A shared runtime piece Toy Commander hasn't written is no longer waited for: it is written in Toy Commander's repo and moved here (the owner, 2026-11-21: "i'd rather it didnt wait").
 - **The first pictures**, from Toy Commander (written there from this project's session): the Vulkan 1.3 renderer of the tile accelerator's scenes, the PowerVR2's texture formats, an SDL3 window, and the sister projects' host layer (`host/`). The game draws its start-up screens and its title screen.
 - **Toy Commander's answer to the sound driver's mailbox** (`aica.cpp`), moved here.

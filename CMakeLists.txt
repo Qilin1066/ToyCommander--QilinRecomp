@@ -7,12 +7,12 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.9.0 LANGUAGES C CXX)
+project(ToyCommanderQilinRecomp VERSION 0.10.0 LANGUAGES C CXX)
 # Each game is released on its own (tags toycommander-vX.Y.Z and
 # toyracer-vX.Y.Z, its own CHANGELOG): its version is here. The project's
 # (the recompiler's, qilin --version) is Toy Commander's.
 set(QILIN_TOYCOMMANDER_VERSION ${PROJECT_VERSION})
-set(QILIN_TOYRACER_VERSION 0.2.0)
+set(QILIN_TOYRACER_VERSION 0.3.0)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
