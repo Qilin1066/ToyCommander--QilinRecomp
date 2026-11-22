@@ -22,12 +22,14 @@ void set_console(unsigned language, bool stereo);
 // Called when the game changes the console's sound mode itself (the system
 // software writes it to flash memory): the settings file keeps it.
 void on_sound_mode(void (*save)(bool stereo));
-// The game's own screen mode option is 16:9 rather than 4:3. Both games
-// have one (Toy Commander's "Wide Screen (16/9)", Toy Racer's "Screen mode:
-// 16/9"): the camera's view is widened by 4/3 and the picture drawn
-// anamorphic, a 16:9 scene in the same 640x480 for a widescreen television
-// to stretch, so the port shows it at 16:9.
-bool widescreen();
+// How much the game's camera is widened now (1: its own 4:3). Both games
+// have a 16:9 screen mode (Toy Commander's "Wide Screen (16/9)", Toy Racer's
+// "Screen mode: 16/9") that widens the cameras' view by 4/3 and draws
+// anamorphic, for a widescreen television to stretch. Each port replaces the
+// function that switches it (natives) with one that widens the cameras by
+// what the screen asks for (video::screen_widening) whatever the option, so
+// the renderer draws that much wider and nothing is stretched.
+float widening();
 // A movie is playing. The movies are 4:3 pictures in the game's 640x480
 // whatever its screen mode, so they're shown at 4:3, never stretched.
 bool movie_playing();

@@ -60,6 +60,12 @@ struct Source {
     // Video memory as textures are addressed (pvr.hpp).
     void (*read)(uint32_t offset, uint8_t* out, uint32_t n) = nullptr;
     uint64_t (*generation)(uint32_t offset, uint32_t n) = nullptr;
+    // The picture drawn wider than the game's own by this (1: as the game
+    // draws it), to fill a screen wider than 4:3 when the game's camera has
+    // been widened as much (game.hpp): the 3D scene is spread across, and the
+    // 2D overlays drawn over it (the HUD, the menus' text: flat, in front)
+    // keep their shape, centred.
+    float widen = 1.0f;
 };
 
 // The picture of a scene: in TRANSFER_SRC_OPTIMAL layout, its drawing
@@ -68,6 +74,7 @@ struct Picture {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     uint32_t width = 0, height = 0;
+    float widen = 1.0f;  // drawn this much wider than the game's 4:3 (Source::widen)
 };
 
 // Table fog's value at depth `inv_w` (1/w), 0 to 255 (pvr.frag's

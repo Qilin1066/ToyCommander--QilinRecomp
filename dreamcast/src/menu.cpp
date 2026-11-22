@@ -573,7 +573,7 @@ void Menu::game_page() {
     int sound = s_.stereo ? 1 : 0;
     if (ImGui::Combo("Sound", &sound, kSound, 2)) s_.stereo = sound == 1;
 
-    ImGui::TextDisabled("Widescreen: the game's own screen mode option (4/3 or 16/9), in its options; the picture follows it.");
+    ImGui::TextDisabled("Widescreen: the picture fills the screen's width (4:3 at least), never stretched; the movies stay 4:3.");
 
     ImGui::SeparatorText("Sound");
     int volume = int(s_.volume);

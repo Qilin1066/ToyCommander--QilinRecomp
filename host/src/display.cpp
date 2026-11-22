@@ -674,6 +674,12 @@ bool Display::key_down(int code) const {
     const bool* k = SDL_GetKeyboardState(&n);
     return code < n && k[code];
 }
+float Display::screen_aspect() const {
+    if (!impl_->window) return float(impl_->options.width) / float(impl_->options.height);
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(impl_->window, &w, &h);
+    return w > 0 && h > 0 ? float(w) / float(h) : 0.0f;
+}
 bool Display::focused() const { return impl_->window && (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_INPUT_FOCUS); }
 Display::PadState Display::pad_state() const { return pad_state(0); }
 Display::PadState Display::pad_state(unsigned player) const {

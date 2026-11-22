@@ -9,9 +9,11 @@ layout(location = 2) in vec4 base;
 layout(location = 3) in vec4 offset;
 
 layout(push_constant) uniform Push {
-    vec4 screen;      // 2 / width, 2 / height, the depth scale (1 / the scene's largest z), unused
+    vec4 screen;      // 2 / width, 2 / height, the depth scale (1 / the scene's largest z), the draw's widening
     uint flags;
     float alpha_ref;
+    uint sort_word;
+    float shift;      // the draw's x on screen: x times screen.w plus this
 } push;
 
 layout(location = 0) out vec2 v_uv;
@@ -20,7 +22,8 @@ layout(location = 2) out vec4 v_offset;
 
 void main() {
     float w = 1.0 / position.z;
-    gl_Position = vec4((position.xy * push.screen.xy - 1.0) * w, position.z * push.screen.z * w, w);
+    const vec2 at = vec2(position.x * push.screen.w + push.shift, position.y);
+    gl_Position = vec4((at * push.screen.xy - 1.0) * w, position.z * push.screen.z * w, w);
     v_uv = uv;
     v_base = base;
     v_offset = offset;

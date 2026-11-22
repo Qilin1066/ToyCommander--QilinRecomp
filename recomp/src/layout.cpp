@@ -68,6 +68,7 @@ constexpr Region kUsa[] = {
 };
 
 constexpr ReplacedFunction kUsaReplaced[] = {
+    {0x8C018F42, "screen_mode_switch", "the screen mode switch: the cameras widened for the screen, not the option (dreamcast/src/game.hpp)"},
     {0x8C04C700, "play_movie", "plays a movie: a native so the port knows a movie is on screen (shown at 4:3 in the game's 16:9 mode); the same calls"},
     {0x8C04EDF4, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
     {0x8C04EEE0, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
@@ -172,6 +173,7 @@ constexpr Region kEurope[] = {
 };
 
 constexpr ReplacedFunction kEuropeReplaced[] = {
+    {0x8C01AC4E, "screen_mode_switch", "the screen mode switch: the cameras widened for the screen, not the option (dreamcast/src/game.hpp)"},
     {0x8C05E01C, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
     {0x8C04DE3C, "struct_copy_even", "the compiler's structure copy: a jump through a table into an unrolled run"},
     {0x8C04DE48, "struct_copy_odd", "the same, for an odd number of words"},

@@ -15,6 +15,7 @@
 #include "pvr.hpp"
 #include "sh4.hpp"
 #include "system.hpp"
+#include "video.hpp"
 
 namespace toycommander {
 
@@ -415,8 +416,33 @@ void play_movie(rt::Context& c) {
     c.r[15] += 4;
 }
 
+// The screen mode switch (0x8C018F42), as the game's but for the screen
+// rather than the option (game.hpp): the game's scales the four cameras'
+// view (0x8C03D6C2 with the ratio in fr4), and two more values the
+// projection uses, by 4/3 when the option is 16:9 and back by 3/4, and
+// keeps the factor the projection reads (0x8C0A4120, 1 or 4/3) and a state
+// word (0x8C0A410C). This one widens them as much as the screen is wider
+// than 4:3, whatever the option, and the renderer draws the picture that
+// much wider (dreamcast/src/renderer.hpp, Source::widen).
+void screen_mode_switch(rt::Context& c) {
+    constexpr uint32_t kState = 0x8C0A410Cu, kFlags = 0x8C0A4110u, kFactor = 0x8C0A4120u, kScaler = 0x8C03D6C2u;
+    constexpr uint32_t kAlways = 0x8C0C766Cu, kSometimes = 0x8C0C7408u;  // the second scaled only when kFlags' bit 3 is set
+    const float target = dreamcast::video::screen_widening(), applied = rt::flt(rt::ld32(kFactor));
+    if (target == applied || !(applied > 0.0f)) return;
+    const float ratio = target / applied;
+    rt::st32(kState, target > 1.0f ? 1u : 0u);
+    rt::st32(kFactor, rt::bits(target));
+    const uint32_t pr = c.pr;
+    c.fr[4] = ratio;
+    rt::call_guest(c, kScaler);
+    c.pr = pr;
+    rt::st32(kAlways, rt::bits(rt::flt(rt::ld32(kAlways)) * ratio));
+    if (rt::ld32(kFlags) & 8u) rt::st32(kSometimes, rt::bits(rt::flt(rt::ld32(kSometimes)) * ratio));
+}
+
 const rt::Provided kNatives[] = {
     {0x8C04C700u, "play_movie", play_movie},
+    {0x8C018F42u, "screen_mode_switch", screen_mode_switch},
     {0x8C04EDF4u, "memset", memset_sq},
     {0x8C04EEE0u, "memclr", memclr},
     {0x8C0B068Au, "shinobi_library_init", shinobi_library_init},

@@ -8,7 +8,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ### Added
 - **Movies are never stretched** (shared with Toy Commander, whose 4:3 movies stay 4:3 in its 16:9 mode); Toy Racer has no movies, so nothing changes in its pictures.
-- **Widescreen, the game's own**: its 16:9 screen mode option (in the game's options) draws the picture anamorphic, and the port now shows it at 16:9 while the option is on.
+- **The picture as wide as the screen**: the game's camera is widened as far as the screen is wider than 4:3 (16:9, 21:9, up to three times as wide) and the scene drawn that wide; the HUD and the menus' text keep their shape, in the middle. Nothing is stretched, and (Toy Commander's) movies stay 4:3. The game's own 16:9 option no longer changes anything.
 
 ## [0.3.0] - 2026-11-22
 The game runs into a race and is driven there with a controller: from its start-up through the menus, drawn by the Vulkan 1.3 renderer with everything the PowerVR2 draws, with sound, CD music, saves, the settings menu, four controllers and the Jump Pack, built in Toy Commander's repository from the code the two games share.

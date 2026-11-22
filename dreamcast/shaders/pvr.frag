@@ -27,7 +27,8 @@ layout(std430, set = 1, binding = 0) readonly buffer Volumes {
     float shade;
     float depth_scale;
     float pixel_scale;
-    float unused2[3];
+    float widen;      // the world drawn this much wider (renderer.hpp, Source::widen): the volumes' x times it
+    float unused2[2];
     vec4 fog_colour;
     vec4 fog_vertex_colour;
     vec4 clamp_max;
@@ -118,21 +119,25 @@ layout(push_constant) uniform Push {
                       // 13 the fog table's second mode, 14 the colour clamp
     float alpha_ref;  // punch-through: texels below it are dropped
     uint sort_word;   // SORTED: the source and destination blend factors (bits 31-29, 28-26), the draw's place (25-0)
-    float unused;
+    float shift;      // the draw's x on screen: x times screen.w plus this (pvr.vert)
     vec4 clip;        // the user tile clip: x0, y0, x1, y1 in scene pixels (x1, y1 excluded)
 } push;
 
 layout(location = 0) out vec4 colour;
 
 void main() {
-    const vec2 p = gl_FragCoord.xy / volumes.pixel_scale;  // in scene pixels
+    // In the game's own pixels: the draw's (its user tile clip's), and the
+    // world's (the modifier volumes', widened with it).
+    const vec2 on_screen = gl_FragCoord.xy / volumes.pixel_scale;
+    const vec2 p = vec2((on_screen.x - push.shift) / push.screen.w, on_screen.y);
+    const vec2 world = vec2(on_screen.x / volumes.widen, on_screen.y);
     const uint clip = (push.flags >> 10) & 3u;
     if (clip >= 2u) {
         const bool inside = p.x >= push.clip.x && p.y >= push.clip.y && p.x < push.clip.z && p.y < push.clip.w;
         if (inside != (clip == 2u)) discard;
     }
     // A two-volume polygon's volumes, each on its own side of the translucent modifier volumes.
-    if ((push.flags & 0x300u) != 0u && in_volume(p, gl_FragCoord.z) != ((push.flags & 0x200u) != 0u)) discard;
+    if ((push.flags & 0x300u) != 0u && in_volume(world, gl_FragCoord.z) != ((push.flags & 0x200u) != 0u)) discard;
     vec4 base = v_base;
     if ((push.flags & 4u) == 0u) base.a = 1.0;
     vec4 c = base;
@@ -148,7 +153,7 @@ void main() {
         if ((push.flags & 2u) != 0u) c.rgb += v_offset.rgb;
     }
     c = clamp(c, 0.0, 1.0);
-    if ((push.flags & 64u) != 0u && in_volume(p, gl_FragCoord.z)) c.rgb *= volumes.shade;
+    if ((push.flags & 64u) != 0u && in_volume(world, gl_FragCoord.z)) c.rgb *= volumes.shade;
     // The colour clamp (the TSP word's bit 21), before the fog.
     if ((push.flags & 0x4000u) != 0u) c = clamp(c, volumes.clamp_min, volumes.clamp_max);
     // Fog. gl_FragCoord.w is 1 / the clip w, which pvr.vert makes the

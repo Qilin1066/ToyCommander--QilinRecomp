@@ -43,7 +43,7 @@ struct Push {
     uint32_t flags;
     float alpha_ref;
     uint32_t sort_word;  // sorted translucent draws: the blend factors (bits 31-29, 28-26), the draw's place (25-0)
-    float unused;
+    float shift;    // the draw's x on screen: x times screen[3] plus this (the widened picture, Source::widen)
     float clip[4];  // the user tile clip, scene pixels: x0, y0, x1, y1 (exclusive)
 };
 
@@ -81,9 +81,10 @@ struct Draw {
     Stencil stencil = Stencil::off;
     uint32_t clip = 0;  // the user tile clip's rectangle, a byte each (tiles), when the flags use it
     uint32_t sort_word = 0;  // pvr.frag's, for a sorted translucent draw
+    bool overlay = false;    // a 2D overlay: not widened with the scene (Source::widen), centred
     bool same_state(const Draw& o) const {
         return pipeline == o.pipeline && set == o.set && flags == o.flags && depth == o.depth && depth_write == o.depth_write &&
-               stencil == o.stencil && clip == o.clip && sort_word == o.sort_word;
+               stencil == o.stencil && clip == o.clip && sort_word == o.sort_word && overlay == o.overlay;
     }
 };
 
@@ -169,6 +170,7 @@ struct Renderer::Impl {
     struct Target {
         Image colour;
         bool ready = false;  // drawn into at least once: its contents are kept
+        float widen = 1.0f;  // drawn as Source::widen said
     };
     std::map<uint32_t, Target> targets;  // by frame buffer address
     Target* current = nullptr;
@@ -387,12 +389,14 @@ struct Renderer::Impl {
     // may still be showing the old one, so the device goes idle first).
     Target& target(uint32_t key, uint32_t width, uint32_t height) {
         Target& t = targets[key];
-        // Only ever grown: renders of one frame may see it a line taller or
-        // shorter (Toy Racer's last line is inside one part's clip only), and
-        // what the others drew must stay.
-        const uint32_t w = std::max(width * scale, t.colour.width), h = std::max(height * scale, t.colour.height);
+        // Its height only ever grown: renders of one frame may see it a line
+        // taller or shorter (Toy Racer's last line is inside one part's clip
+        // only), and what the others drew must stay. Its width is the
+        // picture's, which changes only when the widening does.
+        const uint32_t w = width * scale, h = std::max(height * scale, t.colour.height);
         if (!t.colour.image || t.colour.width != w || t.colour.height != h) {
             check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
+            if (t.colour.image && t.colour.width != w) t.ready = false;  // a new widening: nothing of the old picture is kept
             t.colour.destroy(gpu);
             ++remade;
             t.colour = Image::create(gpu, w, h, kColourFormat,
@@ -614,6 +618,23 @@ struct Renderer::Impl {
 
     // A strip's triangles in one of its volumes (0, or 1: the second, drawn
     // where the modifier volumes enclose it, in the two-volume mode).
+    // A 2D overlay, kept its shape when the picture is widened: flat (every
+    // vertex at one depth), and in front of the world (the depth test off, or
+    // a depth the world never reaches: both games' HUDs and menus are at 1/w
+    // from 0.5, their worlds below 0.15), and not a fill across the whole
+    // picture (a fade, a flash: widened with the scene to cover it). A
+    // picture across the whole screen stays a 4:3 picture, never stretched.
+    static bool overlay(const Source& src, const ta::Strip& s, const ta::Vertex* v) {
+        const float z = v[0].z;
+        float x0 = v[0].x, x1 = v[0].x;
+        for (uint32_t k = 1; k < s.count; ++k) {
+            if (v[k].z != z) return false;
+            x0 = std::min(x0, v[k].x), x1 = std::max(x1, v[k].x);
+        }
+        if (depth_mode(s.isp) != 7 && !(z >= 0.5f)) return false;
+        return s.textured || x0 > 0.0f || x1 < float(src.width);
+    }
+
     void add_strip(const Source& src, const ta::Strip& s, const ta::Vertex* v, bool background, int vol = 0) {
         if (s.count < 3) return;
         const uint32_t tsp = s.tsp[vol];
@@ -625,6 +646,7 @@ struct Renderer::Impl {
                   shading(tsp) << 4;
         d.depth = background ? 7u : depth_mode(s.isp);
         d.depth_write = !z_write_off(s.isp);
+        d.overlay = !background && src.widen != 1.0f && overlay(src, s, v);
         if (opaque_volumes && !translucent) d.stencil = !background && modified(s) ? Stencil::mark_shadow : Stencil::mark_none;
         if (vol == 1 && !translucent) {
             // Where the first volume's surface is the one seen and inside a
@@ -933,7 +955,9 @@ struct Renderer::Impl {
         wait();
         ++frame;
         stats.draws = stats.triangles = stats.culled = stats.uploads = stats.dropped = 0;
-        Target& t = target(src.frame_buffer, src.width, src.height);
+        const float wide_width = float(src.width) * src.widen;  // the picture's width in the game's pixels
+        Target& t = target(src.frame_buffer, static_cast<uint32_t>(std::lround(wide_width)), src.height);
+        t.widen = src.widen;
         current = &t;
         const Image& colour = t.colour;
         vertices.clear(), draws.clear(), uploads.clear(), upload_bytes.clear();
@@ -984,7 +1008,7 @@ struct Renderer::Impl {
         float z_max = 0.0f;
         for (const HostVertex& v : vertices) z_max = std::max(z_max, v.z);
         Push push{};
-        push.screen[0] = 2.0f / float(src.width), push.screen[1] = 2.0f / float(src.height);
+        push.screen[0] = 2.0f / wide_width, push.screen[1] = 2.0f / float(src.height);
         push.screen[2] = z_max > 0.0f ? 1.0f / z_max : 1.0f;
         push.alpha_ref = float(src.punch_alpha_ref & 0xFFu) / 255.0f;
 
@@ -994,6 +1018,7 @@ struct Renderer::Impl {
         if (!translucent_volumes) volume_data.assign(kTrianglesAt, 0.0f);
         volume_data[3] = push.screen[2];  // the depth scale, for the volumes' z
         volume_data[4] = float(scale);
+        volume_data[5] = src.widen;  // the volumes are the world's: widened with it
         volume_data[kFogColourAt] = float(src.fog_colour >> 16 & 0xFFu) / 255.0f;
         volume_data[kFogColourAt + 1] = float(src.fog_colour >> 8 & 0xFFu) / 255.0f;
         volume_data[kFogColourAt + 2] = float(src.fog_colour & 0xFFu) / 255.0f;
@@ -1067,8 +1092,12 @@ struct Renderer::Impl {
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea = {{0, 0}, {colour.width, colour.height}};
         // The clip, in the target's pixels.
-        const uint32_t x0 = std::min(src.clip_x0, src.width - 1) * scale, y0 = std::min(src.clip_y0, src.height - 1) * scale;
-        const uint32_t x1 = (std::min(src.clip_x1, src.width - 1) + 1) * scale, y1 = (std::min(src.clip_y1, src.height - 1) + 1) * scale;
+        // Widened, it's widened with the scene (its edges at the pixels that hold them).
+        const float across = src.widen * float(scale);
+        const uint32_t x0 = static_cast<uint32_t>(std::floor(float(std::min(src.clip_x0, src.width - 1)) * across)),
+                       y0 = std::min(src.clip_y0, src.height - 1) * scale;
+        const uint32_t x1 = std::min(static_cast<uint32_t>(std::ceil(float(std::min(src.clip_x1, src.width - 1) + 1) * across)), colour.width),
+                       y1 = (std::min(src.clip_y1, src.height - 1) + 1) * scale;
         const VkRect2D clip{{int32_t(x0), int32_t(y0)}, {x1 > x0 ? x1 - x0 : 1, y1 > y0 ? y1 - y0 : 1}};
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
@@ -1077,7 +1106,7 @@ struct Renderer::Impl {
         ri.pStencilAttachment = &da;
         vkCmdBeginRendering(cmd, &ri);
         // The game's pixels map onto the image one to `scale` (the image may be larger than this render's frame).
-        const VkViewport viewport{0.0f, 0.0f, float(src.width * scale), float(src.height * scale), 0.0f, 1.0f};
+        const VkViewport viewport{0.0f, 0.0f, wide_width * float(scale), float(src.height * scale), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &clip);
         {
@@ -1101,6 +1130,9 @@ struct Renderer::Impl {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr);
             push.flags = d.flags;
             push.sort_word = d.sort_word;
+            // The scene widened about its middle; an overlay moved to the middle, its shape kept.
+            push.screen[3] = d.overlay ? 1.0f : src.widen;
+            push.shift = d.overlay ? (src.widen - 1.0f) * float(src.width) * 0.5f : 0.0f;
             // The user tile clip, in scene pixels (tiles of 32), its maximum tile included.
             push.clip[0] = float(d.clip & 0xFFu) * 32.0f, push.clip[1] = float(d.clip >> 8 & 0xFFu) * 32.0f;
             push.clip[2] = float((d.clip >> 16 & 0xFFu) + 1) * 32.0f, push.clip[3] = float((d.clip >> 24) + 1) * 32.0f;
@@ -1122,7 +1154,7 @@ struct Renderer::Impl {
         si.pCommandBufferInfos = &cbi;
         check(vkQueueSubmit2(gpu.queue, 1, &si, fence), "vkQueueSubmit2");
         t.ready = true;
-        return {colour.image, colour.view, colour.width, colour.height};
+        return {colour.image, colour.view, colour.width, colour.height, src.widen};
     }
 
     void set_anisotropy(unsigned level) {
@@ -1142,7 +1174,7 @@ struct Renderer::Impl {
         const auto it = targets.find(key);
         if (it == targets.end() || !it->second.ready) return {};
         const Image& c = it->second.colour;
-        return {c.image, c.view, c.width, c.height};
+        return {c.image, c.view, c.width, c.height, it->second.widen};
     }
 
     std::vector<uint8_t> read_back() {
