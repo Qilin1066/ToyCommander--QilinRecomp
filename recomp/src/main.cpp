@@ -29,6 +29,7 @@
 //
 // Listings are one line per word: address, word, text ("8c010014 d005 mov.l 0x8c01002c,r0").
 // Exit status is non-zero on any error; nothing fails silently.
+#include "command_line.hpp"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -101,7 +102,11 @@ class Out {
 public:
     explicit Out(const std::optional<std::string>& path) {
         if (!path) return;
+        #if defined(_WIN32)
+        file_ = _wfopen(native_path(*path).c_str(), L"wb");
+#else
         file_ = std::fopen(path->c_str(), "wb");
+#endif
         if (!file_) throw Failure{std::format("cannot write {}", *path)};
         path_ = *path;
     }
@@ -113,7 +118,8 @@ public:
     std::FILE* get() const { return file_ ? file_ : stdout; }
     void close() {
         if (!file_) return;
-        const bool bad = std::ferror(file_) || std::fclose(file_) != 0;
+        bool bad = std::ferror(file_) != 0;
+        if (std::fclose(file_) != 0) bad = true;
         file_ = nullptr;
         if (bad) throw Failure{std::format("cannot write {}", path_)};
     }
@@ -125,10 +131,10 @@ private:
 
 // A boot file, or a disc's (a .cue): the file its bootstrap names.
 BootFile load_boot(const std::string& path) {
-    std::string ext = std::filesystem::path(path).extension().string();
+    std::string ext = native_path(path).extension().string();
     for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     if (ext == ".cue") {
-        auto disc = gdrom::Disc::open(path);
+        auto disc = gdrom::Disc::open(native_path(path));
         if (!disc) throw Failure{disc.error()};
         const auto ip = disc->bootstrap();
         if (!ip) throw Failure{ip.error()};
@@ -144,13 +150,13 @@ BootFile load_boot(const std::string& path) {
             }
         throw Failure{std::format("{} has no {}, its boot file", path, ip->boot_file)};
     }
-    auto boot = BootFile::load(path);
+    auto boot = BootFile::load(native_path(path));
     if (!boot) throw Failure{boot.error()};
     return std::move(*boot);
 }
 
 gdrom::Disc open_disc(const std::string& path) {
-    auto disc = gdrom::Disc::open(path);
+    auto disc = gdrom::Disc::open(native_path(path));
     if (!disc) throw Failure{disc.error()};
     return std::move(*disc);
 }
@@ -188,7 +194,7 @@ int cmd_disc(const std::string& cue) {
 
 int cmd_extract(const std::string& cue, const std::string& out_dir) {
     const gdrom::Disc disc = open_disc(cue);
-    const std::filesystem::path root(out_dir);
+    const std::filesystem::path root = native_path(out_dir);
     const auto write = [](const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
         std::filesystem::create_directories(path.parent_path());
         std::ofstream f(path, std::ios::binary);
@@ -328,7 +334,7 @@ int cmd_lift(const std::string& path, const std::string& out_dir, const std::opt
         if (dash == std::string::npos) throw Failure{"--range takes lo-hi"};
         options.range = std::pair(parse_address(range->substr(0, dash)), parse_address(range->substr(dash + 1)));
     }
-    const LiftSummary sum = write_lifted(boot, cfg, layout(boot.sha256), out_dir, options, QILIN_VERSION);
+    const LiftSummary sum = write_lifted(boot, cfg, layout(boot.sha256), native_path(out_dir), options, QILIN_VERSION);
     std::print("{}", sum.report.substr(0, sum.report.find('\n') + 1));
     for (const auto& [why, fns] : sum.failures) std::println("  {:5}  {}", fns.size(), why);
     std::println("{} files written, {} removed ({})", sum.written, sum.removed, out_dir);
@@ -513,6 +519,8 @@ int run(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const qilin::CommandLine command_line(argc, argv);
+    argc = command_line.count(); argv = command_line.values();
     try {
         return run(argc, argv);
     } catch (const Failure& f) {

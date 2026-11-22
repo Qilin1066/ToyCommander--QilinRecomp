@@ -42,11 +42,35 @@ $onWindows = ($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows   # Window
 # build is for one CPU: it's built again if the folder moves to a PC with a
 # different one.
 $cpu = if ($onWindows) { "$env:PROCESSOR_IDENTIFIER" } else { "cross" }
-# Content identity matters while changes share an Unreleased version number.
-$identityParts = @("lib/lib" + [IO.Path]::GetFileNameWithoutExtension($exeName).ToLower() + "_kit.a", "qilin.exe", "kit.ninja") | ForEach-Object {
-    (Get-FileHash -LiteralPath (Join-Path $kit $_) -Algorithm SHA256).Hash
+# Streamed SHA-256 works in Windows PowerShell even when its module search
+# path was inherited from PowerShell 7.
+function Get-Sha256([string]$path) {
+    $stream = [IO.File]::OpenRead($path)
+    $sha = $null
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+    } finally {
+        if ($sha) { $sha.Dispose() }
+        $stream.Dispose()
+    }
 }
-$builtFor = "$kitVersion | $cpu | $($identityParts -join ':')"
+function Get-Identity([string[]]$parts) {
+    $lines = foreach ($part in $parts) { $part.Replace('\', '/') + ':' + (Get-Sha256 (Join-Path $kit $part)) }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '') }
+    finally { $sha.Dispose() }
+}
+$libraryName = 'lib' + [IO.Path]::GetFileNameWithoutExtension($exeName).ToLowerInvariant() + '_kit.a'
+$headers = @(Get-ChildItem -LiteralPath (Join-Path $kit 'include') -Recurse -File | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($kit.Length + 1) })
+$compileKit = Get-Identity (@('kit.ninja', 'toolchain/bin/x86_64-w64-mingw32-clang++.exe') + $headers)
+$kitIdentity = Get-Identity @("lib/$libraryName", 'qilin.exe', 'game.txt', 'play.ps1')
+$builtFor = "$kitVersion | $cpu | $kitIdentity | $compileKit"
+# CPU identity must affect Ninja's command, not just the outer build stamp:
+# otherwise -march=native objects from a different PC may be reused.
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $compileRevision = 'rev' + ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$cpu|$compileKit")))).Replace('-', '') }
+finally { $sha.Dispose() }
 # Off Windows (testing the download under Wine), QILIN_KIT_RUNNER runs the kit's programs.
 $runner = $env:QILIN_KIT_RUNNER
 
@@ -101,10 +125,17 @@ while ($true) {
 }
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
+function Start-Game {
+    if (-not $onWindows) { Write-Host '(not on Windows: built, not started)'; return }
+    Start-Process -FilePath $game -ArgumentList "`"$disc`"" -WorkingDirectory $top -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $top 'run.log') -RedirectStandardError (Join-Path $top 'run-errors.log')
+}
+
 # Up to date: just play.
 $built = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { "" }
 if (-not $Rebuild -and (Test-Path $game) -and $built -eq $builtFor) {
-    if (-not $BuildOnly) { Start-Process -FilePath $game -ArgumentList "`"$disc`"" -WorkingDirectory $top }
+    Set-Content -LiteralPath $discFile -Value $disc -Encoding UTF8
+    if (-not $BuildOnly) { Start-Game }
     exit 0
 }
 
@@ -133,7 +164,7 @@ $lines = @(
     "cxx = ..\kit\toolchain\bin\x86_64-w64-mingw32-clang++.exe",
     "native = -march=native",
     "rule cxx",
-    "  command = `$cxx `$cxxflags `$native -Igen -MD -MF `$out.d -c `$in -o `$out",
+    "  command = `$cxx `$cxxflags `$native -DQILIN_KIT_COMPILE_ID=$compileRevision -Igen -MD -MF `$out.d -c `$in -o `$out",
     "  depfile = `$out.d",
     "  deps = gcc",
     "  description = Compiling `$in",
@@ -142,18 +173,25 @@ $lines = @(
     "  description = Linking `$out"
 )
 if (-not $onWindows) { $lines[3] = "cxx = " + $env:QILIN_KIT_CXX; $lines[4] = "native =" }   # testing off Windows: a cross compiler, for any CPU
+if (-not $sources.Count) { throw "qilin lift produced no C++ sources" }
 $objects = @()
 foreach ($s in $sources) {
     $object = "obj/$($s.BaseName).o"
     $objects += $object
     $lines += "build ${object}: cxx gen/$($s.Name)"
 }
-$lines += "build ${exeName}: link $($objects -join ' ') | $kitLibrary"
+$lines += "build force_link: phony"
+$lines += "build ${exeName}: link $($objects -join ' ') | $kitLibrary force_link"
 $lines += "default $exeName"
 Set-Content -Path (Join-Path $work "build.ninja") -Value $lines -Encoding ASCII
 
 Write-Host "== Compiling ($($sources.Count) files; the biggest take a few minutes each)" -ForegroundColor Cyan
 $ninja = if ($onWindows) { Join-Path $kit "ninja.exe" } else { "ninja" }
+if ($Rebuild) {
+    if ($onWindows) { $clean = Invoke-Kit $ninja @('-C', $work, '-t', 'clean') }
+    else { & $ninja -C $work -t clean | Out-Host; $clean = $LASTEXITCODE }
+    if ($clean -ne 0) { throw "cleaning the generated outputs failed" }
+}
 $jobs = [Math]::Max(1, [Environment]::ProcessorCount)
 if ($onWindows) { $code = Invoke-Kit $ninja @("-C", $work, "-j", "$jobs") }
 else { & $ninja -C $work -j $jobs | Out-Host; $code = $LASTEXITCODE }
@@ -173,6 +211,6 @@ Write-Host ""
 Write-Host "Built: $game" -ForegroundColor Green
 if (-not $BuildOnly) {
     Write-Host "Starting $title..."
-    Start-Process -FilePath $game -ArgumentList "`"$disc`"" -WorkingDirectory $top
+    Start-Game
 }
 exit 0

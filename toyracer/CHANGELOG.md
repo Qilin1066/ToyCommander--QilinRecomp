@@ -6,6 +6,19 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
+### Fixed
+- The Windows launcher hashes files through streamed .NET SHA-256, including headers, compiler, manifest and launcher content. Runtime-only updates force a link even with older timestamps; header/compiler/CPU changes invalidate compiled objects. `-Rebuild` cleans generated outputs, and choosing a disc on the quick path remembers it.
+- Windows command lines are decoded from UTF-16. Disc, CUE track names, lift/extraction/output folders, save directories and menu paths use explicit native/UTF-8 conversion. New launches retain literal Unicode and shell metacharacters; stdout and stderr go to `run.log` and `run-errors.log`.
+- VMU packet writes check bounds, the existing image size, seek, write, flush and close. Failed opens no longer fall back to truncating an existing file. Card and flash loads distinguish missing files from unreadable/malformed ones and bound reads to the image size.
+- Settings, flash and save-history copies share checked, flushed file storage with unique temporary files and replacement on success. Failed copies preserve the destination. Settings accept UTF-8 BOMs and refuse to overwrite unreadable existing files with defaults.
+
+### Tests
+- Added storage tests for Unicode paths, bounded reads, packet writes, malformed images, multi-chunk copies, copying to self, failed replacements and Windows locked destinations. Settings/history tests cover Unicode folders, repeated replacement and BOMs.
+- Windows CI requires real-Ninja launcher checks for both games: stale timestamps, header/compiler/CPU changes, unchanged reuse, forced rebuild, locked-update recovery, Unicode child arguments and the real recompiler's Unicode input/output paths.
+- Added optional `QILIN_SANITIZE` for GCC/Clang. [Validation record](../docs/validation-reliability-2026-11-22.md); no complete-game compatibility claim is made.
+
 ### Added
 - **Movies are never stretched** (shared with Toy Commander, whose 4:3 movies stay 4:3 in its 16:9 mode); Toy Racer has no movies, so nothing changes in its pictures.
 - **The picture as wide as the screen**: the game's camera is widened as far as the screen is wider than 4:3 (16:9, 21:9, up to three times as wide) and the scene drawn that wide; the HUD and the menus' text keep their shape, in the middle. Nothing is stretched, and (Toy Commander's) movies stay 4:3. The game's own 16:9 option no longer changes anything.

@@ -19,6 +19,7 @@
 #include "decoder.hpp"
 #include "fpmode.hpp"
 #include "gdrom.hpp"
+#include "path.hpp"
 #include "hwaccess.hpp"
 #include "layout.hpp"
 #include "sha256.hpp"
@@ -1035,7 +1036,7 @@ struct FakeDisc {
     static constexpr uint32_t kTrack5File = 45000 + 20 + 40, kTrack5 = kTrack5File + 10;
 
     FakeDisc() : track(5) {
-        dir = std::filesystem::temp_directory_path() / "qilin_tests_gdrom";
+        dir = std::filesystem::temp_directory_path() / std::filesystem::path(u8"qilin_tests_gdrom_保_é");
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         const std::vector<uint8_t> blank(2048, 0);
@@ -1115,6 +1116,16 @@ struct FakeDisc {
 
 void test_gdrom() {
     using namespace gdrom;
+    {
+        FakeDisc unicode;
+        const std::string name = qilin::utf8_path(std::filesystem::path(u8"track_保_é.bin"));
+        std::filesystem::rename(unicode.dir / "t1.bin", unicode.dir / qilin::native_path(name));
+        std::string cue(FakeDisc::kCue);
+        cue.replace(cue.find("t1.bin"), 6, name);
+        const auto disc = Disc::open(unicode.write_cue(cue));
+        CHECK(disc.has_value());
+        if (disc) CHECK(disc->tracks()[0].file.filename() == qilin::native_path(name));
+    }
     FakeDisc fake;
     const auto disc = Disc::open(fake.cue());
     CHECK(disc.has_value());

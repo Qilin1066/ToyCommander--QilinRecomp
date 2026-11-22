@@ -54,7 +54,7 @@ bool write(const fs::path& p, const std::string& text) {
 }  // namespace
 
 int main() {
-    const fs::path dir = fs::temp_directory_path() / "dreamcast_save_history_test";
+    const fs::path dir = fs::temp_directory_path() / fs::path(u8"dreamcast_save_history_保_é");
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path card = dir / "memory_card_a1.bin";

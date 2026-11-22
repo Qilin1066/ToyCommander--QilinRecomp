@@ -45,6 +45,9 @@ jobs:
           if [ -n "${{ matrix.cxx }}" ]; then
             args+=(-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }})
           fi
+          if [ "${{ runner.os }}" = Windows ]; then
+            args+=(-DQILIN_REQUIRE_LAUNCHER_TESTS=ON)
+          fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQILIN_WERROR=ON "${args[@]}"
       - name: Build
         run: cmake --build build --config Release --parallel

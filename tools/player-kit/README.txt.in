@@ -19,6 +19,9 @@ Playing
    - After that, it starts the game straight away. @EXE@ in this folder can
      be started directly too, with the .cue as its argument.
    - To use a different dump: Play @TITLE@.bat -ChooseDisc
+   - To force a clean build: Play @TITLE@.bat -Rebuild
+3. Game output is in run.log and run-errors.log beside the executable.
+   Send both files when reporting a problem.
 
 If Windows says "Windows protected your PC": More info, then Run anyway.
 (The download isn't signed.) Or before unpacking, right-click the zip,
@@ -60,3 +63,19 @@ work\               made when building: the recompiled code (from your disc)
 LICENSES\           the licences of everything included
 
 Source, changes and issues: https://github.com/Qilin1066/ToyCommander--QilinRecomp
+
+Updates and recovery
+--------------------
+Close the game before updating. A changed runtime is relinked even if its
+files have older timestamps. Changed headers, compiler or CPU recompile the
+lifted code; unchanged launches reuse the installed executable. Updates keep
+the previous executable as @EXE@.previous. A failed installation keeps the
+working executable and build stamp.
+
+Before a save burst, the memory card is copied into its five-entry history;
+flash updates keep their own history too. Use the settings menu's Game page
+to restore a copy and restart. VMU packets are checked small writes; the
+history supports recovery after an interrupted save, rather than making a
+whole game save transactional. Existing unreadable or malformed card/flash
+files stop the game and are left unchanged. Keep a separate copy before
+manual recovery.

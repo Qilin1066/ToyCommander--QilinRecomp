@@ -1,4 +1,5 @@
 #include "bootfile.hpp"
+#include "path.hpp"
 
 #include <fstream>
 #include <iterator>
@@ -38,9 +39,9 @@ const KnownBuild* known_build(std::string_view sha256_hex) {
 
 std::expected<BootFile, std::string> BootFile::load(const std::filesystem::path& path) {
     std::ifstream f(path, std::ios::binary);
-    if (!f) return fail("cannot open " + path.string());
+    if (!f) return fail("cannot open " + qilin::utf8_path(path));
     std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
-    if (f.bad()) return fail("cannot read " + path.string());
+    if (f.bad()) return fail("cannot read " + qilin::utf8_path(path));
     return parse(bytes);
 }
 

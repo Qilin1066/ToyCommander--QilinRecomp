@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <stdexcept>
 
 #include "qilin/host/pad.hpp"
 #include "settings.hpp"
@@ -17,10 +18,10 @@ namespace qilin::rt {
 void fatal(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    std::vfprintf(stderr, format, args);
+    char message[1024];
+    std::vsnprintf(message, sizeof message, format, args);
     va_end(args);
-    std::fputc('\n', stderr);
-    std::exit(70);
+    throw std::runtime_error(message);
 }
 void log(const char* format, ...) {
     va_list args;
@@ -135,8 +136,9 @@ int main() {
     check(error_of("[audio]\n").rfind("line 1: there's no section [audio]", 0) == 0, "an unknown section");
     check(error_of("[controls]\na = pad:A\na = pad:B\n").rfind("line 3: 'a' is set twice", 0) == 0, "a control set twice");
     check(error_of("[controls]\r\na = pad:A\r\n").empty(), "Windows line endings");
+    check(error_of("\xEF\xBB\xBF[controls]\na = pad:A\n").empty(), "UTF-8 BOM from Windows editors");
     {
-        const std::filesystem::path dir = std::filesystem::temp_directory_path() / QILIN_APP "_settings_test";
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / std::filesystem::path(u8"dreamcast_settings_保_é");
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         const tc::Settings s = tc::load_settings(dir);
@@ -144,6 +146,16 @@ int main() {
         tc::Settings changed = s;
         changed.look = host::Look::crt;
         check(tc::save_settings(dir, changed) && tc::load_settings(dir).look == host::Look::crt, "saving, then loading, keeps a change");
+        for (unsigned i = 0; i < 12; ++i) {
+            changed.volume = i;
+            check(tc::save_settings(dir, changed) && tc::load_settings(dir).volume == i, "repeated settings replacement");
+        }
+        const auto file = tc::settings_file(dir);
+        std::filesystem::remove(file);
+        std::filesystem::create_directory(file);
+        bool refused = false;
+        try { (void)tc::load_settings(dir); } catch (const std::runtime_error&) { refused = true; }
+        check(refused && std::filesystem::is_directory(file), "unreadable existing settings are not replaced with defaults");
         std::filesystem::remove_all(dir);
     }
     std::printf("%s\n", g_failures ? "FAILED" : "all passed");

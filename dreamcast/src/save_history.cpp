@@ -1,5 +1,6 @@
 // The saves' history and the restart (save_history.hpp; from Punch-Out's).
 #include "save_history.hpp"
+#include "path.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -24,6 +25,7 @@
 #endif
 
 #include "system.hpp"
+#include "qilin/host/file_store.hpp"
 
 namespace dreamcast {
 namespace fs = std::filesystem;
@@ -51,24 +53,6 @@ bool fail(std::string& error, const std::string& text, const std::error_code& ec
     return false;
 }
 
-std::FILE* open_file(const fs::path& p, const char* mode) {
-#if defined(_WIN32)
-    std::wstring m(mode, mode + std::char_traits<char>::length(mode));
-    return _wfopen(p.c_str(), m.c_str());
-#else
-    return std::fopen(p.c_str(), mode);
-#endif
-}
-
-bool sync_file(std::FILE* f) {
-    if (std::fflush(f) != 0) return false;
-#if defined(_WIN32)
-    return _commit(_fileno(f)) == 0;
-#else
-    return fsync(fileno(f)) == 0;
-#endif
-}
-
 // A rename over an existing file; on Windows the file may still be open in
 // a process that is closing (a restart's old one), so it's tried again.
 void replace_file(const fs::path& from, const fs::path& to, std::error_code& ec) {
@@ -82,24 +66,8 @@ void replace_file(const fs::path& from, const fs::path& to, std::error_code& ec)
 }
 
 bool copy_flushed(const fs::path& from, const fs::path& to, std::string& error) {
-    std::error_code ec;
-    fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
-    if (ec) {
-        const auto reason = ec;
-        fs::remove(to, ec);
-        return fail(error, "cannot copy the save", reason);
-    }
-    std::FILE* f = open_file(to, "r+b");
-    if (!f) {
-        fs::remove(to, ec);
-        return fail(error, "cannot flush the save's copy");
-    }
-    bool ok = sync_file(f);
-    ok = std::fclose(f) == 0 && ok;
-    if (!ok) {
-        fs::remove(to, ec);
-        return fail(error, "the save's copy couldn't be flushed and closed");
-    }
+    if (!qilin::host::atomic_copy(from, to)) return fail(error, "cannot copy and flush the save");
+    error.clear();
     return true;
 }
 
@@ -110,7 +78,7 @@ bool backup_path(const fs::path& folder, const fs::path& backup, std::string& na
     const fs::path relative = backup.lexically_relative(history);
     std::vector<fs::path> parts(relative.begin(), relative.end());
     if (parts.size() != 2 || backup.extension() != ".bak") return fail(error, "not a copy in the saves' history");
-    std::string dir = parts[0].string();
+    std::string dir = qilin::utf8_path(parts[0]);
     constexpr std::string_view kSuffix = ".history";
     if (!dir.ends_with(kSuffix)) return fail(error, "not a copy in the saves' history");
     dir.resize(dir.size() - kSuffix.size());
@@ -126,24 +94,7 @@ bool backup_path(const fs::path& folder, const fs::path& backup, std::string& na
 }  // namespace
 
 bool write_file_safely(const fs::path& file, const uint8_t* data, size_t n, std::string& error) {
-    fs::path temporary = file;
-    temporary += ".tmp";
-    std::FILE* f = open_file(temporary, "wb");
-    if (!f) return fail(error, "cannot write " + temporary.string());
-    bool ok = std::fwrite(data, 1, n, f) == n;
-    ok = sync_file(f) && ok;
-    ok = std::fclose(f) == 0 && ok;
-    std::error_code ec;
-    if (!ok) {
-        fs::remove(temporary, ec);
-        return fail(error, "cannot write " + temporary.string());
-    }
-    replace_file(temporary, file, ec);
-    if (ec) {
-        const auto reason = ec;
-        fs::remove(temporary, ec);
-        return fail(error, "cannot replace " + file.string(), reason);
-    }
+    if (!qilin::host::atomic_write(file, {reinterpret_cast<const char*>(data), n})) return fail(error, "cannot replace the file safely");
     error.clear();
     return true;
 }
@@ -152,8 +103,10 @@ bool backup_save(const fs::path& folder, const std::string& name, std::string& e
     if (!label_of(name)) return fail(error, "not a save this program keeps");
     const fs::path file = folder / name;
     std::error_code ec;
-    if (!fs::exists(file, ec)) return error.clear(), true;  // nothing to keep yet
-    if (!fs::is_regular_file(file, ec) || fs::is_symlink(fs::symlink_status(file, ec))) return fail(error, file.string() + " isn't a plain file");
+    const bool exists = fs::exists(file, ec);
+    if (ec) return fail(error, "cannot inspect the existing save", ec);
+    if (!exists) return error.clear(), true;  // nothing to keep yet
+    if (!fs::is_regular_file(file, ec) || fs::is_symlink(fs::symlink_status(file, ec))) return fail(error, qilin::utf8_path(file) + " isn't a plain file");
     const fs::path dir = folder / kHistory / (name + ".history");
     fs::create_directories(dir, ec);
     if (ec) return fail(error, "cannot make the saves' history", ec);
@@ -192,7 +145,7 @@ std::vector<SaveBackup> save_backups(const fs::path& folder) {
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             std::string name, why;
             if (!backup_path(folder, it->path(), name, why)) continue;
-            const std::string stamp = it->path().stem().string().substr(0, 20);
+            const std::string stamp = qilin::utf8_path(it->path().stem()).substr(0, 20);
             const auto seconds = static_cast<std::time_t>(std::strtoll(stamp.c_str(), nullptr, 10) / 1000000);
             std::tm calendar{};
 #if defined(_WIN32)
@@ -241,7 +194,7 @@ bool apply_save_restore(const fs::path& folder, std::string& error) {
     if (ec) {
         const auto reason = ec;
         fs::remove(temporary, ec);
-        return fail(error, "cannot restore " + target.string(), reason);
+        return fail(error, "cannot restore " + qilin::utf8_path(target), reason);
     }
     fs::remove(request, ec);
     if (ec) return fail(error, "the save was restored, but the request couldn't be removed", ec);
@@ -260,7 +213,7 @@ void set_command_line(int argc, char** argv) {
     g_args.assign(argv, argv + argc);
     // A relative path to the program would break if anything changed folder;
     // a bare name is found on PATH again.
-    if (!g_args.empty() && g_args[0].find_first_of("/\\") != std::string::npos) g_args[0] = fs::absolute(g_args[0]).string();
+    if (!g_args.empty() && g_args[0].find_first_of("/\\") != std::string::npos) g_args[0] = qilin::utf8_path(fs::absolute(qilin::native_path(g_args[0])));
 }
 
 void restart_program() {

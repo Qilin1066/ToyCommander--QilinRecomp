@@ -30,6 +30,8 @@
 #include "guest.hpp"
 #include "pvr.hpp"
 #include "save_history.hpp"
+#include "qilin/host/file_store.hpp"
+#include "path.hpp"
 #include "qilin/host/paths.hpp"
 #include "system.hpp"
 #include "video.hpp"
@@ -111,20 +113,11 @@ void save_card(uint32_t at, uint32_t bytes) {
     if (g_last_write == std::chrono::steady_clock::time_point{} || now - g_last_write > std::chrono::seconds(2)) {
         std::string error;
         if (!backup_save(g_card_file.parent_path(), g_card_file.filename().string(), error))
-            rt::fatal("cannot keep a copy of %s before saving: %s", g_card_file.string().c_str(), error.c_str());
+            rt::fatal("cannot keep a copy of %s before saving: %s", qilin::utf8_path(g_card_file).c_str(), error.c_str());
     }
+    if (!qilin::host::write_range(g_card_file, g_card.data(), g_card.size(), at, bytes))
+        rt::fatal("cannot write the memory card (seek, size, write, flush or close failed)");
     g_last_write = now;
-    std::FILE* f = std::fopen(g_card_file.string().c_str(), "r+b");
-    if (!f) f = std::fopen(g_card_file.string().c_str(), "w+b");
-    if (!f) rt::fatal("cannot write %s", g_card_file.string().c_str());
-    if (std::fseek(f, 0, SEEK_END) == 0 && std::ftell(f) != long(g_card.size())) {
-        std::fseek(f, 0, SEEK_SET);
-        std::fwrite(g_card.data(), 1, g_card.size(), f);
-    } else {
-        std::fseek(f, long(at), SEEK_SET);
-        std::fwrite(g_card.data() + at, 1, bytes, f);
-    }
-    if (std::fclose(f) != 0) rt::fatal("cannot write %s", g_card_file.string().c_str());
 }
 
 // The file system's layout, which the media information reports too: the
@@ -169,14 +162,15 @@ void load_card() {
     if (!g_card.empty()) return;
     g_card_file = qilin::host::user_folder() / "memory_card_a1.bin";
     g_card.assign(kBlocks * kBlockBytes, 0);
-    if (std::FILE* f = std::fopen(g_card_file.string().c_str(), "rb")) {
-        const size_t got = std::fread(g_card.data(), 1, g_card.size(), f);
-        std::fclose(f);
-        if (got != g_card.size()) rt::fatal("%s is not a %u-byte memory card", g_card_file.string().c_str(), kBlocks * kBlockBytes);
-    } else {
+    std::string bytes;
+    bool missing = false;
+    if (qilin::host::read_file(g_card_file, bytes, &missing, g_card.size())) {
+        if (bytes.size() != g_card.size()) rt::fatal("the memory card has the wrong size");
+        std::memcpy(g_card.data(), bytes.data(), bytes.size());
+    } else if (missing) {
         format_card();
         save_card(0, kBlocks * kBlockBytes);
-    }
+    } else rt::fatal("cannot read the existing memory card; it has been left unchanged");
 }
 
 void memory_card(uint32_t header, uint32_t data_at, uint32_t to) {

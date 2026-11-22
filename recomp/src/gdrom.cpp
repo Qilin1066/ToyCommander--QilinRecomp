@@ -1,4 +1,5 @@
 #include "gdrom.hpp"
+#include "path.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -40,7 +41,7 @@ constexpr uint8_t kSync[12] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 
 std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
     std::ifstream f(cue);
-    if (!f) return fail("cannot open " + cue.string());
+    if (!f) return fail("cannot open " + qilin::utf8_path(cue));
     Disc disc;
     bool high = false;
     std::filesystem::path file;
@@ -51,10 +52,10 @@ std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
     std::vector<std::pair<uint32_t, bool>> index;  // per track: index 1 offset, seen
     std::string raw;
     unsigned line_no = 0;
-    const auto where = [&] { return cue.filename().string() + " line " + std::to_string(line_no) + ": "; };
+    const auto where = [&] { return qilin::utf8_path(cue.filename()) + " line " + std::to_string(line_no) + ": "; };
     const auto finish_track = [&]() -> std::expected<void, std::string> {
         if (!track) return {};
-        if (!have_index1) return fail(cue.filename().string() + ": track " + std::to_string(track->number) + " has no INDEX 01");
+        if (!have_index1) return fail(qilin::utf8_path(cue.filename()) + ": track " + std::to_string(track->number) + " has no INDEX 01");
         index.emplace_back(index1, true);
         return {};
     };
@@ -73,7 +74,7 @@ std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
             if (a == std::string::npos || b <= a) return fail(where() + "FILE without a quoted name");
             if (trimmed(std::string_view(line).substr(b + 1)) != "BINARY") return fail(where() + "only BINARY files are supported");
             if (!file_used) return fail(where() + "a FILE with no TRACK");
-            file = cue.parent_path() / line.substr(a + 1, b - a - 1);
+            file = cue.parent_path() / native_path(line.substr(a + 1, b - a - 1));
             file_used = false;
         } else if (key == "TRACK") {
             unsigned number = 0;
@@ -107,9 +108,9 @@ std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
         }
     }
     if (auto r = finish_track(); !r) return std::unexpected(r.error());
-    if (!file_used) return fail(cue.filename().string() + ": a FILE with no TRACK");
+    if (!file_used) return fail(qilin::utf8_path(cue.filename()) + ": a FILE with no TRACK");
     if (disc.tracks_.size() < 3 || !disc.tracks_[2].high_density || disc.tracks_[1].high_density)
-        return fail(cue.filename().string() + ": not a GD-ROM dump (the high-density area must start at track 3)");
+        return fail(qilin::utf8_path(cue.filename()) + ": not a GD-ROM dump (the high-density area must start at track 3)");
 
     // Tracks follow one another within an area; the high-density area starts
     // at sector 45000.
@@ -119,17 +120,17 @@ std::expected<Disc, std::string> Disc::open(const std::filesystem::path& cue) {
         if (t.high_density && (i == 0 || !disc.tracks_[i - 1].high_density)) next = kHighDensityStart;
         std::error_code ec;
         const uintmax_t bytes = std::filesystem::file_size(t.file, ec);
-        if (ec) return fail("cannot open " + t.file.string());
-        if (bytes == 0 || bytes % kRawSector) return fail(t.file.filename().string() + ": its size is not a whole number of 2352-byte sectors");
-        if (bytes / kRawSector > 600000) return fail(t.file.filename().string() + ": larger than a GD-ROM");
+        if (ec) return fail("cannot open " + qilin::utf8_path(t.file));
+        if (bytes == 0 || bytes % kRawSector) return fail(qilin::utf8_path(t.file.filename()) + ": its size is not a whole number of 2352-byte sectors");
+        if (bytes / kRawSector > 600000) return fail(qilin::utf8_path(t.file.filename()) + ": larger than a GD-ROM");
         t.sectors = static_cast<uint32_t>(bytes / kRawSector);
-        if (index[i].first >= t.sectors) return fail(t.file.filename().string() + ": INDEX 01 lies beyond the file");
+        if (index[i].first >= t.sectors) return fail(qilin::utf8_path(t.file.filename()) + ": INDEX 01 lies beyond the file");
         t.file_start = next;
         t.start = next + index[i].first;
         next = t.end();
     }
     if (disc.tracks_[2].audio || disc.tracks_[2].start != kHighDensityStart)
-        return fail(cue.filename().string() + ": track 3 must be a data track starting at its first sector");
+        return fail(qilin::utf8_path(cue.filename()) + ": track 3 must be a data track starting at its first sector");
     return disc;
 }
 
@@ -150,11 +151,11 @@ std::expected<std::vector<int16_t>, std::string> Disc::read_audio(uint32_t secto
             if (!track) return fail(name + " is not on the disc");
             if (!track->audio) return fail(name + " is in data track " + std::to_string(track->number));
             f = std::ifstream(track->file, std::ios::binary);
-            if (!f) return fail("cannot open " + track->file.string());
+            if (!f) return fail("cannot open " + qilin::utf8_path(track->file));
             f.seekg(static_cast<std::streamoff>(uint64_t(sector - track->file_start) * kRawSector));
         }
         f.read(reinterpret_cast<char*>(raw), kRawSector);
-        if (!f) return fail("cannot read " + name + " from " + track->file.filename().string());
+        if (!f) return fail("cannot read " + name + " from " + qilin::utf8_path(track->file.filename()));
         for (uint32_t k = 0; k < kRawSector; k += 2) out.push_back(static_cast<int16_t>(raw[k] | raw[k + 1] << 8));
     }
     return out;
@@ -175,11 +176,11 @@ std::expected<std::vector<uint8_t>, std::string> Disc::read(uint32_t sector, uin
             if (!track) return fail(name + " is not on the disc");
             if (track->audio) return fail(name + " is in audio track " + std::to_string(track->number));
             f = std::ifstream(track->file, std::ios::binary);
-            if (!f) return fail("cannot open " + track->file.string());
+            if (!f) return fail("cannot open " + qilin::utf8_path(track->file));
             f.seekg(static_cast<std::streamoff>(uint64_t(sector - track->file_start) * kRawSector));
         }
         f.read(reinterpret_cast<char*>(raw), kRawSector);
-        if (!f) return fail("cannot read " + name + " from " + track->file.filename().string());
+        if (!f) return fail("cannot read " + name + " from " + qilin::utf8_path(track->file.filename()));
         if (!std::equal(std::begin(kSync), std::end(kSync), raw)) return fail(name + " has no sync pattern: not a raw data sector");
         if (raw[15] != 1) return fail(name + " is mode " + std::to_string(raw[15]) + ", not Mode 1");
         const uint64_t take = std::min<uint64_t>(kSectorData, bytes - out.size());

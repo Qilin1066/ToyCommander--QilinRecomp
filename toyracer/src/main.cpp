@@ -35,17 +35,20 @@
 #include "ta.hpp"
 #include "threads.hpp"
 #include "save_history.hpp"
+#include "command_line.hpp"
 #include "video.hpp"
 
 namespace rt = qilin::rt;
 
 int main(int argc, char** argv) {
+    const qilin::CommandLine command_line(argc, argv);
+    argc = command_line.count(); argv = command_line.values();
     if (argc != 2) {
         std::fprintf(stderr, "usage: " QILIN_APP " <the game's .cue>\n");
         return 2;
     }
     dreamcast::set_command_line(argc, argv);  // for the menu's "Restore and restart"
-    auto disc = qilin::gdrom::Disc::open(argv[1]);
+    auto disc = qilin::gdrom::Disc::open(qilin::native_path(argv[1]));
     if (!disc) rt::fatal("%s", disc.error().c_str());
     const auto ip = disc->bootstrap();
     if (!ip) rt::fatal("%s", ip.error().c_str());

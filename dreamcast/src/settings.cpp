@@ -8,6 +8,8 @@
 
 #include "qilin/host/pad.hpp"
 #include "system.hpp"
+#include "qilin/host/file_store.hpp"
+#include "path.hpp"
 
 namespace dreamcast {
 namespace host = qilin::host;
@@ -178,7 +180,7 @@ host::Picture picture_of(const Settings& s) {
 
 bool parse_settings(const std::string& text, Settings& out, std::string& error) {
     Settings s = default_settings();
-    std::istringstream in(text);
+    std::istringstream in(text.starts_with("\xEF\xBB\xBF") ? text.substr(3) : text);
     std::string line, section;
     bool seen[kControlCount] = {};
     for (int n = 1; std::getline(in, line); ++n) {
@@ -389,33 +391,25 @@ std::string settings_text(const Settings& s) {
 std::filesystem::path settings_file(const std::filesystem::path& folder) { return folder / (QILIN_APP ".ini"); }
 
 bool save_settings(const std::filesystem::path& folder, const Settings& s) {
-    const std::filesystem::path file = settings_file(folder), tmp = file.string() + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        out << settings_text(s);
-        if (!out.flush()) return false;
-    }
-    std::error_code ec;
-    std::filesystem::rename(tmp, file, ec);
-    return !ec;
+    return qilin::host::atomic_write(settings_file(folder), settings_text(s));
 }
 
 Settings load_settings(const std::filesystem::path& folder) {
     const std::filesystem::path file = settings_file(folder);
-    std::ifstream in(file, std::ios::binary);
-    if (in) {
-        std::stringstream buf;
-        buf << in.rdbuf();
+    std::string text;
+    bool missing = false;
+    if (qilin::host::read_file(file, text, &missing)) {
         Settings s;
         std::string error;
-        if (!parse_settings(buf.str(), s, error))
-            qilin::rt::fatal("%s, %s (fix it, or delete the file to get the defaults back)", file.string().c_str(), error.c_str());
-        qilin::rt::log("settings: read %s", file.string().c_str());
+        if (!parse_settings(text, s, error))
+            qilin::rt::fatal("settings: %s (fix it, or delete the file to get the defaults back)", error.c_str());
+        qilin::rt::log("settings: read %s", qilin::utf8_path(file).c_str());
         return s;
     }
+    if (!missing) qilin::rt::fatal("cannot read existing settings; the file has been left unchanged");
     const Settings s = default_settings();
-    if (!save_settings(folder, s)) qilin::rt::fatal("cannot write %s", file.string().c_str());
-    qilin::rt::log("settings: wrote the defaults to %s", file.string().c_str());
+    if (!save_settings(folder, s)) qilin::rt::fatal("cannot write %s", qilin::utf8_path(file).c_str());
+    qilin::rt::log("settings: wrote the defaults to %s", qilin::utf8_path(file).c_str());
     return s;
 }
 

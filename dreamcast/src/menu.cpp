@@ -1,3 +1,4 @@
+#include "path.hpp"
 // The settings menu (menu.hpp), from Punch-Out's, kept in step. Runtime code: no std::format.
 #include "menu.hpp"
 
@@ -154,7 +155,7 @@ bool Menu::handle(const void* event) {
             if (!e.key.repeat && e.key.key == SDLK_F3) {  // the frame-time readout, kept in the settings
                 s_.performance_overlay = !s_.performance_overlay;
                 if (!save_settings(folder_, s_))
-                    qilin::rt::log("the settings can't be saved to %s", settings_file(folder_).string().c_str());
+                    qilin::rt::log("the settings can't be saved to %s", qilin::utf8_path(settings_file(folder_)).c_str());
                 return true;
             }
             break;
@@ -201,7 +202,7 @@ void Menu::close() {
     if (open_) {
         s_.fullscreen = display_.fullscreen();
         if (!save_settings(folder_, s_))
-            qilin::rt::log("the settings can't be saved to %s", settings_file(folder_).string().c_str());
+            qilin::rt::log("the settings can't be saved to %s", qilin::utf8_path(settings_file(folder_)).c_str());
     }
     open_ = opening_ = peek_ = false;
     capture_ = -1;
@@ -264,7 +265,7 @@ void Menu::tick() {
             if (quit_) {
                 s_.fullscreen = display_.fullscreen();
                 if (!save_settings(folder_, s_))
-                    qilin::rt::log("the settings can't be saved to %s", settings_file(folder_).string().c_str());
+                    qilin::rt::log("the settings can't be saved to %s", qilin::utf8_path(settings_file(folder_)).c_str());
             } else {
                 close();
             }
@@ -584,8 +585,8 @@ void Menu::game_page() {
     ImGui::TextWrapped(QILIN_APP_TITLE " QilinRecomp %s: a static recompilation, the game's own code compiled for this computer.",
                        QILIN_VERSION);
     ImGui::TextWrapped("Graphics: Vulkan. Window, sound and input: SDL3 (zlib). Menu: Dear ImGui (MIT).");
-    ImGui::TextWrapped("Settings file: %s", settings_file(folder_).string().c_str());
-    ImGui::TextWrapped("Saves and the memory card: %s", folder_.string().c_str());
+    ImGui::TextWrapped("Settings file: %s", qilin::utf8_path(settings_file(folder_)).c_str());
+    ImGui::TextWrapped("Saves and the memory card: %s", qilin::utf8_path(folder_).c_str());
 }
 
 }  // namespace dreamcast

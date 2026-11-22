@@ -27,6 +27,10 @@ They have the same requirements and scope as their sister projects, [GBTGhoulies
 | Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | 🔨 bring-up: `toycommander` boots the game's lifted code into `main`, drawn by the Vulkan 1.3 renderer in an SDL3 window and played with a controller, through the menus into the first mission, with sound, saves and the settings menu (`docs/runtime.md`) |
 | Enhancements (resolution, widescreen, high refresh rate) and the settings menu shared with the sister projects | to do, after the game plays at original spec |
 
+The latest shared reliability checks are recorded in
+[the validation notes](docs/validation-reliability-2026-11-22.md). These cover
+runtime/tooling regressions and do not establish a complete playthrough of either game.
+
 The supported releases are Toy Commander's USA disc (`MK-57020`, `V1.022`; `docs/disc-analysis.md`) and Toy Racer's European disc (`MK-5114950`, `V1.050`, the only one; `docs/toyracer/disc-analysis.md`).
 
 ## Versions and changes

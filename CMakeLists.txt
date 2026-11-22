@@ -7,12 +7,12 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
-project(ToyCommanderQilinRecomp VERSION 0.10.0 LANGUAGES C CXX)
+project(ToyCommanderQilinRecomp VERSION 0.11.0 LANGUAGES C CXX)
 # Each game is released on its own (tags toycommander-vX.Y.Z and
 # toyracer-vX.Y.Z, its own CHANGELOG): its version is here. The project's
 # (the recompiler's, qilin --version) is Toy Commander's.
 set(QILIN_TOYCOMMANDER_VERSION ${PROJECT_VERSION})
-set(QILIN_TOYRACER_VERSION 0.3.0)
+set(QILIN_TOYRACER_VERSION 0.4.0)
 
 # ---- Language: C++23 everywhere (recompiler, runtime, generated code) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -40,6 +40,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 option(QILIN_WERROR "Treat warnings in our own code as errors" OFF)
+option(QILIN_REQUIRE_LAUNCHER_TESTS "Require Windows launcher regression tools (CI)" OFF)
 
 # ---- Warnings for our own targets ----
 add_library(qilin_warnings INTERFACE)
@@ -57,6 +58,15 @@ else()
     endif()
 endif()
 
+set(QILIN_SANITIZE "" CACHE STRING "Sanitizers for our code, e.g. address,undefined")
+if(QILIN_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "QILIN_SANITIZE currently requires GCC or Clang")
+    endif()
+    target_compile_options(qilin_warnings INTERFACE -fsanitize=${QILIN_SANITIZE} -fno-omit-frame-pointer)
+    target_link_options(qilin_warnings INTERFACE -fsanitize=${QILIN_SANITIZE})
+endif()
+
 # Developer tools on macOS: macOS 13.3 or later (std::format).
 function(qilin_tool target)
     if(APPLE)
@@ -65,9 +75,17 @@ function(qilin_tool target)
     endif()
 endfunction()
 
+# Checked file storage, independent of SDL/Vulkan and shared by both games.
+add_library(qilin_file_store STATIC host/src/file_store.cpp)
+target_include_directories(qilin_file_store PUBLIC host/include)
+target_link_libraries(qilin_file_store PRIVATE qilin_warnings)
+
 # ---- The boot file loader and the GD-ROM reader: runtime code too (no std::format) ----
 add_library(qilin_disc STATIC recomp/src/bootfile.cpp recomp/src/gdrom.cpp recomp/src/sha256.cpp)
-target_include_directories(qilin_disc PUBLIC recomp/src)
+target_include_directories(qilin_disc PUBLIC recomp/src recomp/runtime)
+if(WIN32)
+    target_link_libraries(qilin_disc PUBLIC shell32)
+endif()
 target_link_libraries(qilin_disc PRIVATE qilin_warnings)
 
 # ---- Recompiler core ----
@@ -97,6 +115,33 @@ add_executable(qilin_tests recomp/tests/tests.cpp)
 target_link_libraries(qilin_tests PRIVATE qilin_core qilin_warnings)
 qilin_tool(qilin_tests)
 add_test(NAME qilin_tests COMMAND qilin_tests)
+
+# Exercise the actual Windows script and Ninja, with native fixture children.
+if(WIN32 AND NOT CMAKE_CROSSCOMPILING)
+    find_program(QILIN_POWERSHELL NAMES powershell pwsh)
+    find_program(QILIN_NINJA NAMES ninja ninja-build)
+    if(QILIN_REQUIRE_LAUNCHER_TESTS AND (NOT QILIN_POWERSHELL OR NOT QILIN_NINJA))
+        message(FATAL_ERROR "Launcher tests require PowerShell and Ninja")
+    endif()
+    if(QILIN_POWERSHELL AND QILIN_NINJA)
+        add_executable(qilin_launcher_stub tools/check/launcher_stub.cpp)
+        target_include_directories(qilin_launcher_stub PRIVATE recomp/runtime)
+        target_link_libraries(qilin_launcher_stub PRIVATE qilin_warnings shell32)
+        foreach(game IN ITEMS ToyCommander ToyRacer)
+            add_test(NAME ${game}_launcher_check COMMAND "${QILIN_POWERSHELL}" -NoProfile -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/check/launcher_check.ps1"
+                -Stub "$<TARGET_FILE:qilin_launcher_stub>" -Ninja "${QILIN_NINJA}" -Qilin "$<TARGET_FILE:qilin>"
+                -Launcher "${CMAKE_CURRENT_SOURCE_DIR}/tools/player-kit/play.ps1"
+                -Out "${CMAKE_CURRENT_BINARY_DIR}/launcher-check/$<CONFIG>" -Game "${game}")
+            set_tests_properties(${game}_launcher_check PROPERTIES TIMEOUT 120)
+        endforeach()
+    endif()
+endif()
+
+add_executable(qilin_file_store_test host/tests/file_store_test.cpp)
+target_include_directories(qilin_file_store_test PRIVATE recomp/runtime)
+target_link_libraries(qilin_file_store_test PRIVATE qilin_file_store qilin_warnings)
+add_test(NAME qilin_file_store_test COMMAND qilin_file_store_test)
 
 # ---- End-to-end lifter tests (no game files needed) ----
 # qilin_liftgen lifts synthetic SH-4 programs with the real analysis and
@@ -215,7 +260,7 @@ if(QILIN_HOST)
         target_link_libraries(qilin_host_${game} PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)
         add_library(dreamcast_menu_${game} STATIC dreamcast/src/settings.cpp dreamcast/src/menu.cpp dreamcast/src/save_history.cpp)
         target_include_directories(dreamcast_menu_${game} PUBLIC dreamcast/src recomp/runtime)
-        target_link_libraries(dreamcast_menu_${game} PUBLIC qilin_host_${game} qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings)
+        target_link_libraries(dreamcast_menu_${game} PUBLIC qilin_host_${game} qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings qilin_file_store)
         target_compile_definitions(dreamcast_menu_${game} PRIVATE QILIN_VERSION="${version}")
     endfunction()
     qilin_game_host(toycommander "Toy Commander" ${QILIN_TOYCOMMANDER_VERSION})
@@ -254,14 +299,14 @@ if(QILIN_HOST)
     # The settings file's reader and writer (from Punch-Out's).
     add_executable(dreamcast_settings_test dreamcast/tests/settings_test.cpp dreamcast/src/settings.cpp)
     target_include_directories(dreamcast_settings_test PRIVATE dreamcast/src recomp/runtime host/include)
-    target_link_libraries(dreamcast_settings_test PRIVATE qilin_warnings)
+    target_link_libraries(dreamcast_settings_test PRIVATE qilin_warnings qilin_file_store)
     target_compile_definitions(dreamcast_settings_test PRIVATE QILIN_APP="toycommander" QILIN_APP_TITLE="Toy Commander")
     add_test(NAME dreamcast_settings_test COMMAND dreamcast_settings_test)
 
     # The saves' history (from Punch-Out's).
     add_executable(dreamcast_save_history_test dreamcast/tests/save_history_test.cpp dreamcast/src/save_history.cpp)
     target_include_directories(dreamcast_save_history_test PRIVATE dreamcast/src recomp/runtime)
-    target_link_libraries(dreamcast_save_history_test PRIVATE qilin_warnings)
+    target_link_libraries(dreamcast_save_history_test PRIVATE qilin_warnings qilin_file_store)
     add_test(NAME dreamcast_save_history_test COMMAND dreamcast_save_history_test)
 
     add_executable(qilin_frame_times_test host/tests/frame_times_test.cpp)
@@ -375,7 +420,7 @@ function(qilin_player_kit game)
     if(NOT TARGET SDL3-static)
         message(FATAL_ERROR "the player kit needs SDL3 built statically (QILIN_HOST=ON)")
     endif()
-    set(kit_libraries ${game}_game qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui qilin_volk SDL3-static)
+    set(kit_libraries ${game}_game qilin_file_store qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui qilin_volk SDL3-static)
     set(kit_archive "${CMAKE_BINARY_DIR}/kit/${game}/lib${game}_kit.a")
     set(mri "CREATE ${kit_archive}\n")
     foreach(library IN LISTS kit_libraries)

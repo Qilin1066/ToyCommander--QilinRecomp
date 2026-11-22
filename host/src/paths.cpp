@@ -12,7 +12,7 @@ namespace qilin::host {
 namespace {
 std::filesystem::path user_data_base() {
 #if defined(_WIN32)
-    if (const char* p = std::getenv("LOCALAPPDATA"); p && *p) return p;
+    if (const wchar_t* p = _wgetenv(L"LOCALAPPDATA"); p && *p) return p;
 #elif defined(__APPLE__)
     if (const char* p = std::getenv("HOME"); p && *p) return std::filesystem::path(p) / "Library" / "Application Support";
 #else
@@ -28,7 +28,11 @@ std::filesystem::path user_folder() {
     static const std::filesystem::path folder = [] {
         std::filesystem::path p;
         std::error_code ec;
+#if defined(_WIN32)
+        if (const wchar_t* env = _wgetenv(L"QILIN_SAVE_DIR"); env && *env) {
+#else
         if (const char* env = std::getenv("QILIN_SAVE_DIR"); env && *env) {
+#endif
             p = env;
         } else {
             const std::filesystem::path base = user_data_base();

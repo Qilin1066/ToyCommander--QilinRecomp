@@ -10,6 +10,8 @@
 #include "guest.hpp"
 #include "qilin/host/paths.hpp"
 #include "save_history.hpp"
+#include "qilin/host/file_store.hpp"
+#include "path.hpp"
 #include "system.hpp"
 
 namespace dreamcast::flash {
@@ -34,11 +36,12 @@ void load() {
     if (!g_flash.empty()) return;
     g_file = qilin::host::user_folder() / "flash.bin";
     g_flash.assign(kBytes, 0xFF);
-    if (std::FILE* f = std::fopen(g_file.string().c_str(), "rb")) {
-        const size_t got = std::fread(g_flash.data(), 1, g_flash.size(), f);
-        std::fclose(f);
-        if (got != g_flash.size()) rt::fatal("%s is not a %u-byte flash memory", g_file.string().c_str(), kBytes);
-    }
+    std::string bytes;
+    bool missing = false;
+    if (qilin::host::read_file(g_file, bytes, &missing, g_flash.size())) {
+        if (bytes.size() != g_flash.size()) rt::fatal("the console flash memory has the wrong size");
+        std::copy(bytes.begin(), bytes.end(), g_flash.begin());
+    } else if (!missing) rt::fatal("cannot read the existing console flash memory; it has been left unchanged");
 }
 
 // The whole file, through a temporary one (a crash leaves the old), the old
@@ -46,7 +49,7 @@ void load() {
 void save() {
     std::string error;
     if (!backup_save(g_file.parent_path(), g_file.filename().string(), error))
-        rt::fatal("cannot keep a copy of %s before saving: %s", g_file.string().c_str(), error.c_str());
+        rt::fatal("cannot keep a copy of %s before saving: %s", qilin::utf8_path(g_file).c_str(), error.c_str());
     if (!write_file_safely(g_file, g_flash.data(), g_flash.size(), error)) rt::fatal("%s", error.c_str());
 }
 
