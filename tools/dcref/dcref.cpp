@@ -391,13 +391,22 @@ struct FogScene {
     uint32_t density;        // FOG_DENSITY
     uint32_t table[128];     // FOG_TABLE's entries
     std::vector<float> inv_w;  // one band each, top down
+    // For --modes: the TSP's fog mode (bits 23-22) and colour clamp (bit 21)
+    // and the bands' colour (ARGB); with `offset_alpha`, the bands are
+    // textured (white texels, modulated by the colour) with an offset colour
+    // of black at that alpha, one a band. FOG_CLAMP_MAX and FOG_CLAMP_MIN.
+    uint32_t mode = 0;
+    bool clamp = false;
+    uint32_t colour = 0xFF000000u;
+    std::vector<uint32_t> offset_alpha = {};
+    uint32_t clamp_max = 0xFFFFFFFFu, clamp_min = 0;
 };
 
 // The commands for one scene: the chip set up for a 640x480 picture (the
 // video timing of an ordinary NTSC 640x480 interlaced mode), the bands sent
 // as opaque polygons with table fog (or none, `fog_mode` 2), rendered, shown,
 // and a picture taken.
-void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t fog_mode, uint32_t out) {
+void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t out) {
     const auto st = [&](uint32_t a, uint32_t v) { c.insert(c.end(), {1u, a, v}); };
     const auto wait = [&](uint32_t a, uint32_t m) { c.insert(c.end(), {2u, a, m}); };
     const auto burst = [&](std::initializer_list<uint32_t> w) { c.push_back(3u), c.insert(c.end(), w); };
@@ -412,7 +421,10 @@ void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t fog_mode, 
     st(R + 0x048, 0x1u), st(R + 0x04C, 640 * 2 / 8), st(R + 0x060, 0x01000000u | kFrame), st(R + 0x068, 0x027F0000u), st(R + 0x06C, 0x01DF0000u);
     st(R + 0x074, 0), st(R + 0x078, fl(0.001f)), st(R + 0x07C, 0x0027DF77u), st(R + 0x080, 7u), st(R + 0x098, 0x00800408u), st(R + 0x108, 0);
     // Fog: white from the table; the table and density asked for.
-    st(R + 0x0B0, 0x00FFFFFFu), st(R + 0x0B4, 0x00FFFFFFu), st(R + 0x0B8, sc.density), st(R + 0x0BC, 0xFFFFFFFFu), st(R + 0x0C0, 0);
+    st(R + 0x0B0, 0x00FFFFFFu), st(R + 0x0B4, 0x00FFFFFFu), st(R + 0x0B8, sc.density), st(R + 0x0BC, sc.clamp_max), st(R + 0x0C0, sc.clamp_min);
+    // A texture for the textured bands: 8x8 white texels (RGB565, raster) at kTexture.
+    constexpr uint32_t kTexture = 0x300000u;
+    for (unsigned k = 0; k < 32; ++k) st(0xA4000000u + kTexture + 4 * k, 0xFFFFFFFFu);
     for (unsigned k = 0; k < 128; ++k) st(R + 0x200 + 4 * k, sc.table[k]);
     // The background: black and far, its plane in video memory before the region array.
     const uint32_t bg[] = {0xF0000000u, 0x20800000u, 0, fl(0), fl(0), fl(1e-9f), 0xFF000000u, fl(640), fl(0), fl(1e-9f), 0xFF000000u, fl(0), fl(480), fl(1e-9f), 0xFF000000u};
@@ -431,11 +443,21 @@ void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t fog_mode, 
     const unsigned n = static_cast<unsigned>(sc.inv_w.size()), h = 480 / n;
     for (unsigned k = 0; k < n; ++k) {
         const float y0 = float(k * h), y1 = float(k * h + h), z = sc.inv_w[k];
-        burst({0x80800000u, 0xE0000000u, 0x20000000u | fog_mode << 22, 0, 0, 0, 0, 0});
-        burst({0xE0000000u, fl(0), fl(y0), fl(z), 0, 0, 0xFF000000u, 0});
-        burst({0xE0000000u, fl(640), fl(y0), fl(z), 0, 0, 0xFF000000u, 0});
-        burst({0xE0000000u, fl(0), fl(y1), fl(z), 0, 0, 0xFF000000u, 0});
-        burst({0xF0000000u, fl(640), fl(y1), fl(z), 0, 0, 0xFF000000u, 0});
+        const uint32_t tsp = 0x20000000u | sc.mode << 22 | (sc.clamp ? 1u << 21 : 0u);
+        if (sc.offset_alpha.empty()) {  // vertex type 0: packed colour
+            burst({0x80800000u, 0xE0000000u, tsp, 0, 0, 0, 0, 0});
+            burst({0xE0000000u, fl(0), fl(y0), fl(z), 0, 0, sc.colour, 0});
+            burst({0xE0000000u, fl(640), fl(y0), fl(z), 0, 0, sc.colour, 0});
+            burst({0xE0000000u, fl(0), fl(y1), fl(z), 0, 0, sc.colour, 0});
+            burst({0xF0000000u, fl(640), fl(y1), fl(z), 0, 0, sc.colour, 0});
+        } else {  // vertex type 3: textured, packed colour, an offset colour
+            const uint32_t off = sc.offset_alpha[k] << 24;
+            burst({0x8080000Cu, 0xE0000000u, tsp | 1u << 6, 1u << 27 | 1u << 26 | kTexture >> 3, 0, 0, 0, 0});
+            burst({0xE0000000u, fl(0), fl(y0), fl(z), fl(0), fl(0), sc.colour, off});
+            burst({0xE0000000u, fl(640), fl(y0), fl(z), fl(1), fl(0), sc.colour, off});
+            burst({0xE0000000u, fl(0), fl(y1), fl(z), fl(0), fl(1), sc.colour, off});
+            burst({0xF0000000u, fl(640), fl(y1), fl(z), fl(1), fl(1), sc.colour, off});
+        }
     }
     burst({0, 0, 0, 0, 0, 0, 0, 0});  // the list's end
     wait(ISTNRM, 0x80u);              // the opaque list's end
@@ -447,10 +469,10 @@ void fog_scene(std::vector<uint32_t>& c, const FogScene& sc, uint32_t fog_mode, 
 }
 
 // Runs the scenes; `pictures` gets each one's 60 band pixels (RGB565, two to a word, the left one first).
-int run_fog(const char* core_path, const std::vector<FogScene>& scenes, uint32_t fog_mode, std::vector<std::vector<uint8_t>>& pictures) {
+int run_fog(const char* core_path, const std::vector<FogScene>& scenes, std::vector<std::vector<uint8_t>>& pictures) {
     const std::vector<uint16_t> code = fog_interpreter();
     std::vector<uint32_t> cmds;
-    for (size_t i = 0; i < scenes.size(); ++i) fog_scene(cmds, scenes[i], fog_mode, kFogResults + 256 * static_cast<uint32_t>(i));
+    for (size_t i = 0; i < scenes.size(); ++i) fog_scene(cmds, scenes[i], kFogResults + 256 * static_cast<uint32_t>(i));
     cmds.push_back(0u);
     std::vector<uint8_t> image(kFogCommands - kBase + cmds.size() * 4, 0);
     std::memcpy(image.data(), code.data(), code.size() * 2);
@@ -567,7 +589,7 @@ int main(int argc, char** argv) {
             }
         std::vector<std::vector<uint8_t>> pictures;
         try {
-            run_fog(argv[1], scenes, 0, pictures);
+            run_fog(argv[1], scenes, pictures);
         } catch (const std::exception& e) {
             std::println(stderr, "dcref: {}", e.what());
             return 1;
@@ -604,6 +626,76 @@ int main(int argc, char** argv) {
         }
         std::println("the candidate against the emulator: {} of {} bands more than 1/63 off, at worst {}/63", off, pictures.size() * 60, worst);
         return off == 0 ? 0 : 1;
+    }
+    if (argc == 3 && !std::strcmp(argv[2], "--modes")) {
+        // qilin_dcref <core> --modes: what the renderer took from the hardware's description and hadn't yet
+        // measured (docs/runtime.md, step 39): vertex fog, the fog table's second mode, the colour clamp and its
+        // order against the fog. Each scene's prediction is the renderer's (pvr.frag), its colours 0-255.
+        struct Case {
+            const char* what;
+            FogScene scene;
+            std::function<std::array<float, 3>(int band)> want;
+        };
+        std::vector<Case> cases;
+        const auto bands = [](float inv_w) { return std::vector<float>(60, inv_w); };
+        {
+            Case c{"vertex fog: black, towards FOG_COL_VERT (white) by the offset colour's alpha", {0x8000u, {}, bands(1.0f)}, {}};
+            c.scene.mode = 1;
+            for (int k = 0; k < 60; ++k) c.scene.offset_alpha.push_back(static_cast<uint32_t>(k * 255 / 59));
+            c.want = [](int k) { const float a = float(k * 255 / 59); return std::array<float, 3>{a, a, a}; };
+            cases.push_back(std::move(c));
+        }
+        {
+            Case c{"the table's second mode: red becomes FOG_COL_RAM (white)", {0x8000u, {}, bands(0.5f)}, {}};
+            c.scene.mode = 3, c.scene.colour = 0xFFFF0000u;
+            for (uint32_t& e : c.scene.table) e = 0x8040u;
+            c.want = [](int) { return std::array<float, 3>{255, 255, 255}; };
+            cases.push_back(std::move(c));
+        }
+        {
+            Case c{"the colour clamp, no fog: (0x20, 0xFF, 0x80) between (0x40, 0, 0) and (0xFF, 0x40, 0xFF)", {0x8000u, {}, bands(1.0f)}, {}};
+            c.scene.mode = 2, c.scene.clamp = true, c.scene.colour = 0xFF20FF80u, c.scene.clamp_max = 0xFFFF40FFu, c.scene.clamp_min = 0x00400000u;
+            c.want = [](int) { return std::array<float, 3>{64, 64, 128}; };
+            cases.push_back(std::move(c));
+        }
+        {
+            Case c{"the clamp before table fog: green held at 0x40, then half way to white", {0x8000u, {}, bands(0.5f)}, {}};
+            c.scene.mode = 0, c.scene.clamp = true, c.scene.colour = 0xFF00FF00u, c.scene.clamp_max = 0xFFFF40FFu;
+            for (uint32_t& e : c.scene.table) e = 0x8080u;
+            c.want = [](int) {
+                const float f = 128.0f / 255.0f;
+                return std::array<float, 3>{255 * f, 64 + (255 - 64) * f, 255 * f};
+            };
+            cases.push_back(std::move(c));
+        }
+        std::vector<FogScene> scenes;
+        for (const Case& c : cases) scenes.push_back(c.scene);
+        std::vector<std::vector<uint8_t>> pictures;
+        try {
+            run_fog(argv[1], scenes, pictures);
+        } catch (const std::exception& e) {
+            std::println(stderr, "dcref: {}", e.what());
+            return 1;
+        }
+        int failed = 0;
+        for (size_t i = 0; i < cases.size(); ++i) {
+            int off = 0;
+            std::string first;
+            for (int k = 0; k < 60; ++k) {
+                const unsigned px = pictures[i][4 * k] | pictures[i][4 * k + 1] << 8;
+                const int got[3] = {int(px >> 11 & 31), int(px >> 5 & 63), int(px & 31)};
+                const auto w = cases[i].want(k);
+                const int want[3] = {int(std::lround(w[0] * 31 / 255)), int(std::lround(w[1] * 63 / 255)), int(std::lround(w[2] * 31 / 255))};
+                bool ok = true;
+                for (int ch = 0; ch < 3; ++ch) ok = ok && std::abs(got[ch] - want[ch]) <= 1;
+                if (!ok && first.empty())
+                    first = std::format(" (band {}: {} {} {} in 565, wanted {} {} {})", k, got[0], got[1], got[2], want[0], want[1], want[2]);
+                off += !ok;
+            }
+            std::println("{}: {} of 60 bands off{}", cases[i].what, off, first);
+            failed += off != 0;
+        }
+        return failed == 0 ? 0 : 1;
     }
     if (argc >= 4 && !std::strcmp(argv[2], "--game")) {
         // qilin_dcref <core> --game <disc> <frames> <every> <dump prefix>
