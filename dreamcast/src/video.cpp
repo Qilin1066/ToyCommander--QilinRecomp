@@ -275,7 +275,8 @@ void vblank() {
     ++g_pictures;
     if (!g_shot_folder.empty() && g_pictures % g_shot_every == 0) shot(g_renderer->read_back(), p.width, p.height);
     // The game's own 16:9 option draws anamorphic: shown at 16:9 (game.hpp).
-    const float aspect = game::widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
+    // Movies are 4:3 pictures whatever the mode: shown as they are, never stretched.
+    const float aspect = game::widescreen() && !game::movie_playing() ? 16.0f / 9.0f : 4.0f / 3.0f;
     g_display->present_image(p.image, p.view, p.width, p.height, aspect, p.height / g_scale);
 }
 

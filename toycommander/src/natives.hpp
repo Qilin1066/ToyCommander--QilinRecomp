@@ -16,5 +16,7 @@ void set_console(unsigned language, bool stereo);
 // Called when the game changes the console's sound mode (Shinobi writes it
 // to the console's flash memory): the settings file keeps it.
 void on_sound_mode(void (*save)(bool stereo));
+// A movie is on screen (play_movie, 0x8C04C700, is running).
+bool movie_playing();
 
 }  // namespace toycommander

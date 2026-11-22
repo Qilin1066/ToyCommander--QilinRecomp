@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <cstring>
 
 #include <map>
@@ -376,7 +377,46 @@ void shinobi_cache_write_back(rt::Context&) {}
 // 0xFFFFFFFF at Pphi/4, as Shinobi's hardware set-up does.
 void shinobi_timer_start(rt::Context&) { start_free_running_timer0(); }
 
+// 0x8C04C700: plays a movie, r4 its file's name, to its end or until the
+// player skips it; returns in r0 whether it was skipped (0x8C0DF1F4, which
+// its input callback sets). A native only so the port knows a movie is on
+// screen: the movies are 4:3 pictures, shown at 4:3 even in the game's 16:9
+// mode (game::movie_playing). Otherwise it does what the guest code does,
+// call for call, in the same frame (0x254 bytes below the saved PR): the
+// busy count up (0x8C04F482), the skip flag cleared, the player's record at
+// sp + 4 set up with its callbacks (0x8C06D268), the name copied into it
+// (0x8C067E90, its arguments in r0 and r1), its buffer size and mode
+// (0x100000, 6) stored, the movie played (0x8C06D3E2), the busy count down
+// (0x8C04F4D8).
+std::atomic<int> g_movies{0};
+void play_movie(rt::Context& c) {
+    constexpr uint32_t kFrame = 0x254, kSkipped = 0x8C0DF1F4u;
+    const uint32_t name = c.r[4], pr = c.pr;
+    c.r[15] -= 4;
+    rt::st32(c.r[15], pr);
+    c.r[15] -= kFrame;
+    const uint32_t sp = c.r[15];
+    rt::st32(sp, name);
+    rt::call_guest(c, 0x8C04F482u);
+    rt::st32(kSkipped, 0);
+    c.r[4] = sp + 4, c.r[5] = 0x8C04C6ECu, c.r[6] = 0x8C06DC30u;
+    rt::call_guest(c, 0x8C06D268u);
+    c.r[0] = sp + 0xC0, c.r[1] = rt::ld32(sp);
+    rt::call_guest(c, 0x8C067E90u);
+    rt::st32(sp + 0x1E0, 0x00100000u), rt::st32(sp + 0x218, 6);
+    c.r[4] = sp + 4;
+    ++g_movies;
+    rt::call_guest(c, 0x8C06D3E2u);
+    --g_movies;
+    rt::call_guest(c, 0x8C04F4D8u);
+    c.r[0] = rt::ld32(kSkipped);
+    c.r[15] = sp + kFrame;
+    c.pr = rt::ld32(c.r[15]);
+    c.r[15] += 4;
+}
+
 const rt::Provided kNatives[] = {
+    {0x8C04C700u, "play_movie", play_movie},
     {0x8C04EDF4u, "memset", memset_sq},
     {0x8C04EEE0u, "memclr", memclr},
     {0x8C0B068Au, "shinobi_library_init", shinobi_library_init},
@@ -423,5 +463,6 @@ const rt::Provided kNatives[] = {
 }  // namespace
 
 void provide_natives() { rt::provide(kNatives); }
+bool movie_playing() { return g_movies.load(std::memory_order_relaxed) > 0; }
 
 }  // namespace toycommander

@@ -28,5 +28,8 @@ void on_sound_mode(void (*save)(bool stereo));
 // anamorphic, a 16:9 scene in the same 640x480 for a widescreen television
 // to stretch, so the port shows it at 16:9.
 bool widescreen();
+// A movie is playing. The movies are 4:3 pictures in the game's 640x480
+// whatever its screen mode, so they're shown at 4:3, never stretched.
+bool movie_playing();
 
 }  // namespace dreamcast::game

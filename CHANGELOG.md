@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Added
+- **Movies are never stretched**: they're 4:3 pictures, so they're shown at 4:3 even in the game's 16:9 mode (the movie player is now a native, so the port knows when one is on screen).
 - **Widescreen, the game's own**: its 16:9 screen mode option (in the game's options) draws the picture anamorphic, and the port now shows it at 16:9 while the option is on.
 
 ## [0.10.0] - 2026-11-22

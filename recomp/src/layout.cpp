@@ -68,6 +68,7 @@ constexpr Region kUsa[] = {
 };
 
 constexpr ReplacedFunction kUsaReplaced[] = {
+    {0x8C04C700, "play_movie", "plays a movie: a native so the port knows a movie is on screen (shown at 4:3 in the game's 16:9 mode); the same calls"},
     {0x8C04EDF4, "memset", "the C runtime's fill through the store queues (docs/code-analysis.md)"},
     {0x8C04EEE0, "memclr", "the C runtime's clear through the store queues (docs/code-analysis.md)"},
     {0x8C085E16, "kamui_install_interrupt_handler", "puts Kamui 2's handler in the exception table (VBR)"},

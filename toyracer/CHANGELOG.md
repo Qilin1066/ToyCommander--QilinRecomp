@@ -7,6 +7,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 ## [Unreleased]
 
 ### Added
+- **Movies are never stretched** (shared with Toy Commander, whose 4:3 movies stay 4:3 in its 16:9 mode); Toy Racer has no movies, so nothing changes in its pictures.
 - **Widescreen, the game's own**: its 16:9 screen mode option (in the game's options) draws the picture anamorphic, and the port now shows it at 16:9 while the option is on.
 
 ## [0.3.0] - 2026-11-22
