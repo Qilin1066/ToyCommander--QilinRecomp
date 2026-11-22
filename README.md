@@ -2,7 +2,7 @@
 
 Static recompilations of **Toy Commander** (No Cliché / Sega, Dreamcast, 1999) and **Toy Racer** (No Cliché / Sega, Dreamcast, 2000), the same studio's two games on the same engine and libraries, into portable C++23 with a Vulkan 1.3 renderer, aimed at 64-bit Windows, Linux and macOS, on x86-64 or ARM64. Anything with a Vulkan 1.3 driver is in scope, including the Raspberry Pi 4 (Mesa 24.3+); Macs are covered through MoltenVK. Efficiency is the first priority: a Raspberry Pi 4–class board is our reference for typical low-end hardware, not a floor.
 
-The two games share one repository and most of their code (`dreamcast/`): each has its own program (`toycommander`, `toyracer`), built from its own disc, its own releases and its own changes. Toy Racer was ported in [ToyRacer--QilinRecomp](https://github.com/Qilin1066/ToyRacer--QilinRecomp) until it moved here.
+The two games share one repository and most of their code (`dreamcast/`): each has its own program (`toycommander`, `toyracer`), built from its own disc, its own releases and its own changes. Toy Racer was ported in a repository of its own, ToyRacer--QilinRecomp, until it moved here with all its work (its notes: [`docs/toyracer/notes-from-its-repo.md`](docs/toyracer/notes-from-its-repo.md)); that repository has since been removed.
 
 They have the same requirements and scope as their sister projects, [GBTGhoulies--QilinRecomp](https://github.com/Qilin1066/GBTGhoulies--QilinRecomp), [PunchOutWii--QilinRecomp](https://github.com/Qilin1066/PunchOutWii--QilinRecomp), [RhythmHeavenFever--QilinRecomp](https://github.com/Qilin1066/RhythmHeavenFever--QilinRecomp) and [ApbArcade--QilinRecomp](https://github.com/Qilin1066/ApbArcade--QilinRecomp).
 
