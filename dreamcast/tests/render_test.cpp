@@ -402,6 +402,23 @@ int renderer() {
         expect(pixel_is(pic, 12, 20, 255, 255, 255), "two volumes: the translucent polygon's second volume inside");
         expect(pixel_is(pic, 12, 44, 0, 255, 0), "two volumes: the translucent polygon below the volume");
     }
+    // A modifier volume's user tile clip: the shadows' scene again, its
+    // volumes drawn only inside tile (0, 0) (x and y below 32): the box's
+    // part below y 32 darkens nothing, the opaque surface's nor the
+    // translucent one's.
+    {
+        ta::Scene sc = shadow;
+        for (ta::Modifier& m : sc.modifiers) {
+            m.pcw |= 2u << 16;
+            const uint8_t tile[4] = {0, 0, 0, 0};
+            std::memcpy(m.clip, tile, 4);
+        }
+        const auto pic = draw(sc, [](dreamcast::renderer::Source& s) { s.shadow_scale = 0x180; });
+        expect(pixel_is(pic, 20, 20, 128, 0, 0), "volume clip: the opaque surface inside the volume and the clip, halved");
+        expect(pixel_is(pic, 20, 36, 255, 0, 0), "volume clip: the opaque surface inside the volume, outside the clip");
+        expect(pixel_is(pic, 12, 20, 0, 128, 0), "volume clip: the translucent surface inside the volume and the clip, halved");
+        expect(pixel_is(pic, 12, 36, 0, 255, 0), "volume clip: the translucent surface inside the volume, outside the clip");
+    }
     return 0;
 }
 

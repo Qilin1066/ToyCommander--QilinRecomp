@@ -37,11 +37,13 @@ struct Strip {
     uint8_t clip[4];
 };
 
-// A modifier volume: triangles, with the ISP word that says how they modify.
+// A modifier volume: triangles, with the ISP word that says how they modify,
+// and the user tile clip in force (as a strip's).
 struct Modifier {
     List list;
     uint32_t pcw, isp;
     uint32_t first, count;  // triangles, 9 floats each, in Scene::modifier_triangles
+    uint8_t clip[4];
 };
 
 struct Scene {

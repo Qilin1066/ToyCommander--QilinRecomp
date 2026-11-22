@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <map>
@@ -137,12 +136,6 @@ uint64_t hash_words(const uint32_t* w, uint32_t n, uint64_t h) {
     return h;
 }
 
-void once(bool& said, const char* what) {
-    if (said) return;
-    said = true;
-    std::fprintf(stderr, QILIN_APP ": the renderer doesn't draw %s yet\n", what);
-}
-
 }  // namespace
 
 float fog_density(uint32_t reg) { return float(reg >> 8 & 0xFFu) / 128.0f * std::exp2(float(static_cast<int8_t>(reg & 0xFFu))); }
@@ -194,7 +187,6 @@ struct Renderer::Impl {
     Texture white{};
     uint64_t frame = 0;
     Stats stats{};
-    bool said_modifier_clip = false;
     float anisotropy = 1.0f;  // for filtered textures (set_anisotropy)
     bool cheap = false;    // SHADOW_SCALE's bit 8: cheap shadows; clear, the two-volume mode
     bool opaque_volumes = false;  // this scene has opaque modifier volumes, drawn into the stencil
@@ -616,12 +608,21 @@ struct Renderer::Impl {
         };
         for (const ta::Modifier& m : scene.modifiers) {
             if (m.list == ta::kOpaqueModifier) continue;
-            if (m.pcw & 0x30000u) once(said_modifier_clip, "a modifier volume's user tile clip (the whole volume counts)");
+            // The user tile clip, in each triangle's first corner's fourth
+            // word (pvr.frag): the mode (bits 21-20), then the rectangle in
+            // tiles (x min 6 bits, y min 4, x max 6, y max 4).
+            const uint32_t mode = (m.pcw >> 16) & 3u;
+            if (mode == 1) throw rt::Stop{rt::Stop::Unsupported, 0, m.pcw};
+            const uint32_t clip_word = mode == 0 ? 0u
+                                                 : mode << 20 | uint32_t{m.clip[0] & 0x3Fu} << 14 | uint32_t{m.clip[1] & 0xFu} << 10 |
+                                                       uint32_t{m.clip[2] & 0x3Fu} << 4 | uint32_t{m.clip[3] & 0xFu};
+            float clip_bits;
+            std::memcpy(&clip_bits, &clip_word, 4);
             for (uint32_t t = m.first; t < m.first + m.count; ++t) {
                 const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
                 for (int k = 0; k < 3; ++k) {
                     const float x = f[3 * k], y = f[3 * k + 1];
-                    triangles.insert(triangles.end(), {x, y, clean_z(f[3 * k + 2]), 0.0f});
+                    triangles.insert(triangles.end(), {x, y, clean_z(f[3 * k + 2]), k == 0 ? clip_bits : 0.0f});
                     box[0] = std::min(box[0], x), box[1] = std::min(box[1], y), box[2] = std::max(box[2], x), box[3] = std::max(box[3], y);
                 }
             }
@@ -652,7 +653,7 @@ struct Renderer::Impl {
         faces.depth = 4;  // greater: a face nearer than the surface (z = 1/w)
         faces.stencil = Stencil::volume;
         float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;  // the volume's bounds on screen
-        bool any = false;
+        bool any = false, drawn_apart = false;  // drawn_apart: some of this volume's faces are already in draws
         auto rectangle = [&](Draw d, float l, float t, float r, float b, float shade) {
             d.first = uint32_t(vertices.size()), d.count = 6;
             const float corners[6][2] = {{l, t}, {r, t}, {l, b}, {r, t}, {r, b}, {l, b}};
@@ -665,18 +666,32 @@ struct Renderer::Impl {
             draws.push_back(d);
         };
         auto end_volume = [&] {
-            if (faces.count == 0) return;
-            draws.push_back(faces);
+            if (faces.count == 0 && !drawn_apart) return;
+            if (faces.count != 0) draws.push_back(faces);
             Draw resolve = faces;
+            resolve.flags = 0, resolve.clip = 0;  // bit 0 is set only where the faces counted
             resolve.depth = 7;  // always
             resolve.stencil = Stencil::resolve;
             rectangle(resolve, std::floor(x0), std::floor(y0), std::ceil(x1), std::ceil(y1), 1.0f);
-            faces.count = 0, any = true;
+            faces.count = 0, any = true, drawn_apart = false;
             x0 = y0 = 1e30f, x1 = y1 = -1e30f;
         };
         for (const ta::Modifier& m : scene.modifiers) {
             if (m.list != ta::kOpaqueModifier) continue;
-            if (m.pcw & 0x30000u) once(said_modifier_clip, "a modifier volume's user tile clip (the whole volume counts)");
+            // The user tile clip: the faces count only inside (or outside) it,
+            // so the volume's effect is kept to that side.
+            Draw clipped = faces;
+            clipped.flags = 0, clipped.clip = 0;
+            if (const uint32_t clip = (m.pcw >> 16) & 3u; clip != 0) {
+                if (clip == 1) throw rt::Stop{rt::Stop::Unsupported, 0, m.pcw};
+                clipped.flags = clip << kClipShift;
+                clipped.clip = uint32_t{m.clip[0]} | uint32_t{m.clip[1]} << 8 | uint32_t{m.clip[2]} << 16 | uint32_t{m.clip[3]} << 24;
+            }
+            if (faces.count != 0 && !faces.same_state(clipped)) {  // a volume's parts under other clips: drawn apart
+                draws.push_back(faces);
+                faces.count = 0, drawn_apart = true;
+            }
+            faces.flags = clipped.flags, faces.clip = clipped.clip;
             for (uint32_t t = m.first; t < m.first + m.count; ++t) {
                 if (faces.count == 0) faces.first = uint32_t(vertices.size());
                 const float* f = scene.modifier_triangles.data() + size_t{t} * 9;

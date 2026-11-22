@@ -178,7 +178,7 @@ void Decoder::vertex(const uint32_t* w) {
     if (modifier) {
         // Type 17: a triangle A, B, C.
         if (!open_modifier) {
-            scene.modifiers.push_back({list, pcw, isp, static_cast<uint32_t>(scene.modifier_triangles.size() / 9), 0});
+            scene.modifiers.push_back({list, pcw, isp, static_cast<uint32_t>(scene.modifier_triangles.size() / 9), 0, {clip[0], clip[1], clip[2], clip[3]}});
             open_modifier = true;
         }
         for (int k = 1; k <= 9; ++k) scene.modifier_triangles.push_back(f(w[k]));

@@ -9,9 +9,8 @@
 // the blend instructions, and textures decoded from video memory
 // (texture.hpp) with their mip-maps, the modifier volumes (cheap shadows and
 // the two-volume mode), table and vertex fog, the colour clamp and the user
-// tile clip. The translucent list in auto-sort mode is sorted triangle by
-// triangle, not pixel by pixel; a modifier volume's own user tile clip isn't
-// applied (named once on stderr if a scene has one).
+// tile clip (the modifier volumes' too). The translucent list in auto-sort
+// mode is sorted triangle by triangle, not pixel by pixel.
 //
 // It knows the registers and video memory only through `Source`, so its test
 // draws scenes without the rest of the port.

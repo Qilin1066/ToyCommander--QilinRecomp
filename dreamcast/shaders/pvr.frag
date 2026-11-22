@@ -15,7 +15,8 @@ layout(set = 0, binding = 0) uniform sampler2D tex;
 // fog's colour (FOG_COL_VERT) and the colour clamp's bounds (FOG_CLAMP_MAX,
 // FOG_CLAMP_MIN); then each
 // translucent modifier volume's bounds on screen (scene pixels) and its
-// triangles; the triangles, three corners of x, y (scene pixels) and z (1/w).
+// triangles; the triangles, three corners of x, y (scene pixels) and z (1/w),
+// the first corner's fourth word the triangle's user tile clip.
 struct Volume {
     vec4 box;     // x0, y0, x1, y1
     uvec4 range;  // first triangle, count
@@ -48,6 +49,14 @@ bool in_volume(vec2 p, float depth) {
         bool inside = false;
         const uint first = volumes.volume[v].range.x, n = volumes.volume[v].range.y;
         for (uint t = first; t < first + n; ++t) {
+            // The triangle's user tile clip (renderer.cpp): it counts only inside (2) or outside (3) it.
+            const uint clip = floatBitsToUint(volumes.corner[3u * t].w);
+            if ((clip >> 20) >= 2u) {
+                const vec2 lo = vec2(float(clip >> 14 & 63u), float(clip >> 10 & 15u)) * 32.0;
+                const vec2 hi = vec2(float((clip >> 4 & 63u) + 1u), float((clip & 15u) + 1u)) * 32.0;
+                const bool in_clip = p.x >= lo.x && p.y >= lo.y && p.x < hi.x && p.y < hi.y;
+                if (in_clip != ((clip >> 20) == 2u)) continue;
+            }
             const vec3 a = volumes.corner[3u * t].xyz, b1 = volumes.corner[3u * t + 1u].xyz, c = volumes.corner[3u * t + 2u].xyz;
             const float area = (b1.x - a.x) * (c.y - a.y) - (b1.y - a.y) * (c.x - a.x);
             if (area == 0.0) continue;
