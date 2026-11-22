@@ -343,12 +343,14 @@ void shinobi_peripherals_exit(rt::Context& c) {
     c.sr = sr;
 }
 
-// 0x8C0D0F40: whether the extension check (0x8C0D0DC0) found nothing of
+// 0x8C0D0F40: whether the extension check (0x8C0D0DC0) found a device of
 // kind r4 (1 to 4: the words at 0x8C0FD390, 0x8C0FD394, 0x8C0FD398,
-// 0x8C0FD39C): 0 if that word is -1, else -1; -2 for another kind or before
-// the check ran (0x8C0FD384 not -1). The code's own answer, read from the
-// same words.
-void extension_absent(rt::Context& c) {
+// 0x8C0FD39C): 0 if that word is -1 (found), else -1; -2 for another kind or
+// before the check ran (0x8C0FD384 not -1). The code's own answer, read from
+// the same words. The port's check finds nothing, so the words stay 0 and the
+// answer is -1: the network library's open (0x8C04E768) then gives up (-40)
+// before it registers anything on the expansion port.
+void extension_found(rt::Context& c) {
     static constexpr uint32_t kWords[] = {0x8C0FD390u, 0x8C0FD394u, 0x8C0FD398u, 0x8C0FD39Cu};
     if (rt::ld32(0x8C0FD384u) != 0xFFFFFFFFu || c.r[4] < 1 || c.r[4] > 4) {
         c.r[0] = 0xFFFFFFFEu;
@@ -370,6 +372,15 @@ void modem_handlers(rt::Context& c) {
 void modem_poll(rt::Context&) {
     if (rt::ld8(0x8C1C7828u) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0D1184u, 0x8C1C7828u};
 }
+
+// 0x8C0D636C and 0x8C0D6464: a callback registered and removed for an
+// expansion port device's slot (r4), its interrupt enabled or disabled in
+// the device's register (0xA1000014 + 0x400 r4) and the slots' dispatcher on
+// the system bus's event 0xB60. Only a network library whose open found a
+// device (0x8C0D0F40) reaches them, and the port has nothing on the
+// expansion port: stop if one is ever reached.
+void expansion_callback_add(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0D636Cu, c.r[4]}; }
+void expansion_callback_remove(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0D6464u, c.r[4]}; }
 
 // 0x8C0A1DD4: a debugger's break (0x003B), which the engine's checks call
 // when one fails; 0x8C0A1DE0: trapa #2, the C runtime's default handler. On
@@ -558,9 +569,11 @@ const rt::Provided kNatives[] = {
     {0x8C0C7D04u, "run_browser", run_browser},
     {0x8C0D0C80u, "boot_rom_exit", boot_rom_exit},
     {0x8C0CAB2Eu, "shinobi_peripherals_exit", shinobi_peripherals_exit},
-    {0x8C0D0F40u, "extension_absent", extension_absent},
+    {0x8C0D0F40u, "extension_found", extension_found},
     {0x8C0D116Cu, "modem_handlers", modem_handlers},
     {0x8C0D1184u, "modem_poll", modem_poll},
+    {0x8C0D636Cu, "expansion_callback_add", expansion_callback_add},
+    {0x8C0D6464u, "expansion_callback_remove", expansion_callback_remove},
     {0x8C0A1DD4u, "debug_break", debug_break},
     {0x8C0A1DE0u, "debug_trap", debug_trap},
     {0x8C09A900u, "debug_adapter_check", debug_adapter_check},
