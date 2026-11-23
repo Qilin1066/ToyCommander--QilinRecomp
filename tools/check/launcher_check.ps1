@@ -7,7 +7,7 @@ $archiveName = 'lib' + $Game.ToLowerInvariant() + '_kit.a'
 # when started from pwsh (or from CI's shell).
 function Get-Sha256([string]$path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    $stream = [System.IO.File]::OpenRead($path)
+    $stream = [System.IO.File]::OpenRead($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path))  # .NET resolves against the process folder, not PowerShell location
     try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') }
     finally { $stream.Dispose(); $sha.Dispose() }
 }
