@@ -13,6 +13,7 @@
 #include "flash.hpp"
 #include "heap.hpp"
 #include "pvr.hpp"
+#include "game.hpp"
 #include "sh4.hpp"
 #include "video.hpp"
 #include "system.hpp"
@@ -538,28 +539,9 @@ void shinobi_extension_check(rt::Context& c) {
     c.r[0] = 0;
 }
 
-// The screen mode switch (0x8C01AC4E), as the game's but for the screen
-// rather than the option (game.hpp), as Toy Commander's: the game's scales
-// the cameras' view (0x8C02BAD0 with the ratio in fr4), and one more value
-// when 0x8C0ADDC0's bit 2 is set, by 4/3 when the option is 16:9 and back by
-// 3/4, and keeps the factor the projection reads (0x8C0ADDD0) and a state
-// word (0x8C0ADDBC). This one widens them as much as the screen is wider than
-// 4:3, whatever the option, and the renderer draws the picture that much
-// wider (dreamcast/src/renderer.hpp, Source::widen).
-void screen_mode_switch(rt::Context& c) {
-    constexpr uint32_t kState = 0x8C0ADDBCu, kFlags = 0x8C0ADDC0u, kFactor = 0x8C0ADDD0u, kScaler = 0x8C02BAD0u;
-    constexpr uint32_t kSometimes = 0x8C1045D0u;
-    const float target = dreamcast::video::screen_widening(), applied = rt::flt(rt::ld32(kFactor));
-    if (target == applied || !(applied > 0.0f)) return;
-    const float ratio = target / applied;
-    rt::st32(kState, target > 1.0f ? 1u : 0u);
-    rt::st32(kFactor, rt::bits(target));
-    const uint32_t pr = c.pr;
-    c.fr[4] = ratio;
-    rt::call_guest(c, kScaler);
-    c.pr = pr;
-    if (rt::ld32(kFlags) & 4u) rt::st32(kSometimes, rt::bits(rt::flt(rt::ld32(kSometimes)) * ratio));
-}
+// The screen mode switch (0x8C01AC4E): the cameras widened for the screen,
+// not for the game's option (game.cpp's widen_to).
+void screen_mode_switch(rt::Context&) { dreamcast::game::widen_to(dreamcast::video::screen_widening()); }
 
 const rt::Provided kNatives[] = {
     {0x8C01AC4Eu, "screen_mode_switch", screen_mode_switch},

@@ -30,6 +30,12 @@ void on_sound_mode(void (*save)(bool stereo));
 // what the screen asks for (video::screen_widening) whatever the option, so
 // the renderer draws that much wider and nothing is stretched.
 float widening();
+// Widens the game's cameras by this (from 1), as its screen mode switch does
+// by 4/3: the cameras in use scaled now, new ones taking the factor. The
+// switch's native calls it, and video.cpp at each render, so the picture
+// follows the screen from the first frame and when the window is resized.
+// Guest thread only.
+void widen_to(float target);
 // A movie is playing. The movies are 4:3 pictures in the game's 640x480
 // whatever its screen mode, so they're shown at 4:3, never stretched.
 bool movie_playing();

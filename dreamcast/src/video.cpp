@@ -226,6 +226,7 @@ void render() {
     background(src);
     // The game's camera widened for the screen (game.hpp): the picture too,
     // but never a movie's, a 4:3 picture as it is.
+    game::widen_to(screen_widening());
     src.widen = game::movie_playing() ? 1.0f : std::clamp(game::widening(), 1.0f, 3.0f);
     // QILIN_TRACE_RENDERS: each render's frame buffer and format, the frame
     // buffer the display reads, and any texture read from where a render wrote.

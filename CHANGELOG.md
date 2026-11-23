@@ -6,6 +6,9 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+### Fixed
+- **Widescreen from the first frame**: the picture stayed 4:3 until the game's options were changed or loaded from a save (the game widens its camera only then); it's now widened from the start, and follows the window when it's resized. Toy Commander's in-engine introduction and demo play checked at 21:9.
+
 ## [0.12.1] - 2026-11-22
 
 ### Tests

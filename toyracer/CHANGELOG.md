@@ -6,6 +6,9 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
+### Fixed
+- **Widescreen from the first frame**: the picture stayed 4:3 until the game's options were changed or loaded from a save (the game widens its camera only then); it's now widened from the start, and follows the window when it's resized. A race checked at 21:9.
+
 ## [0.5.1] - 2026-11-22
 
 ### Tests
