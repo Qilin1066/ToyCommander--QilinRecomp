@@ -58,6 +58,7 @@ struct Settings {
     unsigned mask = 30;               // CRT: the phosphor stripes, 0-100
     unsigned scale = 1;               // internal_scale: 1-8x the console's 640x480; 0: auto (the screen's height)
     unsigned anisotropy = 1;          // filtered textures' filtering: 1 (the console's), 2, 4, 8 or 16
+    unsigned msaa = 1;                // multisampling, samples a pixel: 1 (none, the console's), 2, 4 or 8
     bool vsync = true;                // at the display's refresh (no tearing); off: the lowest latency
     std::string gpu;                  // the graphics device's name (empty: the best one)
     bool performance_overlay = false; // frame rate, 1% and 0.1% lows and frame times in a corner (F3 switches it)

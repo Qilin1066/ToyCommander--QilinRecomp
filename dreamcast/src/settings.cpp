@@ -155,9 +155,9 @@ Settings default_settings() {
 
 bool apply_preset(Settings& s, const std::string& name) {
     if (name == "original" || name == "low-end") {  // the console's picture: 1x, its filtering (a Pi 4 does exactly this)
-        s.scale = 1, s.anisotropy = 1, s.vsync = true;
-    } else if (name == "desktop") {  // a desktop GPU: the screen's height (auto), 16x anisotropic
-        s.scale = 0, s.anisotropy = 16, s.vsync = true;
+        s.scale = 1, s.anisotropy = 1, s.msaa = 1, s.vsync = true;
+    } else if (name == "desktop") {  // a desktop GPU: the screen's height (auto), 16x anisotropic, 4x MSAA
+        s.scale = 0, s.anisotropy = 16, s.msaa = 4, s.vsync = true;
     } else {
         return false;
     }
@@ -246,6 +246,8 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
             } else if (name == "anisotropy") {
                 if (!number(s.anisotropy, 1, 16)) return false;
                 if (s.anisotropy & (s.anisotropy - 1)) return fail("anisotropy is 1, 2, 4, 8 or 16");
+            } else if (name == "msaa") {
+                if (!number(s.msaa, 1, 8) || (s.msaa & (s.msaa - 1))) return fail("msaa is 1, 2, 4 or 8");
             } else if (name == "vsync") {
                 if (!boolean(s.vsync)) return false;
             } else if (name == "gpu") {
@@ -258,7 +260,7 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
                 if (!boolean(s.variable_refresh)) return false;
             } else {
                 return fail("[display] has no '" + name +
-                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale anisotropy vsync gpu "
+                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale anisotropy msaa vsync gpu "
                             "performance_overlay match_refresh variable_refresh)");
             }
             continue;
@@ -342,6 +344,9 @@ std::string settings_text(const Settings& s) {
         "# Anisotropic filtering of the textures the game filters: 1 (the console's), 2, 4, 8 or 16. Sharper\n"
         "# textures at a grazing angle (a floor far off); the game's unfiltered textures stay as they are.\n"
         "anisotropy = " + std::to_string(s.anisotropy) + "\n"
+        "# Multisample anti-aliasing: 1 (none, the console's), 2, 4 or 8 samples a pixel (at most what the\n"
+        "# GPU has). Smooths polygons' edges; with internal_scale above 1 they're smoother still.\n"
+        "msaa = " + std::to_string(s.msaa) + "\n"
         "# vsync: true, no tearing; false, the lowest latency.\n"
         "vsync = " + b(s.vsync) + "\n"
         "# The graphics device, by name (empty: the best one).\n"

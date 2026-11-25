@@ -2,10 +2,12 @@
 // decoded and checked texel by texel, then a scene drawn headless and read
 // back. The renderer's part skips (exit 77) where there's no Vulkan 1.3
 // device, as on CI runners; the decoder's part always runs.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <vector>
 
@@ -215,6 +217,48 @@ int renderer() {
     const std::vector<uint8_t> again = r.read_back();
     expect(again == px, "renderer: the same picture with anisotropic filtering on");
     r.set_anisotropy(1);
+
+    // Multisampling: the quads' edges lie on pixels' edges, so 4x gives the
+    // same picture (drawn twice: the first render makes it whole, the second
+    // loads the samples and resolves its clip). A triangle's diagonal edge
+    // gets pixels of both colours mixed; without multisampling, none.
+    {
+        r.set_msaa(4);
+        expect(r.msaa() == std::min(4u, display.gpu().max_samples), "renderer: 4x multisampling, or the device's most");
+        r.draw(src);
+        expect(r.read_back() == px, "renderer: the same picture multisampled (the edges on pixels' edges)");
+        r.draw(src);
+        expect(r.read_back() == px, "renderer: and again, from the kept samples");
+        ta::Scene diag;
+        auto strip = [&](std::initializer_list<ta::Vertex> vs) {
+            ta::Strip s{};
+            s.list = ta::kOpaque, s.pcw = gouraud, s.isp = isp_ge;
+            s.first = uint32_t(diag.vertices.size()), s.count = uint32_t(vs.size());
+            diag.vertices.insert(diag.vertices.end(), vs);
+            diag.strips.push_back(s);
+        };
+        strip({vertex(0, 0, 0.1f, 1, 0, 0), vertex(64, 0, 0.1f, 1, 0, 0), vertex(0, 48, 0.1f, 1, 0, 0), vertex(64, 48, 0.1f, 1, 0, 0)});
+        strip({vertex(0, 0, 0.5f, 0, 1, 0), vertex(64, 0, 0.5f, 0, 1, 0), vertex(0, 48, 0.5f, 0, 1, 0)});
+        dreamcast::renderer::Source dsrc = src;
+        dsrc.scene = &diag;
+        dsrc.frame_buffer = 0x180000;  // a frame buffer of its own (the others' are 0, 0x200000, 0x300000 and from 0x400000)
+        const auto mixed = [&] {
+            r.draw(dsrc);
+            const std::vector<uint8_t> d = r.read_back();
+            int n = 0;
+            for (size_t i = 0; i < d.size(); i += 4)
+                if ((d[i] != 0 && d[i] != 255) || (d[i + 1] != 0 && d[i + 1] != 255)) ++n;
+            return n;
+        };
+        const int smooth = mixed();
+        r.set_msaa(1);
+        expect(r.msaa() == 1, "renderer: multisampling off");
+        const int hard = mixed();
+        expect(hard == 0, "renderer: without multisampling every pixel is one colour or the other");
+        if (display.gpu().max_samples > 1) expect(smooth > 0, "renderer: multisampled, the diagonal edge's pixels are mixed");
+        r.draw(src);
+        expect(r.read_back() == px, "renderer: the first picture again, multisampling off");
+    }
 
     // Cheap shadows: an opaque red quad over everything and a translucent
     // green one over the left quarter, both taking shadows (PCW bit 7); one

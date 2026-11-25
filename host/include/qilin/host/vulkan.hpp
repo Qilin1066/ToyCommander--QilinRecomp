@@ -46,6 +46,9 @@ struct Gpu {
     float max_anisotropy = 1.0f;
     // Stores and atomics in fragment shaders (the renderer's per-pixel lists), where the device has them.
     bool fragment_atomics = false;
+    // Multisampling: the most samples a pixel the device renders colour,
+    // depth and stencil with together (1, 2, 4, 8; every 1.3 device has 4).
+    uint32_t max_samples = 1;
     // Every device here that could draw (the settings menu offers them).
     std::vector<std::string> usable;
 
@@ -81,9 +84,11 @@ struct Image {
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0, height = 0, levels = 1;
     // Depth formats get a depth view (with the stencil, for a format that has
-    // one); others a colour view of every level.
+    // one); others a colour view of every level. `samples` > 1: a
+    // multisampled image (one level), to render into and resolve.
     static Image create(const Gpu& gpu, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
-                        uint32_t levels = 1);
+                        uint32_t levels = 1, uint32_t samples = 1);
+    uint32_t samples = 1;
     void destroy(const Gpu& gpu);
 };
 

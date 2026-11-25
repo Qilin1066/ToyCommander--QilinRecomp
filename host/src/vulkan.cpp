@@ -168,6 +168,16 @@ Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swap
     f2.features.fragmentStoresAndAtomics = have.fragmentStoresAndAtomics;
     g.fragment_atomics = have.fragmentStoresAndAtomics;
     if (have.samplerAnisotropy) g.max_anisotropy = g.properties.limits.maxSamplerAnisotropy;
+    {
+        const VkPhysicalDeviceLimits& limits = g.properties.limits;
+        const VkSampleCountFlags counts =
+            limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts & limits.framebufferStencilSampleCounts;
+        for (uint32_t samples = 8; samples > 1; samples >>= 1)
+            if (counts & samples) {
+                g.max_samples = samples;
+                break;
+            }
+    }
     g.logic_op = have.logicOp;
     g.wide_lines = have.wideLines;
     g.large_points = have.largePoints;
@@ -303,19 +313,23 @@ bool is_depth(VkFormat f) {
            f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT_S8_UINT;
 }
 
-Image Image::create(const Gpu& gpu, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage, uint32_t levels) {
+Image Image::create(const Gpu& gpu, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage, uint32_t levels,
+                     uint32_t samples) {
+    if (samples != 1 && (levels != 1 || (samples & (samples - 1)) || samples > gpu.max_samples))
+        die("a multisampled image of %u samples and %u levels (the device: up to %u samples)", samples, levels, gpu.max_samples);
     Image im;
     im.format = format;
     im.width = width;
     im.height = height;
     im.levels = levels;
+    im.samples = samples;
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = format;
     ici.extent = {width, height, 1};
     ici.mipLevels = levels;
     ici.arrayLayers = 1;
-    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.samples = static_cast<VkSampleCountFlagBits>(samples);
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = usage;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;

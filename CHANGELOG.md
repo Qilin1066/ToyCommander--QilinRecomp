@@ -6,6 +6,9 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+### Added
+- **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were.
+
 ### Fixed
 - **Builds with zig's Clang on Windows**: CMake no longer scans the C++ sources for modules (the project has none), which needed `clang-scan-deps` and stopped the build before it compiled anything.
 - The launcher check's file hashes resolve a relative path against PowerShell's current folder, not the process's.

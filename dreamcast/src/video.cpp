@@ -176,6 +176,7 @@ void start() {
     if (g_scale < 1 || g_scale > 8) rt::fatal("QILIN_SCALE must be 1 to 8");
     g_renderer = std::make_unique<renderer::Renderer>(g_display->gpu(), g_scale);
     g_renderer->set_anisotropy(g_settings.anisotropy);
+    g_renderer->set_msaa(g_settings.msaa);
     if (!o.headless) {
         g_menu = std::make_unique<Menu>(*g_display, g_settings, g_data);
         g_menu->set_running_scale(g_scale);
@@ -306,6 +307,7 @@ void vblank() {
     run_menu();
     // The settings the menu may have changed: each is nothing to do while unchanged.
     g_renderer->set_anisotropy(g_settings.anisotropy);
+    g_renderer->set_msaa(g_settings.msaa);
     sound::set_volume(g_settings.volume, g_settings.mute_unfocused && g_display->sdl_window() && !g_display->focused());
     const float strength = g_settings.rumble ? float(g_settings.rumble_strength) / 100.0f : 0.0f;
     for (unsigned port = 0; port < 4; ++port) g_display->rumble(port, strength * maple::vibration(port));

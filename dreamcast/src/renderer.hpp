@@ -102,6 +102,13 @@ public:
     // trilinear): 1 (none, the console's) to the device's limit.
     void set_anisotropy(unsigned level);
 
+    // Multisampling (MSAA), an enhancement: `samples` a pixel, 1 (none, the
+    // console's), 2, 4 or 8, rounded down to what the device has. Polygons'
+    // edges are smoothed; their insides, the textures and the translucent
+    // list's per-pixel sort are as before. Nothing to do while unchanged.
+    void set_msaa(unsigned samples);
+    unsigned msaa() const;  // what it is now, after the device's limit
+
     // The frame buffer at an address as last drawn: null image if none has
     // been drawn there.
     Picture picture(uint32_t frame_buffer) const;

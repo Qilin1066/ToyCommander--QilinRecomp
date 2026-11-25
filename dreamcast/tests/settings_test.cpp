@@ -47,7 +47,7 @@ bool same(const tc::Settings& a, const tc::Settings& b) {
     if (a.scale != b.scale || a.preset != b.preset || a.fullscreen != b.fullscreen || a.monitor != b.monitor || a.scaling != b.scaling ||
         a.smooth != b.smooth || a.look != b.look || a.scanlines != b.scanlines || a.mask != b.mask || a.vsync != b.vsync || a.gpu != b.gpu ||
         a.performance_overlay != b.performance_overlay || a.match_refresh != b.match_refresh || a.variable_refresh != b.variable_refresh ||
-        a.rumble != b.rumble || a.language != b.language || a.stereo != b.stereo || a.anisotropy != b.anisotropy ||
+        a.rumble != b.rumble || a.language != b.language || a.stereo != b.stereo || a.anisotropy != b.anisotropy || a.msaa != b.msaa ||
         a.rumble_strength != b.rumble_strength || a.volume != b.volume || a.mute_unfocused != b.mute_unfocused)
         return false;
     for (unsigned c = 0; c < tc::kControlCount; ++c)
@@ -108,8 +108,10 @@ int main() {
                   !s.match_refresh && s.variable_refresh,
               "auto scale and the refresh switches");
         check(tc::parse_settings("[display]\npreset = desktop\ninternal_scale = 2\n", s, e) && s.scale == 2 && s.preset == "desktop" &&
-                  s.anisotropy == 16,
+                  s.anisotropy == 16 && s.msaa == 4,
               "a preset, then a key that overrides it");
+        check(tc::parse_settings("[display]\npreset = desktop\nmsaa = 1\n", s, e) && s.msaa == 1, "msaa overrides the preset's");
+        check(tc::parse_settings("[display]\npreset = low-end\n", s, e) && s.msaa == 1, "low-end has no multisampling");
         check(!tc::parse_settings("[display]\npreset = huge\n", s, e) && e.find("presets are") != std::string::npos, "an unknown preset");
     }
     check(error_of("[controls]\nstart = key:F1\n").find("kept for the program") != std::string::npos, "F1 can't be bound");
@@ -119,7 +121,7 @@ int main() {
         s.preset = "desktop", s.fullscreen = true, s.monitor = "DELL U2720Q", s.scaling = host::Scaling::integer;
         s.smooth = false, s.look = host::Look::crt, s.scanlines = 80, s.mask = 0, s.scale = 5;
         s.vsync = false, s.gpu = "AMD Radeon RX 6600", s.rumble = false, s.language = 3, s.stereo = false, s.performance_overlay = true;
-        s.anisotropy = 8, s.rumble_strength = 40, s.volume = 65, s.mute_unfocused = true;
+        s.anisotropy = 8, s.msaa = 8, s.rumble_strength = 40, s.volume = 65, s.mute_unfocused = true;
         s.controls[tc::kCtlL] = {{Binding::kPad, host::kPadLT, {}}, {Binding::kKey, 0, "Left Shift"}};
         tc::Settings back;
         std::string e;
@@ -131,6 +133,9 @@ int main() {
     check(error_of("[console]\nsound = surround\n").find("sound is mono or stereo") != std::string::npos, "a sound mode that isn't");
     check(error_of("[controls]\nrumble = maybe\n").find("rumble is true or false") != std::string::npos, "a boolean that isn't");
     check(error_of("[display]\nanisotropy = 3\n").find("anisotropy is 1, 2, 4, 8 or 16") != std::string::npos, "anisotropy that isn't a power of 2");
+    check(error_of("[display]\nmsaa = 3\n").find("msaa is 1, 2, 4 or 8") != std::string::npos, "msaa that isn't a power of 2");
+    check(error_of("[display]\nmsaa = 16\n").find("msaa is 1, 2, 4 or 8") != std::string::npos, "msaa beyond 8");
+    check(error_of("[display]\nmsaa = 0\n").find("msaa is 1, 2, 4 or 8") != std::string::npos, "msaa of 0");
     check(error_of("[controls]\nvolume = 101\n").find("from 0 to 100") != std::string::npos, "a volume out of range");
     check(error_of("scale = 2\n").rfind("line 1: 'scale' comes before any [section]", 0) == 0, "a setting outside a section");
     check(error_of("[audio]\n").rfind("line 1: there's no section [audio]", 0) == 0, "an unknown section");

@@ -529,6 +529,19 @@ void Menu::display_page() {
     ImGui::EndDisabled();
     if (limit <= 1.0f) ImGui::TextDisabled("This GPU has no anisotropic filtering.");
     else ImGui::TextDisabled("For the textures the game filters; its unfiltered ones stay as they are.");
+    const unsigned most = display_.gpu().max_samples;
+    static constexpr unsigned kSamples[] = {1, 2, 4, 8};
+    std::snprintf(label, sizeof label, s_.msaa == 1 ? "Off (the console's)" : "%ux", s_.msaa);
+    if (ImGui::BeginCombo("Anti-aliasing (MSAA)", label)) {
+        for (unsigned n : kSamples) {
+            if (n > most) continue;
+            std::snprintf(label, sizeof label, n == 1 ? "Off (the console's)" : "%ux", n);
+            if (ImGui::Selectable(label, s_.msaa == n)) s_.msaa = n;
+        }
+        ImGui::EndCombo();
+    }
+    if (s_.msaa > most) ImGui::TextDisabled("This GPU has up to %ux: %ux is used.", most, most);
+    else ImGui::TextDisabled("Smooths polygons' edges; more samples, more GPU work.");
 
     ImGui::SeparatorText("Graphics device");
     const std::string chosen = s_.gpu.empty() ? "The best one" : s_.gpu;

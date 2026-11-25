@@ -169,9 +169,16 @@ struct Renderer::Impl {
     VkFormat depth_format = VK_FORMAT_D32_SFLOAT_S8_UINT;  // or D24 with S8, what the device has
     struct Target {
         Image colour;
+        // With multisampling (set_msaa): what the renders draw into, kept from
+        // render to render as `colour` is, and resolved into `colour` at the
+        // end of each, over the render's clip (Toy Racer's two parts a frame
+        // each resolve their own, so the first's sorted translucent polygons,
+        // blended into `colour` alone, aren't resolved over).
+        Image ms;
         bool ready = false;  // drawn into at least once: its contents are kept
         float widen = 1.0f;  // drawn as Source::widen said
     };
+    uint32_t samples = 1;  // a pixel's, for multisampling (set_msaa): 1 is none
     std::map<uint32_t, Target> targets;  // by frame buffer address
     Target* current = nullptr;
     Image depth{};
@@ -404,11 +411,18 @@ struct Renderer::Impl {
                                          (sorting ? VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT) : VkImageUsageFlags(0)));
             t.ready = false;
         }
-        if (!depth.image || depth.width < w || depth.height < h) {
+        if (samples > 1 && (!t.ms.image || t.ms.width != w || t.ms.height != h)) {
+            wait();  // only this renderer's work uses it
+            t.ms.destroy(gpu);
+            t.ms = Image::create(gpu, w, h, kColourFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, samples);
+            t.ready = false;  // its picture is made again whole from the next render
+        }
+        if (!depth.image || depth.width < w || depth.height < h || depth.samples != samples) {
             check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
+            const bool same = depth.samples == samples;
+            const uint32_t dw = same ? std::max(w, depth.width) : w, dh = same ? std::max(h, depth.height) : h;
             depth.destroy(gpu);
-            depth = Image::create(gpu, std::max(w, depth.width), std::max(h, depth.height), depth_format,
-                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+            depth = Image::create(gpu, dw, dh, depth_format, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, samples);
         }
         return t;
     }
@@ -448,7 +462,7 @@ struct Renderer::Impl {
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        ms.rasterizationSamples = static_cast<VkSampleCountFlagBits>(samples);  // the pipelines are made again when it changes
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         ds.depthTestEnable = VK_TRUE;  // write and compare are dynamic
         VkPipelineColorBlendAttachmentState att{};
@@ -1068,6 +1082,10 @@ struct Renderer::Impl {
         }
         qilin::host::transition(cmd, colour.image, t.ready ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // The multisampled image stays an attachment from render to render.
+        const bool multisampled = samples > 1;
+        if (multisampled && !t.ready)
+            qilin::host::transition(cmd, t.ms.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         qilin::host::transition(cmd, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                 VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
         if (sorted) {  // empty lists: every head none, no nodes
@@ -1078,11 +1096,16 @@ struct Renderer::Impl {
                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         }
         VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        ca.imageView = colour.view;
+        ca.imageView = multisampled ? t.ms.view : colour.view;
         ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         ca.loadOp = t.ready ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
         ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         ca.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        if (multisampled) {  // each pixel's samples averaged into the picture at the end
+            ca.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            ca.resolveImageView = colour.view;
+            ca.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
         VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         da.imageView = depth.view;
         da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -1099,6 +1122,11 @@ struct Renderer::Impl {
         const uint32_t x1 = std::min(static_cast<uint32_t>(std::ceil(float(std::min(src.clip_x1, src.width - 1) + 1) * across)), colour.width),
                        y1 = (std::min(src.clip_y1, src.height - 1) + 1) * scale;
         const VkRect2D clip{{int32_t(x0), int32_t(y0)}, {x1 > x0 ? x1 - x0 : 1, y1 > y0 ? y1 - y0 : 1}};
+        // Multisampled, a picture already made resolves only this render's
+        // clip: what the picture holds elsewhere (another part's sorted
+        // translucent polygons, blended in after its resolve) is kept. The
+        // first render makes the whole of both.
+        if (multisampled && t.ready) ri.renderArea = clip;
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &ca;
@@ -1155,6 +1183,22 @@ struct Renderer::Impl {
         check(vkQueueSubmit2(gpu.queue, 1, &si, fence), "vkQueueSubmit2");
         t.ready = true;
         return {colour.image, colour.view, colour.width, colour.height, src.widen};
+    }
+
+    // Multisampling: `count` samples a pixel (1 none; 2, 4, 8), at most what
+    // the device has. The pipelines, the depth buffer and each frame buffer's
+    // multisampled image are made again for it; the pictures are made again
+    // whole by their next renders.
+    void set_msaa(unsigned count) {
+        uint32_t n = 1;
+        while (n * 2 <= count && n * 2 <= gpu.max_samples) n *= 2;
+        if (n == samples) return;
+        check(vkDeviceWaitIdle(gpu.device), "vkDeviceWaitIdle");
+        for (auto& [k, p] : pipelines) vkDestroyPipeline(gpu.device, p, nullptr);
+        pipelines.clear();
+        for (auto& [k, t] : targets) t.ms.destroy(gpu), t.ready = false;
+        depth.destroy(gpu);
+        samples = n;
     }
 
     void set_anisotropy(unsigned level) {
@@ -1226,7 +1270,7 @@ struct Renderer::Impl {
         vertex_buffer.destroy(gpu), staging.destroy(gpu), volume_buffer.destroy(gpu);
         vkDestroyDescriptorPool(gpu.device, volume_pool, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, volume_layout, nullptr);
-        for (auto& [k, t] : targets) t.colour.destroy(gpu);
+        for (auto& [k, t] : targets) t.colour.destroy(gpu), t.ms.destroy(gpu);
         depth.destroy(gpu);
         vkDestroyFence(gpu.device, fence, nullptr);
         vkDestroyCommandPool(gpu.device, pool, nullptr);
@@ -1237,6 +1281,8 @@ Renderer::Renderer(Gpu& gpu, uint32_t scale) : impl_(std::make_unique<Impl>(gpu,
 Renderer::~Renderer() { impl_->destroy(); }
 Picture Renderer::draw(const Source& source) { return impl_->draw(source); }
 void Renderer::set_anisotropy(unsigned level) { impl_->set_anisotropy(level); }
+void Renderer::set_msaa(unsigned samples) { impl_->set_msaa(samples); }
+unsigned Renderer::msaa() const { return impl_->samples; }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }
 const Renderer::Stats& Renderer::stats() const { return impl_->stats; }
