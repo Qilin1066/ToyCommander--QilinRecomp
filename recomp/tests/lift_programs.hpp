@@ -424,14 +424,20 @@ inline Programs build() {
     // r8 = 8, r10 = 10 held across every call; keep_leaf adds 1 to r4 (4);
     // keep_chain touches nothing but calls keep_set, which reads r8 and sets
     // r9 = r8 + 42 (50): seen only through the chain; keep_rec recurses r4
-    // times, adding 1 to r5 each time (r4 = 0, r5 = 4).
+    // times, adding 1 to r5 each time (r4 = 0, r5 = 4). Then with r6 = 2,
+    // r7 = 5 and T set, keep_carry clears T and adds with carry (r7 = 7,
+    // T = 0): registers changed only through a helper's references, which
+    // the caller must reload (it assigned both, so it stores them too).
     a.label("keep");
     a.word(0x4F22);  // sts.l pr,@-r15
     a.word(imm(0xE000, 8, 8)), a.word(imm(0xE000, 4, 3)), a.word(imm(0xE000, 5, 0)), a.word(imm(0xE000, 10, 10));
     a.b12(0xB000, "keep_leaf"), a.word(kNop);
     a.b12(0xB000, "keep_chain"), a.word(kNop);
     a.b12(0xB000, "keep_rec"), a.word(kNop);
+    a.word(imm(0xE000, 6, 2)), a.word(imm(0xE000, 7, 5)), a.word(0x0018);  // sett
+    a.b12(0xB000, "keep_carry"), a.word(kNop);
     a.word(0x4F26), a.word(kRts), a.word(kNop);  // lds.l @r15+,pr
+    a.label("keep_carry"), a.word(0x0008), a.word(nm(0x300E, 7, 6)), a.word(kRts), a.word(kNop);  // clrt ; addc r6,r7
     a.label("keep_leaf"), a.word(kRts), a.word(imm(0x7000, 4, 1));
     a.label("keep_chain"), a.word(0x4F22), a.b12(0xB000, "keep_set"), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(kNop);
     a.label("keep_set"), a.word(nm(0x6003, 9, 8)), a.word(kRts), a.word(imm(0x7000, 9, 42));  // mov r8,r9 ; rts ; add #42,r9

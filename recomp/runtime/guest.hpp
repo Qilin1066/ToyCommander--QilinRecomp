@@ -375,18 +375,22 @@ inline void host_fp_setup() {
 // real interrupt would come at some instruction: generated code tests
 // g_irq_pending there (one relaxed load) and calls poll_irq, which passes the
 // stack pointer (the handler's frame goes below it) and runs g_irq_service.
-// The service runs the handlers on the context and puts every register back
-// afterwards, as an interrupt's return does; the interrupted function's own
-// registers are its locals and stay as they were. g_irq_waiting: something
-// is pending that IMASK holds back; lowering IMASK makes it pending again.
+// The service runs the handlers on the context; poll_irq then puts the whole
+// context back, as an interrupt's return does, whatever the service left in
+// it. The interrupted function relies on that: its own registers are its
+// locals, and one it never assigns isn't reloaded (the lifter's assigned
+// set). g_irq_waiting: something is pending that IMASK holds back; lowering
+// IMASK makes it pending again.
 inline std::atomic<bool> g_irq_pending{false};
 inline bool g_irq_waiting = false;
 inline void (*g_irq_service)(Context&) = nullptr;
 inline void poll_irq(Context& c, uint32_t r15) {
     g_irq_pending.store(false, std::memory_order_relaxed);
     if (!g_irq_service) return;
+    const Context saved = c;
     c.r[15] = r15;
     g_irq_service(c);
+    c = saved;
 }
 #define QILIN_POLL_IRQ(r15) \
     do { \

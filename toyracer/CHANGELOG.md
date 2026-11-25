@@ -7,6 +7,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 ## [Unreleased]
 
 ### Changed
+- **Less register traffic in the recompiled code**: a function stores back only the registers it changes, and after a call reloads only those the callee may change (3% to 6% fewer of each across the game's code). Not timed yet.
 - **Less data sent to the GPU a frame**: a smooth-shaded strip's vertices are sent once and its triangles as indices, instead of three copies of each inner vertex (a quad's data 26% smaller, a ten-vertex strip's 51%). The same pictures. Not timed yet.
 - **Faster texture decoding**: a twiddled texture's texels are placed by two small tables a level rather than a loop over the bits for each texel (16-bit, paletted and compressed textures). The same pictures (checked for every size). Not timed yet.
 - **Faster calls through pointers**: an indirect call's target is looked up in a small cache before the function table's binary search, so a repeat (the usual case: object and callback tables) is one compare. Not timed yet.

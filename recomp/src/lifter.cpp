@@ -1,12 +1,14 @@
 #include "lifter.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <optional>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace qilin {
@@ -78,16 +80,109 @@ public:
             }
             for (const auto& [pc, code] : slot_copies) out += std::format("{}:  // the delay slot at {:08X}, branched to\n{}", label(pc), pc, code);
             out += "}\n";
-            // The sync points: the context holds every register the function uses.
+            // The locals the function's code assigns: as the code reads, and,
+            // for r0-r15, as the decoder says each instruction writes too.
             const RegSet locals = used_ | RegSet{fused_} << 32;
-            replace_all(out, "@OUT@", sync(locals, true));
+            RegSet assigned = 0;
+            for (const auto* part : {&body, &slot_copies})
+                for (const auto& [pc, code] : *part) assigned |= assigned_in(code);
+            for (const uint32_t pc : f_.insns) assigned |= gpr_written(sh4::decode(boot_.u16(pc)));
+            assigned &= locals;
+            // The sync points: the context holds every register the function
+            // uses. A local never assigned holds what the context does at
+            // each of them (it was loaded from it, and reloaded after anything
+            // that may have changed it), so it's never stored.
+            replace_all(out, "@OUT@", sync(assigned, true));
             replace_all(out, "@IN@", sync(locals, false));
-            replace_all(out, "@FOUT@", sync(locals & kFloatRegs, true));
+            replace_all(out, "@FOUT@", sync(assigned & kFloatRegs, true));
             replace_all(out, "@FIN@", sync(locals & kFloatRegs, false));
-            return {true, std::move(out), 0, {}, locals, table_ ? kAllRegs : locals | (banks_ ? kFloatRegs : 0), {callees_.begin(), callees_.end()}};
+            return {true,
+                    std::move(out),
+                    0,
+                    {},
+                    locals,
+                    table_ ? kAllRegs : locals | (banks_ ? kFloatRegs : 0),
+                    {callees_.begin(), callees_.end()},
+                    assigned,
+                    table_ ? kAllRegs : assigned | (banks_ ? kFloatRegs : 0)};
         } catch (const Fail& fail) {
-            return {false, {}, fail.pc, fail.why, 0, 0, {}};
+            return {false, {}, fail.pc, fail.why, 0, 0, {}, 0, 0};
         }
+    }
+
+    // The registers a piece of generated code assigns: each local named
+    // before an assignment (`=`, `+=` and the like, `++`, `--`), and every
+    // local named in the operands of a runtime helper that may take them by
+    // reference (any not in kByValue: addc, div1, mac, set_dbl, fsca, ...).
+    // Comments are skipped. Counting too many is safe (a store too many);
+    // kByValue is the list to keep exact.
+    static RegSet assigned_in(std::string_view code) {
+        static constexpr std::string_view kByValue[] = {"ld8",  "ld16",  "ld32",   "ld8s",      "ld16s",     "st8",  "st16",   "st32",
+                                                        "ldf",  "stf",   "tasb",   "bits",      "flt",       "dbl",  "fabs_bits", "fneg_bits",
+                                                        "ftrc", "fmac",  "fsrra",  "fipr",      "shad",      "shld", "cmpstr", "pref",
+                                                        "set_sr", "set_fpscr", "frchg", "hang", "call", "bad_return", "bad_jump"};
+        std::string text;
+        for (size_t at = 0; at < code.size();) {  // without comments
+            const size_t end = std::min(code.find('\n', at), code.size());
+            const std::string_view line = code.substr(at, end - at);
+            text.append(line.substr(0, line.find("//"))).push_back('\n');
+            at = end + 1;
+        }
+        const auto ident = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_'; };
+        const std::string_view all = text;
+        // Each local named in all[from, to), with where its name starts and ends.
+        const auto each = [&](size_t from, size_t to, auto&& f) {
+            for (size_t i = from; i < to;) {
+                if (!ident(all[i])) {
+                    ++i;
+                    continue;
+                }
+                size_t j = i;
+                while (j < to && ident(all[j])) ++j;
+                const bool member = i > 0 && (all[i - 1] == '.' || all[i - 1] == ':');  // c.t, rt::...
+                if (const RegSet b = member ? 0 : reg_bit(all.substr(i, j - i))) f(b, i, j);
+                i = j;
+            }
+        };
+        RegSet w = 0;
+        each(0, all.size(), [&](RegSet b, size_t from, size_t to) {
+            size_t k = to;
+            while (k < all.size() && all[k] == ' ') ++k;
+            const std::string_view after = all.substr(k);
+            const bool assign = (after.starts_with("=") && !after.starts_with("==")) || after.starts_with("++") || after.starts_with("--") ||
+                                after.starts_with("<<=") || after.starts_with(">>=") ||
+                                (after.size() >= 2 && after[1] == '=' && std::string_view("+-*/%&|^").find(after[0]) != std::string_view::npos);
+            size_t p = from;
+            while (p > 0 && all[p - 1] == ' ') --p;
+            const bool pre = p >= 2 && (all.substr(p - 2, 2) == "++" || all.substr(p - 2, 2) == "--");
+            if (assign || pre) w |= b;
+        });
+        for (size_t at = all.find("rt::"); at != std::string_view::npos; at = all.find("rt::", at + 4)) {
+            size_t open = at + 4;
+            while (open < all.size() && ident(all[open])) ++open;
+            if (open >= all.size() || all[open] != '(' || std::ranges::find(kByValue, all.substr(at + 4, open - at - 4)) != std::end(kByValue)) continue;
+            size_t close = open;
+            for (int depth = 0; close < all.size(); ++close) {
+                if (all[close] == '(') ++depth;
+                else if (all[close] == ')' && --depth == 0) break;
+            }
+            each(open, close, [&](RegSet b, size_t, size_t) { w |= b; });
+        }
+        return w;
+    }
+
+    // A local's register bit by its name ("r4", "fpul", "f12"), or 0.
+    static RegSet reg_bit(std::string_view name) {
+        for (const auto& [bit, n] : kNamed)
+            if (name == n) return bit;
+        if (name.size() < 2 || name.size() > 3 || (name[0] != 'r' && name[0] != 'f')) return 0;
+        unsigned v = 0;
+        for (const char ch : name.substr(1)) {
+            if (ch < '0' || ch > '9') return 0;
+            v = v * 10 + unsigned(ch - '0');
+        }
+        if (v > 15 || (name.size() == 3 && name[1] == '0')) return 0;
+        return name[0] == 'r' ? RegSet{1} << v : RegSet{1} << (32 + v);
     }
 
     // The statements that store the registers of `regs` to the context
@@ -798,7 +893,7 @@ LiftResult Lifter::lift(const Function& f) const {
     return r;
 }
 
-void Lifter::link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints) {
+void Lifter::link(LiftResult& r, const std::map<uint32_t, Footprint>& footprints) {
     std::string out;
     out.reserve(r.code.size());
     size_t at = 0;
@@ -814,30 +909,35 @@ void Lifter::link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints) {
         }
         if (name + 9 > r.code.size() || r.code[name + 8] != '@') throw std::logic_error("link: a malformed call marker");
         const uint32_t callee = static_cast<uint32_t>(std::stoul(r.code.substr(name, 8), nullptr, 16));
-        const auto fp = footprints.find(callee);
+        const auto it = footprints.find(callee);
+        const Footprint fp = it == footprints.end() ? Footprint{} : it->second;
         out.append(r.code, at, mark - at);
-        out += Emitter::sync(r.locals & (fp == footprints.end() ? kAllRegs : fp->second), store);
+        // Stored: what the caller assigns of what the callee may read;
+        // reloaded: what the callee may change.
+        out += Emitter::sync(store ? r.assigned & fp.touches : r.locals & fp.writes, store);
         at = name + 9;
     }
     out.append(r.code, at);
     r.code = std::move(out);
 }
 
-std::map<uint32_t, RegSet> Lifter::footprints(const std::map<uint32_t, LiftResult>& lifted, const std::map<uint32_t, RegSet>& natives) {
-    std::map<uint32_t, RegSet> fp = natives;
-    for (const auto& [entry, r] : lifted) fp[entry] = r.touches;
-    // Only ever grows, by at most 41 bits a function: it settles.
+std::map<uint32_t, Footprint> Lifter::footprints(const std::map<uint32_t, LiftResult>& lifted, const std::map<uint32_t, RegSet>& natives) {
+    std::map<uint32_t, Footprint> fp;
+    for (const auto& [entry, regs] : natives) fp[entry] = {regs, regs};
+    for (const auto& [entry, r] : lifted) fp[entry] = {r.touches, r.writes};
+    // Only ever grows, by at most 41 bits of each set a function: it settles.
     for (bool changed = true; changed;) {
         changed = false;
         for (const auto& [entry, r] : lifted) {
-            RegSet& mine = fp[entry];
-            if (mine == kAllRegs) continue;
-            RegSet next = mine;
+            Footprint& mine = fp[entry];
+            if (mine.touches == kAllRegs && mine.writes == kAllRegs) continue;
+            Footprint next = mine;
             for (const uint32_t callee : r.callees) {
                 const auto it = fp.find(callee);
-                next |= it == fp.end() ? kAllRegs : it->second;
+                const Footprint theirs = it == fp.end() ? Footprint{} : it->second;
+                next.touches |= theirs.touches, next.writes |= theirs.writes;
             }
-            if (next != mine) mine = next, changed = true;
+            if (next.touches != mine.touches || next.writes != mine.writes) mine = next, changed = true;
         }
     }
     return fp;

@@ -79,7 +79,7 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
         if (n.regs & ~kAllRegs) throw std::runtime_error(std::format("native footprint for {:08X} ({}) names no register", n.entry, n.name));
         natives[n.entry] = n.regs;
     }
-    const std::map<uint32_t, RegSet> footprints = Lifter::footprints(lifted, natives);
+    const std::map<uint32_t, Footprint> footprints = Lifter::footprints(lifted, natives);
     for (auto& [entry, r] : lifted) Lifter::link(r, footprints);
     for (const auto& [entry, f] : cfg.functions) {
         std::string* chunk;

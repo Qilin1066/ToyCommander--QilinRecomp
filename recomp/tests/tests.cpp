@@ -1238,30 +1238,37 @@ void test_gdrom() {
 
 void test_footprints() {
     const auto bit = [](unsigned n) { return RegSet{1} << n; };
-    const auto result = [](RegSet touches, std::vector<uint32_t> callees) {
+    const auto result = [](RegSet touches, RegSet writes, std::vector<uint32_t> callees) {
         LiftResult r;
-        r.ok = true, r.touches = touches, r.callees = std::move(callees);
+        r.ok = true, r.touches = touches, r.writes = writes, r.callees = std::move(callees);
         return r;
     };
-    // 1 calls 2 calls 3 calls 2 (a cycle); 4 calls 5, which isn't lifted.
+    // 1 calls 2 calls 3 calls 2 (a cycle); 4 calls 5, which isn't lifted;
+    // 6 calls 7, a native that reads and changes r0.
     std::map<uint32_t, LiftResult> lifted;
-    lifted.emplace(1, result(bit(1), {2}));
-    lifted.emplace(2, result(bit(2), {3}));
-    lifted.emplace(3, result(bit(32), {2}));
-    lifted.emplace(4, result(bit(4), {5}));
-    const std::map<uint32_t, RegSet> fp = Lifter::footprints(lifted);
-    CHECK(fp.at(1) == (bit(1) | bit(2) | bit(32)));
-    CHECK(fp.at(2) == (bit(2) | bit(32)));
-    CHECK(fp.at(3) == fp.at(2));
-    CHECK(fp.at(4) == kAllRegs);
-    // A call stores and reloads the caller's locals in the callee's
-    // footprint; all of them for a callee without one.
-    LiftResult r = result(0, {});
-    r.locals = bit(4) | bit(8) | bit(34);
-    r.code = "@OUT:00000002@ f(c); @IN:00000002@ // @r4+\n@OUT:00000009@ g(c); @IN:00000009@\n";
-    Lifter::link(r, {{2u, bit(4) | bit(9)}});
-    CHECK(r.code == "c.r[4] = r4; f(c); r4 = c.r[4]; // @r4+\n"
-                    "c.r[4] = r4; c.r[8] = r8; c.fr[2] = f2; g(c); r4 = c.r[4]; r8 = c.r[8]; f2 = c.fr[2];\n");
+    lifted.emplace(1, result(bit(1) | bit(5), bit(1), {2}));
+    lifted.emplace(2, result(bit(2), 0, {3}));
+    lifted.emplace(3, result(bit(32) | bit(6), bit(32), {2}));
+    lifted.emplace(4, result(bit(4), bit(4), {5}));
+    lifted.emplace(6, result(bit(6), 0, {7}));
+    const std::map<uint32_t, Footprint> fp = Lifter::footprints(lifted, {{7u, bit(0)}});
+    CHECK(fp.at(1).touches == (bit(1) | bit(5) | bit(2) | bit(32) | bit(6)));
+    CHECK(fp.at(1).writes == (bit(1) | bit(32)));
+    CHECK(fp.at(2).touches == (bit(2) | bit(32) | bit(6)) && fp.at(2).writes == bit(32));
+    CHECK(fp.at(3).touches == fp.at(2).touches && fp.at(3).writes == fp.at(2).writes);
+    CHECK(fp.at(4).touches == kAllRegs && fp.at(4).writes == kAllRegs);
+    CHECK(fp.at(6).touches == (bit(6) | bit(0)) && fp.at(6).writes == bit(0));
+    // A call stores the caller's locals it assigns in the callee's
+    // footprint, and reloads those the callee may change; for a callee
+    // without a footprint, it stores all it assigns and reloads them all.
+    LiftResult r = result(0, 0, {});
+    r.locals = bit(4) | bit(8) | bit(9) | bit(34);
+    r.assigned = bit(4) | bit(9) | bit(34);
+    r.code = "@OUT:00000002@ f(c); @IN:00000002@ // @r4+\n@OUT:00000003@ h(c); @IN:00000003@\n@OUT:00000009@ g(c); @IN:00000009@\n";
+    Lifter::link(r, {{2u, {bit(4) | bit(8) | bit(9), bit(9)}}, {3u, {bit(4) | bit(8), bit(8)}}});
+    CHECK(r.code == "c.r[4] = r4; c.r[9] = r9; f(c); r9 = c.r[9]; // @r4+\n"
+                    "c.r[4] = r4; h(c); r8 = c.r[8];\n"
+                    "c.r[4] = r4; c.r[9] = r9; c.fr[2] = f2; g(c); r4 = c.r[4]; r8 = c.r[8]; r9 = c.r[9]; f2 = c.fr[2];\n");
 }
 
 int main() {

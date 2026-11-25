@@ -176,6 +176,7 @@ void test_control() {
         if (run(c, "keep")) {
             eq("keep: r4", c.r[4], 0), eq("keep: r5", c.r[5], 4), eq("keep: r8 held across calls", c.r[8], 8);
             eq("keep: r9 set through a callee's callee", c.r[9], 50), eq("keep: r10 held across calls", c.r[10], 10);
+            eq("keep: r7 changed by addc's reference", c.r[7], 7), eq("keep: T changed by clrt and addc", c.t, 0);
         }
     }
     for (uint32_t i : {0u, 1u, 0u, 1u}) {  // each target twice: the second through rt::call's cache
