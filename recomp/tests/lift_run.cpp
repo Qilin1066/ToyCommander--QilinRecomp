@@ -178,7 +178,7 @@ void test_control() {
             eq("keep: r9 set through a callee's callee", c.r[9], 50), eq("keep: r10 held across calls", c.r[10], 10);
         }
     }
-    for (uint32_t i : {0u, 1u}) {
+    for (uint32_t i : {0u, 1u, 0u, 1u}) {  // each target twice: the second through rt::call's cache
         Context c = fresh();
         c.r[4] = i, c.r[5] = g_p.data;
         if (run(c, "indirect")) eq("indirect", c.r[4], i == 0 ? 8u : 14u);

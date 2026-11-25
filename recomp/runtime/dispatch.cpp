@@ -1,6 +1,7 @@
 // Indirect calls through the generated function table. Runtime code: no
 // std::format.
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 
 #include "guest.hpp"
@@ -11,10 +12,31 @@ namespace qilin::rt {
 extern const FnEntry g_functions[];
 extern const size_t g_function_count;
 
+namespace {
+
+// The targets called lately, in front of the table's binary search (about
+// twelve unpredictable steps over the thousands of functions): an indirect
+// call goes mostly to the few functions an object table or a callback list
+// names, so most are one compare here. Direct-mapped on the address's low
+// bits; each entry is the address and its index in the table + 1 in one
+// 64-bit word, read and written whole, so guest threads (host threads of
+// their own) never see half of one. 0: empty.
+constexpr uint32_t kCacheBits = 10;
+std::atomic<uint64_t> g_cache[1u << kCacheBits];
+
+}  // namespace
+
 void call(Context& c, uint32_t target, uint32_t from) {
+    std::atomic<uint64_t>& slot = g_cache[(target >> 1) & ((1u << kCacheBits) - 1)];
+    const uint64_t hit = slot.load(std::memory_order_relaxed);
+    if (static_cast<uint32_t>(hit >> 32) == target && static_cast<uint32_t>(hit) != 0) {
+        g_functions[static_cast<uint32_t>(hit) - 1].fn(c);
+        return;
+    }
     const FnEntry* end = g_functions + g_function_count;
     const FnEntry* it = std::lower_bound(g_functions, end, target, [](const FnEntry& e, uint32_t a) { return e.addr < a; });
     if (it == end || it->addr != target) bad_jump(from, target);
+    slot.store(uint64_t{target} << 32 | static_cast<uint32_t>(it - g_functions + 1), std::memory_order_relaxed);
     it->fn(c);
 }
 
