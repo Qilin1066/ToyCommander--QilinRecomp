@@ -19,7 +19,10 @@
 //
 // Generated code holds the guest registers it uses in host locals and writes
 // them back to the context (rt::Context) only around calls and returns, so
-// the host compiler can keep them in registers. Every call sets PR and checks
+// the host compiler can keep them in registers. A direct call to a lifted
+// function stores and reloads only the registers that function and the ones
+// it calls can read or change (its footprint, see link); any other call, and
+// every return, stores all of them. Every call sets PR and checks
 // afterwards that the callee returned to the instruction after the call's
 // delay slot, so a longjmp-style return stops instead of misbehaving.
 //
@@ -31,7 +34,9 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "bootfile.hpp"
 #include "cfg.hpp"
@@ -41,18 +46,46 @@ namespace qilin {
 
 std::string fn_name(uint32_t addr);  // "fn_8C010080"
 
+// Registers as the lifted code holds them in locals: bits 0-15 r0-r15, 16-24
+// T, PR, GBR, MACH, MACL, S, Q, M, FPUL; 32-47 fr0-fr15 of the current bank.
+// (SR's other bits, FPSCR, the back bank and the return address are always
+// in the context.)
+using RegSet = uint64_t;
+inline constexpr RegSet kIntRegs = 0x1FFFFFFu, kFloatRegs = 0xFFFFull << 32, kAllRegs = kIntRegs | kFloatRegs;
+
 struct LiftResult {
     bool ok = false;
     std::string code;      // the function's C++ definition
     uint32_t fail_at = 0;  // the instruction that stopped it
     std::string why;       // e.g. "floating point (slice 3): fadd"
+    // For link: the registers the function keeps in locals; those it can
+    // read or change in the context itself (its locals; every float if it
+    // swaps the banks; everything if it calls through the function table);
+    // and the functions it calls or tail-calls directly, sorted.
+    RegSet locals = 0, touches = 0;
+    std::vector<uint32_t> callees;
 };
 
 class Lifter {
 public:
     // `modes`: fp_modes()'s result, the FPSCR mode at every FPU instruction.
     Lifter(const BootFile& boot, const Cfg& cfg, const std::map<uint32_t, FpModes>& modes) : boot_(boot), cfg_(cfg), modes_(modes) {}
+    // Every call stores and reloads all the function's registers.
     LiftResult lift(const Function& f) const;
+    // The code with its direct calls left for link to fill in.
+    LiftResult lift_unlinked(const Function& f) const;
+
+    // Fills in the direct calls of lift_unlinked's code: each stores and
+    // reloads the registers of the callee's footprint, all of them for a
+    // callee `footprints` doesn't have. A function's footprint is what it
+    // touches and what everything it calls directly touches (footprints
+    // computes it; a function that isn't lifted touches everything): a
+    // register outside it the callee neither reads nor changes in the
+    // context, so the caller's local stays right without a store or reload.
+    static void link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints);
+    // Footprints of the functions lifted (entry -> its unlinked result), by
+    // a fixed point over the calls (recursion included).
+    static std::map<uint32_t, RegSet> footprints(const std::map<uint32_t, LiftResult>& lifted);
 
 private:
     const BootFile& boot_;

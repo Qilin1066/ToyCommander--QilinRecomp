@@ -411,6 +411,27 @@ inline Programs build() {
     a.label("call_native");
     a.word(0x4F22), a.b12(0xB000, "native_me"), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(imm(0x7000, 0, 1));
     a.label("native_me"), a.word(kRts), a.word(kNop);
+    // keep: direct calls that store and reload only their callees' footprints.
+    // r8 = 8, r10 = 10 held across every call; keep_leaf adds 1 to r4 (4);
+    // keep_chain touches nothing but calls keep_set, which reads r8 and sets
+    // r9 = r8 + 42 (50): seen only through the chain; keep_rec recurses r4
+    // times, adding 1 to r5 each time (r4 = 0, r5 = 4).
+    a.label("keep");
+    a.word(0x4F22);  // sts.l pr,@-r15
+    a.word(imm(0xE000, 8, 8)), a.word(imm(0xE000, 4, 3)), a.word(imm(0xE000, 5, 0)), a.word(imm(0xE000, 10, 10));
+    a.b12(0xB000, "keep_leaf"), a.word(kNop);
+    a.b12(0xB000, "keep_chain"), a.word(kNop);
+    a.b12(0xB000, "keep_rec"), a.word(kNop);
+    a.word(0x4F26), a.word(kRts), a.word(kNop);  // lds.l @r15+,pr
+    a.label("keep_leaf"), a.word(kRts), a.word(imm(0x7000, 4, 1));
+    a.label("keep_chain"), a.word(0x4F22), a.b12(0xB000, "keep_set"), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(kNop);
+    a.label("keep_set"), a.word(nm(0x6003, 9, 8)), a.word(kRts), a.word(imm(0x7000, 9, 42));  // mov r8,r9 ; rts ; add #42,r9
+    a.label("keep_rec");
+    a.word(nm(0x2008, 4, 4)), a.b8(0x8900, "keep_rec_done");  // tst r4,r4 ; bt done
+    a.word(0x4F22), a.word(imm(0x7000, 4, -1));
+    a.b12(0xB000, "keep_rec"), a.word(imm(0x7000, 5, 1));     // bsr keep_rec ; add #1,r5
+    a.word(0x4F26);
+    a.label("keep_rec_done"), a.word(kRts), a.word(kNop);
     // data: the indirect-call table (inc, dbl), then scratch
     a.align4();
     a.label("data");
@@ -419,7 +440,7 @@ inline Programs build() {
     p.image = a.finish();
     p.data = a.at("data");
     for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "prbra", "farjmp", "hang", "patch", "badjump",
-                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail"})
+                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail", "keep"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.
     const size_t t = (a.at("sw_table") - kBase) / 2;

@@ -22,6 +22,7 @@
 #include "path.hpp"
 #include "hwaccess.hpp"
 #include "layout.hpp"
+#include "lifter.hpp"
 #include "sha256.hpp"
 
 using namespace qilin;
@@ -1223,6 +1224,35 @@ void test_gdrom() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- call footprints
+
+void test_footprints() {
+    const auto result = [](RegSet touches, std::vector<uint32_t> callees) {
+        LiftResult r;
+        r.ok = true, r.touches = touches, r.callees = std::move(callees);
+        return r;
+    };
+    // 1 calls 2 calls 3 calls 2 (a cycle); 4 calls 5, which isn't lifted.
+    std::map<uint32_t, LiftResult> lifted;
+    lifted.emplace(1, result(1u << 1, {2}));
+    lifted.emplace(2, result(1u << 2, {3}));
+    lifted.emplace(3, result(RegSet{1} << 32, {2}));
+    lifted.emplace(4, result(1u << 4, {5}));
+    const std::map<uint32_t, RegSet> fp = Lifter::footprints(lifted);
+    CHECK(fp.at(1) == ((1u << 1) | (1u << 2) | (RegSet{1} << 32)));
+    CHECK(fp.at(2) == ((1u << 2) | (RegSet{1} << 32)));
+    CHECK(fp.at(3) == fp.at(2));
+    CHECK(fp.at(4) == kAllRegs);
+    // A call stores and reloads the caller's locals in the callee's
+    // footprint; all of them for a callee without one.
+    LiftResult r = result(0, {});
+    r.locals = (1u << 4) | (1u << 8) | (RegSet{1} << 34);
+    r.code = "@OUT:00000002@ f(c); @IN:00000002@ // @r4+\n@OUT:00000009@ g(c); @IN:00000009@\n";
+    Lifter::link(r, {{2u, (1u << 4) | (1u << 9)}});
+    CHECK(r.code == "c.r[4] = r4; f(c); r4 = c.r[4]; // @r4+\n"
+                    "c.r[4] = r4; c.r[8] = r8; c.fr[2] = f2; g(c); r4 = c.r[4]; r8 = c.r[8]; f2 = c.fr[2];\n");
+}
+
 int main() {
     test_sha256();
     test_bootfile();
@@ -1241,6 +1271,7 @@ int main() {
     test_cfg_long_functions();
     test_fpmode();
     test_gdrom();
+    test_footprints();
     if (failures) {
         std::println(stderr, "{} check(s) failed", failures);
         return 1;

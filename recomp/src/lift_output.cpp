@@ -57,6 +57,20 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     const auto replaced_here = [&](uint32_t a) { return std::ranges::any_of(options.replaced, [&](const ReplacedFunction& r) { return r.entry == a; }); };
     for (const ReplacedFunction& r : options.replaced)
         if (!cfg.functions.contains(r.entry)) throw std::runtime_error(std::format("replaced function {:08X} ({}) isn't a function", r.entry, r.name));
+    // Lifted first, all of them, so that each direct call can be linked
+    // with its callee's footprint (Lifter::link).
+    const auto stubbed = [&](uint32_t entry, const Function& f) {
+        const bool in_range = !options.range || (entry >= options.range->first && entry < options.range->second);
+        return plan_of(entry) == Plan::replace || replaced_here(entry) || !in_range || (f.origin == Origin::orphan && !options.orphans);
+    };
+    std::map<uint32_t, LiftResult> results;
+    for (const auto& [entry, f] : cfg.functions)
+        if (!stubbed(entry, f)) results.emplace(entry, lifter.lift_unlinked(f));
+    std::map<uint32_t, LiftResult> lifted;
+    for (auto& [entry, r] : results)
+        if (r.ok) lifted.emplace(entry, std::move(r));
+    const std::map<uint32_t, RegSet> footprints = Lifter::footprints(lifted);
+    for (auto& [entry, r] : lifted) Lifter::link(r, footprints);
     for (const auto& [entry, f] : cfg.functions) {
         std::string* chunk;
         if (options.files) {
@@ -73,19 +87,18 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
             ++sum.replaced;
             continue;
         }
-        const bool in_range = !options.range || (entry >= options.range->first && entry < options.range->second);
-        const bool orphan = f.origin == Origin::orphan && !options.orphans;
-        if (!in_range || orphan) {
+        if (stubbed(entry, f)) {
+            const bool orphan = f.origin == Origin::orphan && !options.orphans;
             stubs += std::format("void {}(rt::Context&) {{ rt::not_lifted(0x{:08X}u); }}\n", fn_name(entry), entry);
             ++(orphan ? sum.unreferenced : sum.outside);
             continue;
         }
-        const LiftResult r = lifter.lift(f);
-        if (r.ok) {
-            *chunk += r.code + "\n";
+        if (const auto it = lifted.find(entry); it != lifted.end()) {
+            *chunk += it->second.code + "\n";
             ++sum.lifted;
             continue;
         }
+        const LiftResult& r = results.at(entry);
         stubs += std::format("void {}(rt::Context&) {{ rt::not_lifted(0x{:08X}u); }}\n", fn_name(entry), entry);
         ++sum.failed;
         sum.failures[r.why.substr(0, r.why.find(':'))].push_back(entry);

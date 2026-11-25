@@ -7,6 +7,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 ## [Unreleased]
 
 ### Changed
+- **Less work around calls between lifted functions** (not timed yet): a direct call stores and reloads only the registers the function called (and what it calls) can read or change, instead of all of the caller's: 30% fewer of those around Toy Commander's 11,223 calls, 26% around Toy Racer's 12,561. The same code otherwise.
 - **The two games' system layers are one copy** (`shinobi/src`): the start-up and the replacements of Shinobi's allocator, interrupt chains, clock, GD-ROM calls and threads, which each game had its own copy of, differing only in addresses; each game now gives its addresses in its `build.hpp`. The same natives at the same addresses as before.
 
 ### Added

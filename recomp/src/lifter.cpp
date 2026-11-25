@@ -5,6 +5,8 @@
 #include <optional>
 #include <map>
 #include <set>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace qilin {
@@ -75,23 +77,33 @@ public:
             for (const auto& [pc, code] : slot_copies) out += std::format("{}:  // the delay slot at {:08X}, branched to\n{}", label(pc), pc, code);
             out += "}\n";
             // The sync points: the context holds every register the function uses.
-            std::string store, load, fstore, fload;
-            for (unsigned n = 0; n < 16; ++n)
-                if (used_ & (1u << n)) store += std::format(" c.r[{0}] = r{0};", n), load += std::format(" r{0} = c.r[{0}];", n);
-            for (const auto& [bit, name] : kNamed)
-                if (used_ & bit) store += std::format(" c.{0} = {0};", name), load += std::format(" {0} = c.{0};", name);
-            for (unsigned n = 0; n < 16; ++n)
-                if (fused_ & (1u << n)) fstore += std::format(" c.fr[{0}] = f{0};", n), fload += std::format(" f{0} = c.fr[{0}];", n);
-            store += fstore, load += fload;
-            replace_all(out, "@OUT@", store.empty() ? "" : store.substr(1));
-            replace_all(out, "@IN@", load.empty() ? "" : load.substr(1));
-            replace_all(out, "@FOUT@", fstore.empty() ? "" : fstore.substr(1));
-            replace_all(out, "@FIN@", fload.empty() ? "" : fload.substr(1));
-            return {true, std::move(out), 0, {}};
+            const RegSet locals = used_ | RegSet{fused_} << 32;
+            replace_all(out, "@OUT@", sync(locals, true));
+            replace_all(out, "@IN@", sync(locals, false));
+            replace_all(out, "@FOUT@", sync(locals & kFloatRegs, true));
+            replace_all(out, "@FIN@", sync(locals & kFloatRegs, false));
+            return {true, std::move(out), 0, {}, locals, table_ ? kAllRegs : locals | (banks_ ? kFloatRegs : 0), {callees_.begin(), callees_.end()}};
         } catch (const Fail& fail) {
-            return {false, {}, fail.pc, fail.why};
+            return {false, {}, fail.pc, fail.why, 0, 0, {}};
         }
     }
+
+    // The statements that store the registers of `regs` to the context
+    // (`out`) or load them from it, space-separated, in one fixed order.
+    static std::string sync(RegSet regs, bool out) {
+        std::string s;
+        for (unsigned n = 0; n < 16; ++n)
+            if (regs & (1u << n)) s += out ? std::format(" c.r[{0}] = r{0};", n) : std::format(" r{0} = c.r[{0}];", n);
+        for (const auto& [bit, name] : kNamed)
+            if (regs & bit) s += out ? std::format(" c.{0} = {0};", name) : std::format(" {0} = c.{0};", name);
+        for (unsigned n = 0; n < 16; ++n)
+            if (regs & (RegSet{1} << (32 + n))) s += out ? std::format(" c.fr[{0}] = f{0};", n) : std::format(" f{0} = c.fr[{0}];", n);
+        return s.empty() ? s : s.substr(1);
+    }
+
+    // link's markers: a direct call's store and reload, named by the callee.
+    static std::string call_out(uint32_t callee) { return std::format("@OUT:{:08X}@", callee); }
+    static std::string call_in(uint32_t callee) { return std::format("@IN:{:08X}@", callee); }
 
 private:
     static constexpr std::pair<uint32_t, const char*> kNamed[] = {{kT, "t"},       {kPr, "pr"}, {kGbr, "gbr"}, {kMach, "mach"},
@@ -135,10 +147,25 @@ private:
     // A direct call or tail call: the function's C++ name, or through the
     // table if there is no function there (the runtime may have native code
     // for it).
-    std::string call_to(uint32_t target, uint32_t pc) const {
-        if (cfg_.functions.contains(target)) return std::format("{}(c);", fn_name(target));
-        return std::format("rt::call(c, {}, {});", hex(target), hex(pc));
+    std::string call_to(uint32_t target, uint32_t pc) {
+        if (cfg_.functions.contains(target)) {
+            callees_.insert(target);
+            return std::format("{}(c);", fn_name(target));
+        }
+        return via_table(hex(target), pc);
     }
+    // A call through the function table: to anything, native code included,
+    // which may read or change any register in the context.
+    std::string via_table(const std::string& target, uint32_t pc) {
+        table_ = true;
+        return std::format("rt::call(c, {}, {});", target, hex(pc));
+    }
+    // The store before a call and the reload after it: only the callee's
+    // footprint's registers for a direct call to a function (link), all of
+    // them otherwise.
+    bool direct(uint32_t target) const { return cfg_.functions.contains(target); }
+    std::string out_for(std::optional<uint32_t> target) const { return target && direct(*target) ? call_out(*target) : "@OUT@"; }
+    std::string in_for(std::optional<uint32_t> target) const { return target && direct(*target) ? call_in(*target) : "@IN@"; }
 
     // mov.x Rm,@-Rn: with Rm and Rn the same register, the value stored is
     // the register before the decrement (as the operand is read before the
@@ -455,10 +482,11 @@ private:
         // ---- FPSCR ----
         case Op::sts_fpscr: line(std::format("{} = c.fpscr;", R(n))); break;
         case Op::stsl_fpscr: line(std::format("{} -= 4u; rt::st32({}, c.fpscr);", R(n), R(n))); break;
-        case Op::lds_fpscr: line(std::format("@FOUT@ rt::set_fpscr(c, {}, {}); @FIN@", R(n), hex(pc))); break;
-        case Op::ldsl_fpscr: line(std::format("@FOUT@ rt::set_fpscr(c, rt::ld32({}), {}); {} += 4u; @FIN@", R(n), hex(pc), R(n))); break;
+        // These may swap the banks: every float register of the context changes.
+        case Op::lds_fpscr: banks_ = true; line(std::format("@FOUT@ rt::set_fpscr(c, {}, {}); @FIN@", R(n), hex(pc))); break;
+        case Op::ldsl_fpscr: banks_ = true; line(std::format("@FOUT@ rt::set_fpscr(c, rt::ld32({}), {}); {} += 4u; @FIN@", R(n), hex(pc), R(n))); break;
         case Op::fschg: line("c.fpscr ^= rt::kFpscrSZ;"); break;
-        case Op::frchg: line("@FOUT@ rt::frchg(c); @FIN@"); break;
+        case Op::frchg: banks_ = true; line("@FOUT@ rt::frchg(c); @FIN@"); break;
         // ---- arithmetic ----
         case Op::fadd: arith("+"); break;
         case Op::fsub: arith("-"); break;
@@ -610,11 +638,11 @@ private:
             }
             if (const auto back = f_.call_returns.find(pc); back != f_.call_returns.end()) {
                 // `lds rN,pr ; bra f`: a call to f that returns where PR points.
-                const auto direct = f_.calls.find(pc);
-                if (direct == f_.calls.end()) throw Fail{pc, "a call by bra without its callee"};
-                line("@OUT@");
-                line(call_to(direct->second, pc));
-                line("@IN@");
+                const auto callee = f_.calls.find(pc);
+                if (callee == f_.calls.end()) throw Fail{pc, "a call by bra without its callee"};
+                line(out_for(callee->second));
+                line(call_to(callee->second, pc));
+                line(in_for(callee->second));
                 line(std::format("if (c.ret != {}) rt::bad_return({}, c.ret);", hex(back->second), hex(pc)));
                 line(go(back->second));
                 break;
@@ -640,34 +668,36 @@ private:
                 break;
             }
             line("@OUT@");
-            line(std::format("rt::call(c, {} + off, {});", hex(next), hex(pc)));
+            line(via_table(std::format("{} + off", hex(next)), pc));
             line("return;");
             break;
         }
         case Op::bsr:
         case Op::bsrf:
         case Op::jsr: {
-            const auto direct = f_.calls.find(pc);
-            if (direct == f_.calls.end()) {
+            const auto callee = f_.calls.find(pc);
+            const std::optional<uint32_t> known = callee == f_.calls.end() ? std::nullopt : std::optional{callee->second};
+            if (!known) {
                 if (i.op == Op::jsr) line(std::format("const uint32_t target = {};", R(i.n())));
                 else if (i.op == Op::bsrf) line(std::format("const uint32_t target = {} + {};", hex(next), R(i.n())));
                 else throw Fail{pc, "a bsr without a target"};
             }
             with_slot();
             line(std::format("{} = {};", PR(), hex(next)));
-            line("@OUT@");
-            line(direct != f_.calls.end() ? call_to(direct->second, pc) : std::format("rt::call(c, target, {});", hex(pc)));
-            line("@IN@");
+            line(out_for(known));
+            line(known ? call_to(*known, pc) : via_table("target", pc));
+            line(in_for(known));
             line(std::format("if (c.ret != {}) rt::bad_return({}, c.ret);", hex(next), hex(pc)));
             break;
         }
         case Op::jmp: {
             const bool to_return = std::ranges::binary_search(f_.jmp_returns, pc);
             const auto back = f_.call_returns.find(pc);
-            const auto direct = f_.calls.find(pc);
+            const auto callee = f_.calls.find(pc);
+            const std::optional<uint32_t> known = callee == f_.calls.end() ? std::nullopt : std::optional{callee->second};
             const auto far_branch = f_.computed_branches.find(pc);
             if (tail == f_.tail_jumps.end() && far_branch == f_.computed_branches.end() &&
-                !(back != f_.call_returns.end() && direct != f_.calls.end()))
+                !(back != f_.call_returns.end() && known))
                 line(std::format("const uint32_t target = {};", R(i.n())));
             with_slot();
             if (far_branch != f_.computed_branches.end()) {
@@ -679,9 +709,9 @@ private:
                 line("return;");
             } else if (back != f_.call_returns.end()) {
                 // A call made by loading PR by hand: it returns where PR points.
-                line("@OUT@");
-                line(direct != f_.calls.end() ? call_to(direct->second, pc) : std::format("rt::call(c, target, {});", hex(pc)));
-                line("@IN@");
+                line(out_for(known));
+                line(known ? call_to(*known, pc) : via_table("target", pc));
+                line(in_for(known));
                 line(std::format("if (c.ret != {}) rt::bad_return({}, c.ret);", hex(back->second), hex(pc)));
                 line(go(back->second));
             } else if (tail != f_.tail_jumps.end()) {
@@ -695,7 +725,7 @@ private:
                 line("}");
             } else {
                 line("@OUT@");
-                line(std::format("rt::call(c, target, {});", hex(pc)));
+                line(via_table("target", pc));
                 line("return;");
             }
             break;
@@ -732,13 +762,67 @@ private:
     uint32_t fused_ = 0;  // fr0-fr15 of the current bank
     std::set<uint32_t> labels_;
     uint32_t branch_pc_ = 0;  // the branch being lifted (0: none)
+    std::set<uint32_t> callees_;  // called or tail-called directly
+    bool table_ = false;          // calls through the function table
+    bool banks_ = false;          // may swap the float banks
 };
 
 }  // namespace
 
-LiftResult Lifter::lift(const Function& f) const {
+LiftResult Lifter::lift_unlinked(const Function& f) const {
     const auto m = modes_.find(f.entry);
     return Emitter(boot_, cfg_, f, m == modes_.end() ? nullptr : &m->second).run();
+}
+
+LiftResult Lifter::lift(const Function& f) const {
+    LiftResult r = lift_unlinked(f);
+    if (r.ok) link(r, {});
+    return r;
+}
+
+void Lifter::link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints) {
+    std::string out;
+    out.reserve(r.code.size());
+    size_t at = 0;
+    for (;;) {
+        const size_t mark = r.code.find('@', at);
+        if (mark == std::string::npos) break;
+        const bool store = r.code.compare(mark, 5, "@OUT:") == 0;
+        const size_t name = mark + (store ? 5 : 4);
+        if (!store && r.code.compare(mark, 4, "@IN:") != 0) {  // not a marker
+            out.append(r.code, at, mark + 1 - at);
+            at = mark + 1;
+            continue;
+        }
+        if (name + 9 > r.code.size() || r.code[name + 8] != '@') throw std::logic_error("link: a malformed call marker");
+        const uint32_t callee = static_cast<uint32_t>(std::stoul(r.code.substr(name, 8), nullptr, 16));
+        const auto fp = footprints.find(callee);
+        out.append(r.code, at, mark - at);
+        out += Emitter::sync(r.locals & (fp == footprints.end() ? kAllRegs : fp->second), store);
+        at = name + 9;
+    }
+    out.append(r.code, at);
+    r.code = std::move(out);
+}
+
+std::map<uint32_t, RegSet> Lifter::footprints(const std::map<uint32_t, LiftResult>& lifted) {
+    std::map<uint32_t, RegSet> fp;
+    for (const auto& [entry, r] : lifted) fp[entry] = r.touches;
+    // Only ever grows, by at most 41 bits a function: it settles.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& [entry, r] : lifted) {
+            RegSet& mine = fp[entry];
+            if (mine == kAllRegs) continue;
+            RegSet next = mine;
+            for (const uint32_t callee : r.callees) {
+                const auto it = fp.find(callee);
+                next |= it == fp.end() ? kAllRegs : it->second;
+            }
+            if (next != mine) mine = next, changed = true;
+        }
+    }
+    return fp;
 }
 
 }  // namespace qilin

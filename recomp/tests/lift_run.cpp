@@ -171,6 +171,13 @@ void test_control() {
         c.r[4] = x, c.r[14] = 0x14141414u;
         if (run(c, "calls")) eq("calls", c.r[4], 2 * (x + 1) + 100), eq("r14 preserved", c.r[14], 0x14141414u);
     }
+    {
+        Context c = fresh();
+        if (run(c, "keep")) {
+            eq("keep: r4", c.r[4], 0), eq("keep: r5", c.r[5], 4), eq("keep: r8 held across calls", c.r[8], 8);
+            eq("keep: r9 set through a callee's callee", c.r[9], 50), eq("keep: r10 held across calls", c.r[10], 10);
+        }
+    }
     for (uint32_t i : {0u, 1u}) {
         Context c = fresh();
         c.r[4] = i, c.r[5] = g_p.data;
