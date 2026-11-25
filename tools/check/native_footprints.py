@@ -115,7 +115,7 @@ def uses(body, ctx):
             continue
         # Passed whole to a call: the argument itself, a plain function's.
         if not re.match(r"\s*[,)]", after):
-            return None, f"the whole context used ({ctx}{after[:12].split(chr(10))[0].rstrip()})"
+            return None, "the whole context used"
         depth, j, position = 0, m.start() - 1, 0
         while j >= 0:
             ch = body[j]
@@ -138,7 +138,7 @@ def uses(body, ctx):
             return None, "the whole context used"
         lead = before[:cm.start()].rstrip()
         if lead.endswith(".") or lead.endswith("->"):  # a member or a pointer called
-            return None, f"passed through a pointer ({lead[-12:].split()[-1] if lead.split() else ''}{cm.group(2)})"
+            return None, f"passed to a function through a pointer ({cm.group(2)})"
         calls.append((cm.group(2), position))
     return bits, calls
 

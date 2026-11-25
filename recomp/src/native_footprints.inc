@@ -56,17 +56,17 @@ constexpr NativeFootprint kToyCommanderFootprints[] = {
     {0x8C0C4A3Au, 0x20011ull, "thread_yield"},  // r0 r4 pr
 };
 // Not listed (every register), and why:
-//   0x8C04C700  play_movie: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0B399C  shinobi_chain_add: hook_kamui: the whole context used (c;)
-//   0x8C0B3B6E  shinobi_chain_dispatch_900: dispatch: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0B3BB8  shinobi_chain_dispatch_920: dispatch: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0B3CA4  shinobi_chain_remove: hook_kamui: the whole context used (c;)
-//   0x8C0C1534  gd_check_command: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0C1548  gd_main_loop: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0C15C0  gd_abort: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0C15D4  gd_reset: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0C3C28  shinobi_call_on_own_stack: the whole context used (c;)
-//   0x8C0C4A7C  thread_scheduler_pass: the whole context used (c;)
+//   0x8C04C700  play_movie: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0B399C  shinobi_chain_add: hook_kamui: the whole context used
+//   0x8C0B3B6E  shinobi_chain_dispatch_900: dispatch: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0B3BB8  shinobi_chain_dispatch_920: dispatch: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0B3CA4  shinobi_chain_remove: hook_kamui: the whole context used
+//   0x8C0C1534  gd_check_command: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0C1548  gd_main_loop: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0C15C0  gd_abort: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0C15D4  gd_reset: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0C3C28  shinobi_call_on_own_stack: the whole context used
+//   0x8C0C4A7C  thread_scheduler_pass: the whole context used
 
 // Toy Racer (Europe): 70 of 83 natives.
 constexpr NativeFootprint kToyRacerFootprints[] = {
@@ -142,16 +142,16 @@ constexpr NativeFootprint kToyRacerFootprints[] = {
     {0x8C0E950Cu, 0x20000ull, "modem_static_init_8C0E950C"},  // pr
 };
 // Not listed (every register), and why:
-//   0x8C0C54DA  runtime_init_lists: call_table: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0C552C  runtime_exit_lists: call_table: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0CA2FC  shinobi_chain_add: hook_kamui: the whole context used (c;)
-//   0x8C0CA4CE  shinobi_chain_dispatch_900: dispatch: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0CA518  shinobi_chain_dispatch_920: dispatch: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0CA604  shinobi_chain_remove: hook_kamui: the whole context used (c;)
-//   0x8C0CAB2E  shinobi_peripherals_exit: call_guest: call: passed through a pointer (it->fn)
-//   0x8C0D5D34  gd_check_command: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0D5D48  gd_main_loop: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0D5DC0  gd_abort: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0D5DD4  gd_reset: deliver_pending: raise_bus_event: the whole context used (c;)
-//   0x8C0E00A0  shinobi_call_on_own_stack: the whole context used (c;)
-//   0x8C0E0ED0  thread_scheduler_pass: the whole context used (c;)
+//   0x8C0C54DA  runtime_init_lists: call_table: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0C552C  runtime_exit_lists: call_table: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0CA2FC  shinobi_chain_add: hook_kamui: the whole context used
+//   0x8C0CA4CE  shinobi_chain_dispatch_900: dispatch: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0CA518  shinobi_chain_dispatch_920: dispatch: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0CA604  shinobi_chain_remove: hook_kamui: the whole context used
+//   0x8C0CAB2E  shinobi_peripherals_exit: call_guest: call: passed to a function through a pointer (fn)
+//   0x8C0D5D34  gd_check_command: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0D5D48  gd_main_loop: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0D5DC0  gd_abort: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0D5DD4  gd_reset: deliver_pending: raise_bus_event: the whole context used
+//   0x8C0E00A0  shinobi_call_on_own_stack: the whole context used
+//   0x8C0E0ED0  thread_scheduler_pass: the whole context used
