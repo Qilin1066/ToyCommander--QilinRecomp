@@ -411,6 +411,15 @@ inline Programs build() {
     a.label("call_native");
     a.word(0x4F22), a.b12(0xB000, "native_me"), a.word(kNop), a.word(0x4F26), a.word(kRts), a.word(imm(0x7000, 0, 1));
     a.label("native_me"), a.word(kRts), a.word(kNop);
+    // call_checked: r8 = 8 held across a call to native_checked, replaced by a
+    // native with a known footprint (r0 and PR: the generator gives it), which
+    // sets r0 = 41; then r0 += r8 (49). native_bad: one that writes outside
+    // its footprint.
+    a.label("call_checked");
+    a.word(0x4F22), a.word(imm(0xE000, 8, 8)), a.b12(0xB000, "native_checked"), a.word(kNop);
+    a.word(0x4F26), a.word(kRts), a.word(nm(0x300C, 0, 8));  // lds.l @r15+,pr ; rts ; add r8,r0
+    a.label("native_checked"), a.word(kRts), a.word(kNop);
+    a.label("native_bad"), a.word(kRts), a.word(kNop);
     // keep: direct calls that store and reload only their callees' footprints.
     // r8 = 8, r10 = 10 held across every call; keep_leaf adds 1 to r4 (4);
     // keep_chain touches nothing but calls keep_set, which reads r8 and sets
@@ -440,7 +449,7 @@ inline Programs build() {
     p.image = a.finish();
     p.data = a.at("data");
     for (const char* name : {"add64", "sub64", "neg64", "udiv", "sdiv", "bits", "mul", "loop", "sw", "calls", "indirect", "prcall", "prbra", "farjmp", "hang", "patch", "badjump",
-                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "inc", "dbl", "tail", "keep"})
+                             "fpu", "memory", "farith", "ftrc", "fpair", "fdouble", "fmac", "fsrra", "fipr", "ftrv", "fsca", "call_native", "native_me", "call_checked", "native_checked", "native_bad", "inc", "dbl", "tail", "keep"})
         p.entry[name] = a.at(name);
     // Fill the switch table: offsets from the braf's address + 4.
     const size_t t = (a.at("sw_table") - kBase) / 2;

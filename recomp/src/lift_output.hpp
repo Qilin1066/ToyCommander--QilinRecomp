@@ -33,6 +33,7 @@ struct LiftOptions {
     bool orphans = true;                                  // lift unreferenced functions too (every function found is lifted or replaced)
     unsigned files = 0;  // lifted_NNN.cpp files: 0 for 256 functions each; else exactly this many (for build systems)
     std::span<const ReplacedFunction> replaced;  // functions replaced natively outside the replaced regions
+    std::span<const NativeFootprint> natives;     // replaced functions whose natives' registers are known
 };
 
 struct LiftSummary {

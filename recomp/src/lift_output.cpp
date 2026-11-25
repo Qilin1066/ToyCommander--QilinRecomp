@@ -69,7 +69,17 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     std::map<uint32_t, LiftResult> lifted;
     for (auto& [entry, r] : results)
         if (r.ok) lifted.emplace(entry, std::move(r));
-    const std::map<uint32_t, RegSet> footprints = Lifter::footprints(lifted);
+    // A replaced function whose native's registers are known: its stub
+    // checks them (rt::replaced_within), and calls to it save only those.
+    // (A native registered where no replaced function is has no stub: its
+    // footprint isn't used.)
+    std::map<uint32_t, RegSet> natives;
+    for (const NativeFootprint& n : options.natives) {
+        if (!cfg.functions.contains(n.entry) || !(plan_of(n.entry) == Plan::replace || replaced_here(n.entry))) continue;
+        if (n.regs & ~kAllRegs) throw std::runtime_error(std::format("native footprint for {:08X} ({}) names no register", n.entry, n.name));
+        natives[n.entry] = n.regs;
+    }
+    const std::map<uint32_t, RegSet> footprints = Lifter::footprints(lifted, natives);
     for (auto& [entry, r] : lifted) Lifter::link(r, footprints);
     for (const auto& [entry, f] : cfg.functions) {
         std::string* chunk;
@@ -83,7 +93,10 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
         header += std::format("void {}(rt::Context& c);\n", fn_name(entry));
         table += std::format("    {{0x{:08X}u, gen::{}}},\n", entry, fn_name(entry));
         if (plan_of(entry) == Plan::replace || replaced_here(entry)) {
-            stubs += std::format("void {}(rt::Context& c) {{ rt::replaced(c, 0x{:08X}u); }}\n", fn_name(entry), entry);
+            if (const auto n = natives.find(entry); n != natives.end())
+                stubs += std::format("void {}(rt::Context& c) {{ rt::replaced_within(c, 0x{:08X}u, 0x{:X}ull); }}\n", fn_name(entry), entry, n->second);
+            else
+                stubs += std::format("void {}(rt::Context& c) {{ rt::replaced(c, 0x{:08X}u); }}\n", fn_name(entry), entry);
             ++sum.replaced;
             continue;
         }

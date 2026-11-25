@@ -84,8 +84,10 @@ public:
     // context, so the caller's local stays right without a store or reload.
     static void link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints);
     // Footprints of the functions lifted (entry -> its unlinked result), by
-    // a fixed point over the calls (recursion included).
-    static std::map<uint32_t, RegSet> footprints(const std::map<uint32_t, LiftResult>& lifted);
+    // a fixed point over the calls (recursion included). `natives`: the
+    // footprints of functions that aren't lifted but replaced by natives
+    // whose registers are known (layout.hpp's NativeFootprint).
+    static std::map<uint32_t, RegSet> footprints(const std::map<uint32_t, LiftResult>& lifted, const std::map<uint32_t, RegSet>& natives = {});
 
 private:
     const BootFile& boot_;

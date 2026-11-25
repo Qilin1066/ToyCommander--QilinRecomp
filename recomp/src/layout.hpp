@@ -69,4 +69,16 @@ struct DataBlock {
 };
 std::span<const DataBlock> data_blocks(std::string_view sha256_hex);
 
+// A native whose register footprint is known: the registers it may read or
+// change in the context (as lifter.hpp's RegSet numbers them, PR included),
+// worked out from its source by tools/check/native_footprints.py into
+// native_footprints.inc, which CI checks is up to date. Natives not listed
+// may use any register.
+struct NativeFootprint {
+    uint32_t entry;
+    uint64_t regs;
+    std::string_view name;
+};
+std::span<const NativeFootprint> native_footprints(std::string_view sha256_hex);
+
 }  // namespace qilin

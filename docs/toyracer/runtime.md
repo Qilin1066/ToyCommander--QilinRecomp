@@ -42,6 +42,9 @@ Toy Commander's bring-up had already named and replaced two dozen functions. The
 What it showed besides: here some of Shinobi's parts are linked among the middleware (the timer set-up `0x8C04D758`, the cable query `0x8C04DB04`), so they are lifted unless listed as replaced (`recomp/src/layout.cpp`).
 
 ## Native replacements (`toyracer/src/natives.cpp`, and the ones both games share in `shinobi/src`, at this game's addresses from `toyracer/src/build.hpp`)
+
+Each native's register footprint (the registers it reads or writes in the context) is worked out from its source by `tools/check/native_footprints.py` into `recomp/src/native_footprints.inc`: after adding or changing a native, run it (CI checks the table is up to date). Calls to a native with a footprint store and reload only those registers, and its stub stops (`Stop::Footprint`) if it changes any other. One that uses the context in a way the script can't follow (a computed register, the whole context, guest code run) gets no entry: every register.
+
 | Address | Name | What it does, and what the native code does |
 |---|---|---|
 | `0x8C05E108` | `memclr` | The C runtime's clear: zeroes r5 bytes from r4 and returns r4. The guest code clears 32-byte blocks through the store queues (`docs/code-analysis.md`), which leaves fr0 and fr1 zero when it takes that path. The native code is a bounds-checked `memset` and zeroes fr0 and fr1 on the same condition. |

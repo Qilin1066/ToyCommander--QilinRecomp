@@ -243,6 +243,8 @@ constexpr IndirectTargets kUsaIndirect[] = {
     {0x8C09F2AC, 0x8C09F2F6, 0x8C09BFE0, 1, "one more of the decoder's block handlers (a literal)"},
 };
 
+#include "native_footprints.inc"
+
 // Everything known about one build, found by its boot file's SHA-256.
 struct Build {
     std::string_view sha256;
@@ -251,10 +253,11 @@ struct Build {
     std::span<const IndirectTargets> indirect;
     std::span<const KnownEntry> entries;
     std::span<const DataBlock> data;
+    std::span<const NativeFootprint> natives;
 };
 constexpr Build kBuilds[] = {
-    {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", kUsa, kUsaReplaced, kUsaIndirect, kUsaEntries, kUsaData},  // Toy Commander (USA)
-    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", kEurope, kEuropeReplaced, {}, kEuropeEntries, kEuropeData},  // Toy Racer (Europe)
+    {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", kUsa, kUsaReplaced, kUsaIndirect, kUsaEntries, kUsaData, kToyCommanderFootprints},  // Toy Commander (USA)
+    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", kEurope, kEuropeReplaced, {}, kEuropeEntries, kEuropeData, kToyRacerFootprints},  // Toy Racer (Europe)
 };
 
 // The build's record; an empty one (nothing known) for any other boot file.
@@ -272,5 +275,6 @@ std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) {
 std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) { return build(sha256_hex).replaced; }
 std::span<const KnownEntry> known_entries(std::string_view sha256_hex) { return build(sha256_hex).entries; }
 std::span<const DataBlock> data_blocks(std::string_view sha256_hex) { return build(sha256_hex).data; }
+std::span<const NativeFootprint> native_footprints(std::string_view sha256_hex) { return build(sha256_hex).natives; }
 
 }  // namespace qilin

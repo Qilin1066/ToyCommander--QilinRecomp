@@ -499,8 +499,26 @@ void test_registry() {
             eq("unregistered: the caller's return address", s.value, caller + 6);
         }
     }
-    static const qilin::rt::Provided natives[] = {{native, "native_me", [](qilin::rt::Context& c) { c.r[0] = 41; }}};
+    static const qilin::rt::Provided natives[] = {
+        {native, "native_me", [](qilin::rt::Context& c) { c.r[0] = 41; }},
+        {g_p.entry.at("native_checked"), "native_checked", [](qilin::rt::Context& c) { c.r[0] = 41; }},
+        {g_p.entry.at("native_bad"), "native_bad", [](qilin::rt::Context& c) { c.r[0] = 0, c.r[9] = 1; }},
+    };
     qilin::rt::provide(natives);
+    // A native with a known footprint: the caller's r8 held across the call
+    // without a store, r0 reloaded; one that writes outside it stops.
+    {
+        Context k = fresh();
+        if (run(k, "call_checked")) eq("a native footprint: r0 reloaded, r8 held", k.r[0], 49);
+        Context b = fresh();
+        try {
+            qilin::rt::call(b, g_p.entry.at("native_bad"), 0);
+            ++g_failures, std::printf("FAIL a native writing outside its footprint returned\n");
+        } catch (const Stop& s) {
+            eq("outside its footprint", s.kind, Stop::Footprint), eq("outside its footprint: the native", s.pc, g_p.entry.at("native_bad"));
+            eq("outside its footprint: the register (r9)", s.value, 9);
+        }
+    }
     eq("native_name", qilin::rt::native_name(native) != nullptr, 1);
     Context c = fresh();
     if (run(c, "call_native")) eq("native code ran, and returned to its caller", c.r[0], 42);

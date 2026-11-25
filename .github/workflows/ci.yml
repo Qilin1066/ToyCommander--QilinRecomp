@@ -73,3 +73,7 @@ jobs:
         run: |
           sudo apt-get install -y -qq glslang-tools
           python3 tools/build_shaders.py --check
+      # The natives' register footprints (recomp/src/native_footprints.inc) are what their sources give.
+      - name: Native footprints up to date
+        if: matrix.sweep
+        run: python3 tools/check/native_footprints.py --check

@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Changed
+- **Calls into native code save fewer registers too**: each native's registers are worked out from its source (50 of Toy Commander's 61 natives, 70 of Toy Racer's 83), so a call to one, or to code that reaches only such natives, stores and reloads only those; a native that changes any other register stops the game, naming it. Stores and reloads around a direct call: 22.5 on average in Toy Commander (23.7 before, 33.8 originally), 22.1 in Toy Racer (25.3, 34.1). Not timed yet.
 - **The renderer builds a scene while the GPU finishes the previous one** (not timed yet): it waited for the GPU before converting the scene's vertices and decoding its textures; now it waits only when it reaches what the GPU's work in flight uses.
 - **Less work around calls between lifted functions** (not timed yet): a direct call stores and reloads only the registers the function called (and what it calls) can read or change, instead of all of the caller's: 30% fewer of those around Toy Commander's 11,223 calls, 26% around Toy Racer's 12,561. The same code otherwise.
 - **The two games' system layers are one copy** (`shinobi/src`): the start-up and the replacements of Shinobi's allocator, interrupt chains, clock, GD-ROM calls and threads, which each game had its own copy of, differing only in addresses; each game now gives its addresses in its `build.hpp`. The same natives at the same addresses as before.

@@ -805,8 +805,8 @@ void Lifter::link(LiftResult& r, const std::map<uint32_t, RegSet>& footprints) {
     r.code = std::move(out);
 }
 
-std::map<uint32_t, RegSet> Lifter::footprints(const std::map<uint32_t, LiftResult>& lifted) {
-    std::map<uint32_t, RegSet> fp;
+std::map<uint32_t, RegSet> Lifter::footprints(const std::map<uint32_t, LiftResult>& lifted, const std::map<uint32_t, RegSet>& natives) {
+    std::map<uint32_t, RegSet> fp = natives;
     for (const auto& [entry, r] : lifted) fp[entry] = r.touches;
     // Only ever grows, by at most 41 bits a function: it settles.
     for (bool changed = true; changed;) {

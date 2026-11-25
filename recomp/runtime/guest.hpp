@@ -52,7 +52,11 @@ struct Stop {
     // yet (pc: the function, value: where it was called from).
     // Hang: the guest code stops itself on purpose, with a branch to itself
     // (how the game ends on a fatal error): reported, not spun on.
-    enum Kind : uint32_t { Memory, BadJump, BadReturn, Trap, NotLifted, Unsupported, Unregistered, Hang } kind;
+    // Footprint: a native changed a register outside its footprint
+    // (replaced_within; pc: the function, value: the register's bit, as
+    // the lifter's RegSet numbers them: 0-15 rN, 16-24 T PR GBR MACH MACL S
+    // Q M FPUL, 32-47 frN).
+    enum Kind : uint32_t { Memory, BadJump, BadReturn, Trap, NotLifted, Unsupported, Unregistered, Hang, Footprint } kind;
     uint32_t pc;     // guest address of the instruction (or function)
     uint32_t value;  // the address or value involved
 };
@@ -399,5 +403,11 @@ void call(Context& c, uint32_t target, uint32_t from);
 // stops as unregistered, naming it and its caller, if there is none.
 // Defined by the runtime (system.cpp).
 void replaced(Context& c, uint32_t fn);
+// The same for a native whose footprint the lifter knows (`regs`: the
+// registers it may read or change, as the lifter's RegSet numbers them;
+// tools/check/native_footprints.py works them out from its source): direct
+// calls to it store and reload only those, so it is checked to have changed
+// no other, and stops (Stop::Footprint) if it did.
+void replaced_within(Context& c, uint32_t fn, uint64_t regs);
 
 }  // namespace qilin::rt

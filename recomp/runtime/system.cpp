@@ -28,6 +28,7 @@ const char* kind_name(Stop::Kind k) {
     case Stop::Unsupported: return "an operation the port doesn't support";
     case Stop::Unregistered: return "a replaced function with no native code yet";
     case Stop::Hang: return "the game's own stop: a branch to itself (its fatal-error loop)";
+    case Stop::Footprint: return "a native changed a register outside its footprint (tools/check/native_footprints.py)";
     }
     return "?";
 }
@@ -54,6 +55,19 @@ void replaced(Context& c, uint32_t fn) {
     if (it == r.end() || it->entry != fn) unregistered(fn, c.pr);
     it->fn(c);
     c.ret = c.pr;
+}
+
+void replaced_within(Context& c, uint32_t fn, uint64_t regs) {
+    const Context before = c;
+    replaced(c, fn);
+    const auto kept = [&](unsigned bit, bool same) {
+        if (!same && !(regs >> bit & 1u)) throw Stop{Stop::Footprint, fn, bit};
+    };
+    for (unsigned n = 0; n < 16; ++n) kept(n, c.r[n] == before.r[n]);
+    kept(16, c.t == before.t), kept(17, c.pr == before.pr), kept(18, c.gbr == before.gbr), kept(19, c.mach == before.mach);
+    kept(20, c.macl == before.macl), kept(21, c.s == before.s), kept(22, c.q == before.q), kept(23, c.m == before.m);
+    kept(24, c.fpul == before.fpul);
+    for (unsigned n = 0; n < 16; ++n) kept(32 + n, std::memcmp(&c.fr[n], &before.fr[n], sizeof(float)) == 0);  // bits: NaNs too
 }
 
 uint32_t function_containing(uint32_t address) {
