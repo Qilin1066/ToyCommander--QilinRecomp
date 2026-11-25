@@ -231,19 +231,6 @@ constexpr DataBlock kEuropeData[] = {
     {0x8C0E0410, 0x8C0E0414, "a literal nothing loads in Shinobi's exception code"},
 };
 
-constexpr std::string_view kEuropeSha = "da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4";
-
-constexpr std::string_view kUsaSha = "ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd";
-
-}  // namespace
-
-std::span<const Region> layout(std::string_view sha256_hex) {
-    if (sha256_hex == kUsaSha) return kUsa;
-    if (sha256_hex == kEuropeSha) return kEurope;
-    return {};
-}
-
-namespace {
 // The movie decoder's block handlers (docs/code-analysis.md): its two block
 // loops turn on 64-bit transfers and call through tables the decoder fills
 // from these, so the handlers run with SZ = 1 (and copy pixels with 8-byte
@@ -255,29 +242,35 @@ constexpr IndirectTargets kUsaIndirect[] = {
     {0x8C09F2AC, 0x8C09F2F6, 0x8C09B148, 4, "more of the decoder's block handlers (a literal pool)"},
     {0x8C09F2AC, 0x8C09F2F6, 0x8C09BFE0, 1, "one more of the decoder's block handlers (a literal)"},
 };
+
+// Everything known about one build, found by its boot file's SHA-256.
+struct Build {
+    std::string_view sha256;
+    std::span<const Region> regions;
+    std::span<const ReplacedFunction> replaced;
+    std::span<const IndirectTargets> indirect;
+    std::span<const KnownEntry> entries;
+    std::span<const DataBlock> data;
+};
+constexpr Build kBuilds[] = {
+    {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", kUsa, kUsaReplaced, kUsaIndirect, kUsaEntries, kUsaData},  // Toy Commander (USA)
+    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", kEurope, kEuropeReplaced, {}, kEuropeEntries, kEuropeData},  // Toy Racer (Europe)
+};
+
+// The build's record; an empty one (nothing known) for any other boot file.
+const Build& build(std::string_view sha256_hex) {
+    static constexpr Build kUnknown{};
+    for (const Build& b : kBuilds)
+        if (b.sha256 == sha256_hex) return b;
+    return kUnknown;
+}
+
 }  // namespace
 
-std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) {
-    if (sha256_hex == kUsaSha) return kUsaIndirect;
-    return {};
-}
-
-std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) {
-    if (sha256_hex == kUsaSha) return kUsaReplaced;
-    if (sha256_hex == kEuropeSha) return kEuropeReplaced;
-    return {};
-}
-
-std::span<const KnownEntry> known_entries(std::string_view sha256_hex) {
-    if (sha256_hex == kUsaSha) return kUsaEntries;
-    if (sha256_hex == kEuropeSha) return kEuropeEntries;
-    return {};
-}
-
-std::span<const DataBlock> data_blocks(std::string_view sha256_hex) {
-    if (sha256_hex == kUsaSha) return kUsaData;
-    if (sha256_hex == kEuropeSha) return kEuropeData;
-    return {};
-}
+std::span<const Region> layout(std::string_view sha256_hex) { return build(sha256_hex).regions; }
+std::span<const IndirectTargets> indirect_targets(std::string_view sha256_hex) { return build(sha256_hex).indirect; }
+std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex) { return build(sha256_hex).replaced; }
+std::span<const KnownEntry> known_entries(std::string_view sha256_hex) { return build(sha256_hex).entries; }
+std::span<const DataBlock> data_blocks(std::string_view sha256_hex) { return build(sha256_hex).data; }
 
 }  // namespace qilin
