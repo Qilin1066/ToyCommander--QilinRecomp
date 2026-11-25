@@ -722,7 +722,7 @@ struct Renderer::Impl {
         // A texture pack's: dumped once a run, replaced where the load folder has it.
         uint32_t width = p.width, height = p.height, image_levels = levels;
         const uint32_t* upload = pixels.data();
-        if (!pack_load.empty() || !pack_dump.empty()) {
+        if (!pack_files.empty() || !pack_dump.empty()) {  // hashed only when there's something to match or dump
             const uint32_t shape[] = {tcw >> 21, tsp & 0x3Fu, p.stride, uint32_t(palette_hash), uint32_t(palette_hash >> 32)};
             const uint64_t hash = hash_words(shape, 5, hash_bytes(raw.data(), raw.size(), 0xCBF29CE484222325ull));
             if (!pack_dump.empty() && dumped.insert(hash).second) {
@@ -763,8 +763,8 @@ struct Renderer::Impl {
     }
 
     // Texture packs: see Renderer::set_texture_packs.
-    void set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump) {
-        if (load == pack_load && dump == pack_dump) return;
+    void set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump, bool again = false) {
+        if (load == pack_load && dump == pack_dump && !again) return;
         pack_load = load, pack_dump = dump;
         pack_files.clear(), dumped.clear();
         std::error_code ec;
@@ -1452,6 +1452,7 @@ Picture Renderer::draw(const Source& source) { return impl_->draw(source); }
 void Renderer::set_anisotropy(unsigned level) { impl_->set_anisotropy(level); }
 void Renderer::set_msaa(unsigned samples) { impl_->set_msaa(samples); }
 void Renderer::set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump) { impl_->set_texture_packs(load, dump); }
+void Renderer::reload_texture_packs() { impl_->set_texture_packs(impl_->pack_load, impl_->pack_dump, true); }
 unsigned Renderer::msaa() const { return impl_->samples; }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }

@@ -45,6 +45,8 @@ public:
     // Whether the controls changed since the last call (the main loop's
     // table of them is rebuilt).
     bool take_controls_changed();
+    // "Reload texture packs" was pressed since the last call.
+    bool take_reload_textures();
     // The game has parked (or is running again).
     void set_parked(bool parked) { parked_ = parked; }
     // Asked to open: the game should park (video.cpp), then tick() opens it.
@@ -72,7 +74,7 @@ private:
     std::filesystem::path folder_;
     bool ok_ = false, opening_ = false, open_ = false, quit_ = false, close_asked_ = false;
     bool sdl_backend_ = false, vulkan_backend_ = false, parked_ = false;
-    bool hint_ = false, drawn_ = false, peek_ = false, controls_changed_ = false;
+    bool hint_ = false, drawn_ = false, peek_ = false, controls_changed_ = false, reload_textures_ = false;
     std::vector<std::string> frame_details_;
     uint64_t hint_until_ = 0;  // SDL ticks (ms)
     // Setting a control by pressing it.

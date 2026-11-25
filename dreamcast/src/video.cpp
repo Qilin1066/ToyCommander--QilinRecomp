@@ -317,6 +317,7 @@ void vblank() {
     g_renderer->set_anisotropy(g_settings.anisotropy);
     g_renderer->set_msaa(g_settings.msaa);
     set_texture_packs();
+    if (g_menu && g_menu->take_reload_textures()) g_renderer->reload_texture_packs();
     sound::set_volume(g_settings.volume, g_settings.mute_unfocused && g_display->sdl_window() && !g_display->focused());
     const float strength = g_settings.rumble ? float(g_settings.rumble_strength) / 100.0f : 0.0f;
     for (unsigned port = 0; port < 4; ++port) g_display->rumble(port, strength * maple::vibration(port));

@@ -129,6 +129,9 @@ public:
     // A replacement that can't be read, or two for one texture, stops the
     // program, naming them.
     void set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump);
+    // The load folder looked at again (files added, changed or removed), and
+    // every texture with it when next drawn.
+    void reload_texture_packs();
 
     // The frame buffer at an address as last drawn: null image if none has
     // been drawn there.

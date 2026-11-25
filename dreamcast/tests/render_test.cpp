@@ -601,6 +601,12 @@ int renderer() {
         };
         expect(packed_is(56, 8, 255, 255, 0), "texture packs: the replacement drawn in the texture's place");
         expect(packed_is(10, 10, 0, 255, 0) && r.stats().replaced >= 1, "texture packs: the rest as before");
+        // Reloaded after the file is gone: the original again.
+        fs::remove(root / "load" / "folder" / name, ec);
+        r.reload_texture_packs();
+        expect(r.stats().pack_files == 0, "texture packs: reloaded, the removed file isn't found");
+        r.draw(src);
+        expect(r.read_back() == px, "texture packs: reloaded without the replacement, the original again");
         r.set_texture_packs({}, {});
         r.draw(src);
         expect(r.read_back() == px, "texture packs: without them, the original again");
