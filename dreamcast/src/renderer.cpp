@@ -1494,12 +1494,24 @@ struct Renderer::Impl {
         }
         uint32_t bound = ~0u;
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &volume_set, 0, nullptr);
+        // What the last draw set, so a draw sets only what differs: every
+        // pipeline here has the same dynamic states (pipeline()), so a value
+        // stays set across pipeline binds; the push constants and set 0 stay
+        // bound across them too (one layout).
+        bool first = true;
+        bool last_depth_write = false;
+        uint32_t last_depth = 0;
+        Stencil last_stencil = Stencil::off;
+        VkDescriptorSet last_set = VK_NULL_HANDLE;
+        decltype(push) pushed{};
         for (const Draw& d : draws) {
             if (d.pipeline != bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(d.pipeline)), bound = d.pipeline;
-            vkCmdSetDepthWriteEnable(cmd, d.depth_write);
-            vkCmdSetDepthCompareOp(cmd, static_cast<VkCompareOp>(d.depth));  // the hardware's modes are Vulkan's, in order
-            set_stencil(d.stencil);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr);
+            if (first || d.depth_write != last_depth_write) vkCmdSetDepthWriteEnable(cmd, d.depth_write), last_depth_write = d.depth_write;
+            if (first || d.depth != last_depth)  // the hardware's modes are Vulkan's, in order
+                vkCmdSetDepthCompareOp(cmd, static_cast<VkCompareOp>(d.depth)), last_depth = d.depth;
+            if (first || d.stencil != last_stencil) set_stencil(d.stencil), last_stencil = d.stencil;
+            if (first || d.set != last_set)
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &d.set, 0, nullptr), last_set = d.set;
             push.flags = d.flags;
             push.sort_word = d.sort_word;
             // The scene widened about its middle; an overlay moved to the middle, its shape kept.
@@ -1508,7 +1520,11 @@ struct Renderer::Impl {
             // The user tile clip, in scene pixels (tiles of 32), its maximum tile included.
             push.clip[0] = float(d.clip & 0xFFu) * 32.0f, push.clip[1] = float(d.clip >> 8 & 0xFFu) * 32.0f;
             push.clip[2] = float((d.clip >> 16 & 0xFFu) + 1) * 32.0f, push.clip[3] = float((d.clip >> 24) + 1) * 32.0f;
-            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
+            if (first || std::memcmp(&pushed, &push, sizeof push) != 0) {
+                vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
+                pushed = push;
+            }
+            first = false;
             vkCmdDrawIndexed(cmd, d.count, 1, d.first, 0, 0);
         }
         vkCmdEndRendering(cmd);
