@@ -248,6 +248,10 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
                 if (s.anisotropy & (s.anisotropy - 1)) return fail("anisotropy is 1, 2, 4, 8 or 16");
             } else if (name == "msaa") {
                 if (!number(s.msaa, 1, 8) || (s.msaa & (s.msaa - 1))) return fail("msaa is 1, 2, 4 or 8");
+            } else if (name == "texture_packs") {
+                if (!boolean(s.texture_packs)) return false;
+            } else if (name == "dump_textures") {
+                if (!boolean(s.dump_textures)) return false;
             } else if (name == "vsync") {
                 if (!boolean(s.vsync)) return false;
             } else if (name == "gpu") {
@@ -260,7 +264,8 @@ bool parse_settings(const std::string& text, Settings& out, std::string& error) 
                 if (!boolean(s.variable_refresh)) return false;
             } else {
                 return fail("[display] has no '" + name +
-                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale anisotropy msaa vsync gpu "
+                            "' (preset fullscreen monitor scaling smooth look scanlines mask internal_scale anisotropy msaa texture_packs "
+                            "dump_textures vsync gpu "
                             "performance_overlay match_refresh variable_refresh)");
             }
             continue;
@@ -347,6 +352,11 @@ std::string settings_text(const Settings& s) {
         "# Multisample anti-aliasing: 1 (none, the console's), 2, 4 or 8 samples a pixel (at most what the\n"
         "# GPU has). Smooths polygons' edges; with internal_scale above 1 they're smoother still.\n"
         "msaa = " + std::to_string(s.msaa) + "\n"
+        "# Texture packs: PNG files in the data folder's textures/load (or folders in it), each drawn in place\n"
+        "# of the texture its name gives (<width>x<height>_<hash>.png), at any size. dump_textures saves every\n"
+        "# texture the game draws to textures/dump, so named, to make one from.\n"
+        "texture_packs = " + b(s.texture_packs) + "\n"
+        "dump_textures = " + b(s.dump_textures) + "\n"
         "# vsync: true, no tearing; false, the lowest latency.\n"
         "vsync = " + b(s.vsync) + "\n"
         "# The graphics device, by name (empty: the best one).\n"

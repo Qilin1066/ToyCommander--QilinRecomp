@@ -13,6 +13,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - The recompiler keeps each supported build's facts (regions, replaced functions, known entries, data blocks, indirect call tables) in one record, found once by the boot file's hash; the lifted code is byte for byte what it was.
 
 ### Added
+- **Texture packs**: `dump_textures = true` saves every texture the game draws to `textures/dump` in the data folder as `<width>x<height>_<hash>.png`; PNG files so named in `textures/load` (or folders in it) are drawn in those textures' place, at any size (`texture_packs`, on by default). Both on the menu's Graphics page.
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were. A race's two renders a frame each resolve only their own lines.
 
 ### Fixed

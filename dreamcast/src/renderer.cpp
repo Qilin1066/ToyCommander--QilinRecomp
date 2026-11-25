@@ -7,16 +7,21 @@
 #include "renderer.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <map>
+#include <set>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "guest.hpp"
+#include "qilin/host/image.hpp"
 #include "shaders.inc"
 #include "texture.hpp"
 
@@ -156,6 +161,55 @@ uint64_t hash_words(const uint32_t* w, uint32_t n, uint64_t h) {
     for (uint32_t k = 0; k < n; ++k) h = (h ^ w[k]) * 0x100000001B3ull;
     return h;
 }
+uint64_t hash_bytes(const uint8_t* b, size_t n, uint64_t h) {
+    for (size_t k = 0; k < n; ++k) h = (h ^ b[k]) * 0x100000001B3ull;
+    return h;
+}
+
+}  // namespace
+
+std::string pack_name(uint32_t width, uint32_t height, uint64_t hash) {
+    char name[64];
+    std::snprintf(name, sizeof name, "%ux%u_%016llx.png", width, height, static_cast<unsigned long long>(hash));
+    return name;
+}
+
+bool pack_hash(const std::string& name, uint64_t& hash) {
+    unsigned w = 0, h = 0;
+    char hex[17] = {}, rest[8] = {};
+    if (std::sscanf(name.c_str(), "%5ux%5u_%16[0-9a-fA-F]%7s", &w, &h, hex, rest) != 4 || std::strlen(hex) != 16) return false;
+    const std::string ext = rest;
+    if (ext != ".png" && ext != ".PNG") return false;
+    hash = std::strtoull(hex, nullptr, 16);
+    return true;
+}
+
+namespace {
+
+// The levels below a replacement's largest, each the average of 2x2 of the
+// one above (a side of 1 stays 1), after it in `px`.
+void mip_chain(std::vector<uint32_t>& px, uint32_t width, uint32_t height, uint32_t levels) {
+    size_t from = 0;
+    for (uint32_t l = 1; l < levels; ++l) {
+        const uint32_t w = std::max(width >> (l - 1), 1u), h = std::max(height >> (l - 1), 1u);
+        const uint32_t nw = std::max(w / 2, 1u), nh = std::max(h / 2, 1u);
+        const size_t to = px.size();
+        px.resize(to + size_t{nw} * nh);
+        for (uint32_t y = 0; y < nh; ++y)
+            for (uint32_t x = 0; x < nw; ++x) {
+                uint32_t sum[4] = {};
+                for (uint32_t dy = 0; dy < 2; ++dy)
+                    for (uint32_t dx = 0; dx < 2; ++dx) {
+                        const uint32_t v = px[from + size_t{std::min(2 * y + dy, h - 1)} * w + std::min(2 * x + dx, w - 1)];
+                        for (unsigned c = 0; c < 4; ++c) sum[c] += v >> (8 * c) & 0xFFu;
+                    }
+                uint32_t v = 0;
+                for (unsigned c = 0; c < 4; ++c) v |= ((sum[c] + 2) / 4) << (8 * c);
+                px[to + size_t{y} * nw + x] = v;
+            }
+        from = to;
+    }
+}
 
 }  // namespace
 
@@ -230,6 +284,14 @@ struct Renderer::Impl {
     std::unordered_map<uint32_t, VkSampler> samplers;
     std::unordered_map<uint64_t, Texture> textures;
     Texture white{};
+    // Texture packs (set_texture_packs): the replacements found in the load
+    // folder, by hash; what was dumped this run; images and sets a
+    // replacement took the place of, freed once the GPU's work is done.
+    std::filesystem::path pack_load, pack_dump;
+    std::unordered_map<uint64_t, std::filesystem::path> pack_files;
+    std::set<uint64_t> dumped;
+    std::vector<Texture> retired;
+    std::vector<uint32_t> replacement;
     uint64_t frame = 0;
     Stats stats{};
     float anisotropy = 1.0f;  // for filtered textures (set_anisotropy)
@@ -606,6 +668,15 @@ struct Renderer::Impl {
         }
     }
 
+    // What texture packs' replacements took the place of: after wait().
+    void free_retired() {
+        for (Texture& t : retired) {
+            for (const Texture::Set& s : t.sets) check(vkFreeDescriptorSets(gpu.device, s.pool, 1, &s.set), "vkFreeDescriptorSets");
+            t.image.destroy(gpu);
+        }
+        retired.clear();
+    }
+
     // An image's every level, one after another from the largest.
     void queue_upload(const Image& image, const uint32_t* rgba, bool fresh) {
         size_t n = 0;
@@ -648,12 +719,71 @@ struct Renderer::Impl {
             texture::decode_level(p, raw.data(), l, pixels.data() + at);
             at += std::max(p.width >> l, 1u) * std::max(p.height >> l, 1u);
         }
-        if (fresh) {
-            t.image = Image::create(gpu, p.width, p.height, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, levels);
-            ++stats.textures;
+        // A texture pack's: dumped once a run, replaced where the load folder has it.
+        uint32_t width = p.width, height = p.height, image_levels = levels;
+        const uint32_t* upload = pixels.data();
+        if (!pack_load.empty() || !pack_dump.empty()) {
+            const uint32_t shape[] = {tcw >> 21, tsp & 0x3Fu, p.stride, uint32_t(palette_hash), uint32_t(palette_hash >> 32)};
+            const uint64_t hash = hash_words(shape, 5, hash_bytes(raw.data(), raw.size(), 0xCBF29CE484222325ull));
+            if (!pack_dump.empty() && dumped.insert(hash).second) {
+                const std::filesystem::path file = pack_dump / pack_name(p.width, p.height, hash);
+                std::error_code ec;
+                std::string error;
+                if (!std::filesystem::exists(file, ec) && !qilin::host::save_png(file, p.width, p.height, pixels.data(), error))
+                    qilin::host::die("%s", ("cannot dump a texture to " + file.string() + ": " + error).c_str());
+                ++stats.dumped;
+            }
+            if (const auto it = pack_files.find(hash); it != pack_files.end()) {
+                std::string error;
+                if (!qilin::host::load_png(it->second, width, height, replacement, error))
+                    qilin::host::die("%s", ("cannot read the texture pack's " + it->second.string() + ": " + error).c_str());
+                // Mip-mapped as the original is, where its size halves to 1x1.
+                const bool halves = !(width & (width - 1)) && !(height & (height - 1));
+                image_levels = levels > 1 && halves ? uint32_t(std::bit_width(std::max(width, height))) : 1u;
+                mip_chain(replacement, width, height, image_levels);
+                upload = replacement.data();
+                ++stats.replaced;
+            }
         }
-        queue_upload(t.image, pixels.data(), fresh);
+        // A replacement of another size (or none now, after one): a new
+        // image; the old one and its sets go once the GPU is done with them.
+        if (!fresh && (t.image.width != width || t.image.height != height || t.image.levels != image_levels)) {
+            Texture old;
+            old.image = t.image, old.sets = std::move(t.sets);
+            retired.push_back(std::move(old));
+            t.image = Image{}, t.sets.clear();
+        }
+        const bool new_image = !t.image.image;
+        if (new_image) {
+            t.image = Image::create(gpu, width, height, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, image_levels);
+            if (fresh) ++stats.textures;
+        }
+        queue_upload(t.image, upload, new_image);
         return t;
+    }
+
+    // Texture packs: see Renderer::set_texture_packs.
+    void set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump) {
+        if (load == pack_load && dump == pack_dump) return;
+        pack_load = load, pack_dump = dump;
+        pack_files.clear(), dumped.clear();
+        std::error_code ec;
+        if (!dump.empty()) {
+            std::filesystem::create_directories(dump, ec);
+            if (ec) qilin::host::die("%s", ("cannot make the texture dump folder " + dump.string() + ": " + ec.message()).c_str());
+        }
+        if (!load.empty() && std::filesystem::is_directory(load, ec)) {
+            for (auto it = std::filesystem::recursive_directory_iterator(load, ec); !ec && it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+                uint64_t hash = 0;
+                if (!it->is_regular_file(ec) || !pack_hash(it->path().filename().string(), hash)) continue;
+                const auto [at, added] = pack_files.emplace(hash, it->path());
+                if (!added) qilin::host::die("%s", ("two texture pack files for one texture: " + at->second.string() + " and " + it->path().string()).c_str());
+            }
+            if (ec) qilin::host::die("%s", ("cannot read the texture pack folder " + load.string() + ": " + ec.message()).c_str());
+        }
+        for (auto& [k, t] : textures) t.generation = ~uint64_t{0};  // decoded (and looked up) again when next used
+        stats.pack_files = uint32_t(pack_files.size());
     }
 
     static bool sane(const ta::Vertex& a) {
@@ -1047,6 +1177,7 @@ struct Renderer::Impl {
         // cache's sets are written or freed: the previous render must be done.
         wait();
         if (frame % kEvictEvery == 0) evict_textures();  // keeps what this scene uses (used == frame)
+        free_retired();
         // The translucent list in auto-sort mode: sorted for each pixel where
         // the device can (each draw onto the per-pixel lists, with its blend
         // factors and its place in the order sent), else triangle by triangle.
@@ -1288,6 +1419,7 @@ struct Renderer::Impl {
     void destroy() {
         wait();
         for (auto& [k, t] : textures) t.image.destroy(gpu);
+        for (Texture& t : retired) t.image.destroy(gpu);
         white.image.destroy(gpu);
         for (auto& [k, p] : pipelines) vkDestroyPipeline(gpu.device, p, nullptr);
         for (auto& [k, s] : samplers) vkDestroySampler(gpu.device, s, nullptr);
@@ -1319,6 +1451,7 @@ Renderer::~Renderer() { impl_->destroy(); }
 Picture Renderer::draw(const Source& source) { return impl_->draw(source); }
 void Renderer::set_anisotropy(unsigned level) { impl_->set_anisotropy(level); }
 void Renderer::set_msaa(unsigned samples) { impl_->set_msaa(samples); }
+void Renderer::set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump) { impl_->set_texture_packs(load, dump); }
 unsigned Renderer::msaa() const { return impl_->samples; }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }

@@ -132,6 +132,13 @@ void shot(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
     std::fclose(f);
 }
 
+// The texture packs' folders, as the settings say: in the data folder.
+void set_texture_packs() {
+    const std::filesystem::path folder = g_data / "textures";
+    g_renderer->set_texture_packs(g_settings.texture_packs ? folder / "load" : std::filesystem::path{},
+                                  g_settings.dump_textures ? folder / "dump" : std::filesystem::path{});
+}
+
 }  // namespace
 
 void start() {
@@ -177,6 +184,7 @@ void start() {
     g_renderer = std::make_unique<renderer::Renderer>(g_display->gpu(), g_scale);
     g_renderer->set_anisotropy(g_settings.anisotropy);
     g_renderer->set_msaa(g_settings.msaa);
+    set_texture_packs();
     if (!o.headless) {
         g_menu = std::make_unique<Menu>(*g_display, g_settings, g_data);
         g_menu->set_running_scale(g_scale);
@@ -308,6 +316,7 @@ void vblank() {
     // The settings the menu may have changed: each is nothing to do while unchanged.
     g_renderer->set_anisotropy(g_settings.anisotropy);
     g_renderer->set_msaa(g_settings.msaa);
+    set_texture_packs();
     sound::set_volume(g_settings.volume, g_settings.mute_unfocused && g_display->sdl_window() && !g_display->focused());
     const float strength = g_settings.rumble ? float(g_settings.rumble_strength) / 100.0f : 0.0f;
     for (unsigned port = 0; port < 4; ++port) g_display->rumble(port, strength * maple::vibration(port));

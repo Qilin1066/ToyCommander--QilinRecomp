@@ -48,6 +48,7 @@ bool same(const tc::Settings& a, const tc::Settings& b) {
         a.smooth != b.smooth || a.look != b.look || a.scanlines != b.scanlines || a.mask != b.mask || a.vsync != b.vsync || a.gpu != b.gpu ||
         a.performance_overlay != b.performance_overlay || a.match_refresh != b.match_refresh || a.variable_refresh != b.variable_refresh ||
         a.rumble != b.rumble || a.language != b.language || a.stereo != b.stereo || a.anisotropy != b.anisotropy || a.msaa != b.msaa ||
+        a.texture_packs != b.texture_packs || a.dump_textures != b.dump_textures ||
         a.rumble_strength != b.rumble_strength || a.volume != b.volume || a.mute_unfocused != b.mute_unfocused)
         return false;
     for (unsigned c = 0; c < tc::kControlCount; ++c)
@@ -121,7 +122,7 @@ int main() {
         s.preset = "desktop", s.fullscreen = true, s.monitor = "DELL U2720Q", s.scaling = host::Scaling::integer;
         s.smooth = false, s.look = host::Look::crt, s.scanlines = 80, s.mask = 0, s.scale = 5;
         s.vsync = false, s.gpu = "AMD Radeon RX 6600", s.rumble = false, s.language = 3, s.stereo = false, s.performance_overlay = true;
-        s.anisotropy = 8, s.msaa = 8, s.rumble_strength = 40, s.volume = 65, s.mute_unfocused = true;
+        s.anisotropy = 8, s.msaa = 8, s.texture_packs = false, s.dump_textures = true, s.rumble_strength = 40, s.volume = 65, s.mute_unfocused = true;
         s.controls[tc::kCtlL] = {{Binding::kPad, host::kPadLT, {}}, {Binding::kKey, 0, "Left Shift"}};
         tc::Settings back;
         std::string e;

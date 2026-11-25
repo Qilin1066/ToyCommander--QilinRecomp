@@ -542,6 +542,10 @@ void Menu::display_page() {
     }
     if (s_.msaa > most) ImGui::TextDisabled("This GPU has up to %ux: %ux is used.", most, most);
     else ImGui::TextDisabled("Smooths polygons' edges; more samples, more GPU work.");
+    ImGui::Checkbox("Texture packs", &s_.texture_packs);
+    ImGui::TextDisabled("Replacements from textures/load in the data folder, named <width>x<height>_<hash>.png.");
+    ImGui::Checkbox("Dump textures", &s_.dump_textures);
+    ImGui::TextDisabled("Saves every texture the game draws to textures/dump, so named, to make a pack from.");
 
     ImGui::SeparatorText("Graphics device");
     const std::string chosen = s_.gpu.empty() ? "The best one" : s_.gpu;

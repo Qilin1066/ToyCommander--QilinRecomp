@@ -258,7 +258,7 @@ if(QILIN_HOST)
     # messages, the window's title, the data folder and the settings file.
     # (The tests use Toy Commander's.)
     function(qilin_game_host game title version)
-        add_library(qilin_host_${game} STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp)
+        add_library(qilin_host_${game} STATIC host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/src/image.cpp)
         target_include_directories(qilin_host_${game} PUBLIC host/include)
         target_compile_definitions(qilin_host_${game} PUBLIC QILIN_APP="${game}" QILIN_APP_TITLE="${title}")
         target_link_libraries(qilin_host_${game} PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)

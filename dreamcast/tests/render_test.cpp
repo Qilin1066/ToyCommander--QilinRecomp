@@ -7,11 +7,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <initializer_list>
 #include <iterator>
 #include <vector>
 
 #include "qilin/host/display.hpp"
+#include "qilin/host/image.hpp"
 #include "renderer.hpp"
 #include "ta.hpp"
 #include "texture.hpp"
@@ -558,6 +560,51 @@ int renderer() {
         r.draw(src);
         expect(r.stats().textures == decoded + 1, "texture cache: drawn again, it's decoded anew");
         expect(r.read_back() == px, "texture cache: into the same picture");
+    }
+
+    // Texture packs: the scene's texture dumped once, named by its size and
+    // hash, as decoded; a replacement of another size (16x16 yellow) under
+    // that name, in a folder in the load folder, drawn in its place; without
+    // packs, the original again.
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "qilin_render_test_packs";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        r.set_texture_packs({}, root / "dump");
+        r.draw(src);
+        std::vector<fs::path> dumped;
+        for (const auto& e : fs::directory_iterator(root / "dump", ec)) dumped.push_back(e.path());
+        expect(dumped.size() == 1 && r.stats().dumped == 1, "texture packs: the scene's one texture dumped");
+        uint64_t hash = 0;
+        const std::string name = dumped.empty() ? std::string() : dumped[0].filename().string();
+        expect(dreamcast::renderer::pack_hash(name, hash) && name == dreamcast::renderer::pack_name(8, 8, hash),
+               "texture packs: named by its size and hash");
+        uint32_t w = 0, h = 0;
+        std::vector<uint32_t> rgba;
+        std::string error;
+        expect(!dumped.empty() && qilin::host::load_png(dumped[0], w, h, rgba, error) && w == 8 && h == 8 &&
+                   std::ranges::all_of(rgba, [](uint32_t v) { return v == 0xFFFF0000u; }),
+               "texture packs: dumped as decoded (opaque blue)");
+        r.draw(src);
+        expect(r.stats().dumped == 1, "texture packs: dumped once a run");
+        fs::create_directories(root / "load" / "folder", ec);
+        const std::vector<uint32_t> yellow(16 * 16, 0xFF00FFFFu);
+        expect(qilin::host::save_png(root / "load" / "folder" / name, 16, 16, yellow.data(), error), "texture packs: a replacement written");
+        r.set_texture_packs(root / "load", {});
+        expect(r.stats().pack_files == 1, "texture packs: the replacement found, in a folder in the load folder");
+        r.draw(src);
+        const std::vector<uint8_t> packed = r.read_back();
+        const auto packed_is = [&](int x, int y, uint8_t red, uint8_t green, uint8_t blue) {
+            const uint8_t* q = &packed[size_t(y * 64 + x) * 4];
+            return q[0] == red && q[1] == green && q[2] == blue;
+        };
+        expect(packed_is(56, 8, 255, 255, 0), "texture packs: the replacement drawn in the texture's place");
+        expect(packed_is(10, 10, 0, 255, 0) && r.stats().replaced >= 1, "texture packs: the rest as before");
+        r.set_texture_packs({}, {});
+        r.draw(src);
+        expect(r.read_back() == px, "texture packs: without them, the original again");
+        fs::remove_all(root, ec);
     }
     return 0;
 }

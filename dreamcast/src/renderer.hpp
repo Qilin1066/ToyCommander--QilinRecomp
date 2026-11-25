@@ -18,7 +18,9 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "qilin/host/vulkan.hpp"
@@ -88,6 +90,12 @@ struct Picture {
 float fog_density(uint32_t reg);
 float table_fog(float density, const uint32_t* table, float inv_w);
 
+// A texture pack's file name for a texture `width` x `height` texels with
+// hash `hash`: "256x128_0123456789abcdef.png"; and the hash in such a name
+// (false if it isn't one).
+std::string pack_name(uint32_t width, uint32_t height, uint64_t hash);
+bool pack_hash(const std::string& name, uint64_t& hash);
+
 class Renderer {
 public:
     // `scale`: host pixels per game pixel, each way (the internal resolution).
@@ -109,6 +117,19 @@ public:
     void set_msaa(unsigned samples);
     unsigned msaa() const;  // what it is now, after the device's limit
 
+    // Texture packs, an enhancement. Each texture is known by a hash of what
+    // the game gave the hardware for it (its bytes in video memory, its
+    // format, size and stride, its palette's colours), wherever it is.
+    // `load` (empty: none): PNG files named as pack_name names them, in it or
+    // in folders in it, each drawn in place of that texture, at any size
+    // (mip-mapped as the original is, where its sides are powers of 2).
+    // `dump` (empty: none): every texture decoded is saved there, once a
+    // run, so named (a file already there is kept). Nothing to do while
+    // unchanged; a change looks at every texture again when it's next drawn.
+    // A replacement that can't be read, or two for one texture, stops the
+    // program, naming them.
+    void set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump);
+
     // The frame buffer at an address as last drawn: null image if none has
     // been drawn there.
     Picture picture(uint32_t frame_buffer) const;
@@ -120,6 +141,8 @@ public:
         uint32_t draws = 0, triangles = 0, culled = 0, textures = 0, uploads = 0, dropped = 0;
         uint32_t evicted = 0;  // textures let go, unused for a while (all the run's, as `textures` is)
         uint32_t cached = 0;   // textures held now
+        uint32_t replaced = 0, dumped = 0;  // texture packs: decodes replaced, textures dumped (the run's)
+        uint32_t pack_files = 0;            // replacements found in the load folder
     };
     const Stats& stats() const;
 
