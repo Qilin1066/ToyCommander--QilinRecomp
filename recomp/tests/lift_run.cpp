@@ -545,6 +545,12 @@ void test_bus() {
     eq("a mirror", rt::ld32(block - 0x8C000000u + 0x8D000000u), 0x11223344u);
     rt::st16(block - 0x8C000000u + 0xAC000002u, 0xBEEFu);
     eq("a store through a view", rt::ld32(block), 0xBEEF3344u);
+    // Native fills: in RAM's own view, and through another (the bus).
+    rt::fill(block + 4, 0x5A, 4);
+    eq("a fill in RAM", rt::ld32(block + 4), 0x5A5A5A5Au);
+    rt::fill(block - 0x8C000000u + 0xAC000005u, 0x00, 2);
+    eq("a fill through a view", rt::ld32(block + 4), 0x5A00005Au);
+    eq("a fill over RAM's size isn't in it", rt::in_ram(0x8C000000u, 0x01000001u) ? 1u : 0u, 0u);
     // A store queue sent to RAM: QACR0 names area 3 (0x0C000000, bits 4-2 = 3).
     rt::st32(0xFF000038u, 0x0Cu);
     for (uint32_t k = 0; k < 32; k += 4) rt::st32(0xE0000000u + k, 0xA0000000u + k);

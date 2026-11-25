@@ -36,8 +36,7 @@ void memclr(rt::Context& c) {
     const uint32_t dest = c.r[4], n = c.r[5];
     c.r[0] = dest;
     if (n == 0) return;
-    rt::check(dest, n);
-    std::memset(rt::g_mem + dest, 0, n);
+    rt::fill(dest, 0, n);  // RAM in one go; anywhere else through the bus
     const uint32_t head = 32 - (dest & 31);
     if (n >= 32 && n - head >= 32) c.fr[0] = c.fr[1] = 0.0f;
 }
@@ -56,8 +55,7 @@ void memset_sq(rt::Context& c) {
     const uint32_t dest = c.r[4], n = c.r[6];
     c.r[0] = dest;
     if (n == 0) return;
-    rt::check(dest, n);
-    std::memset(rt::g_mem + dest, static_cast<int>(c.r[5] & 0xFFu), n);
+    rt::fill(dest, static_cast<uint8_t>(c.r[5]), n);
     const uint32_t head = 32 - (dest & 31);
     if (n >= 32 && n - head >= 32) c.fpul = c.r[8];
 }

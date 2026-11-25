@@ -75,8 +75,10 @@ struct Stop {
 void hang(uint32_t pc);
 
 // Guest memory: the 4 GB guest address space at a host base, `base + addr`.
-// The runtime maps RAM at each address the game uses for it (0x8C000000 and
-// its aliases) as views of one memory object.
+// Only RAM's view at 0x8C000000 is backed there; its other views (0xAC...,
+// 0x0C..., and so on) go through the bus, which finds the same bytes
+// (bus.cpp). Native code that writes host memory directly must keep to
+// that view (rt::in_ram; rt::fill does).
 inline uint8_t* g_mem = nullptr;
 
 #ifdef QILIN_CHECKED_MEMORY
@@ -103,7 +105,9 @@ inline void check(uint32_t, uint32_t) {}
 // the hardware) takes the bus (bus.cpp), which hands it to the devices the
 // runtime maps there, or stops.
 inline constexpr uint32_t kRamLo = 0x8C000000u, kRamBytes = 0x01000000u;
-inline bool in_ram(uint32_t a, uint32_t n) { return a - kRamLo <= kRamBytes - n; }
+// (`n` over RAM's size is never in it; for the accessors' constant sizes
+// that test folds away.)
+inline bool in_ram(uint32_t a, uint32_t n) { return n <= kRamBytes && a - kRamLo <= kRamBytes - n; }
 uint32_t bus_read(uint32_t a, unsigned n);
 void bus_write(uint32_t a, uint32_t v, unsigned n);
 
@@ -158,6 +162,17 @@ inline uint32_t ld16s(uint32_t a) { return ld16s(g_mem, a); }
 inline void st8(uint32_t a, uint32_t v) { st8(g_mem, a, v); }
 inline void st16(uint32_t a, uint32_t v) { st16(g_mem, a, v); }
 inline void st32(uint32_t a, uint32_t v) { st32(g_mem, a, v); }
+// Native code's bulk writes: `n` bytes of `v` from `a`. Within RAM's view at
+// 0x8C000000 one memset; anywhere else (RAM's other views, video memory) a
+// byte at a time through the bus, as the guest's own stores would go.
+inline void fill(uint32_t a, uint8_t v, uint32_t n) {
+    if (in_ram(a, n)) {
+        check(a, n);
+        std::memset(g_mem + a, v, n);
+        return;
+    }
+    for (uint32_t k = 0; k < n; ++k) st8(a + k, v);
+}
 
 // ---- arithmetic with T ----
 

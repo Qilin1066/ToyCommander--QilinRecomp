@@ -346,8 +346,17 @@ void start() {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             {
                 auto held = lock();
-                sync();
-                if (g_tick) g_tick();
+                // The driver's work (the tick) can stop, as on the game's
+                // thread (a message ring out of place): reported here, where
+                // nothing above would catch it.
+                try {
+                    sync();
+                    if (g_tick) g_tick();
+                } catch (const rt::Stop& s) {
+                    std::fprintf(stderr, "(in the sound mixer's thread)\n");
+                    rt::report(stderr, s, nullptr);
+                    rt::end(3);
+                }
                 block.swap(g_out);
                 g_out.clear();
             }
