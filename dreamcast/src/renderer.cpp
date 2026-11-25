@@ -1001,10 +1001,13 @@ struct Renderer::Impl {
         b = Buffer::host_visible(gpu, std::max<VkDeviceSize>(need * 3 / 2, 1u << 20), usage);
     }
 
+    // The scene is built (its vertices, draws and textures decoded) on the
+    // CPU while the previous render's work may still run on the GPU: until
+    // the wait below, nothing that work uses is written or freed (new images,
+    // samplers and descriptor sets only; target() waits itself before it
+    // replaces an attachment).
     Picture draw(const Source& src) {
-        wait();
         ++frame;
-        if (frame % kEvictEvery == 0) evict_textures();
         stats.draws = stats.triangles = stats.culled = stats.uploads = stats.dropped = 0;
         const float wide_width = float(src.width) * src.widen;  // the picture's width in the game's pixels
         Target& t = target(src.frame_buffer, static_cast<uint32_t>(std::lround(wide_width)), src.height);
@@ -1040,6 +1043,10 @@ struct Renderer::Impl {
                 if (list == ta::kTranslucent && !cheap && modified(s)) add_strip(src, s, scene.vertices.data() + s.first, false, 1);
             }
         }
+        // From here on, the buffers, the per-pixel lists and the texture
+        // cache's sets are written or freed: the previous render must be done.
+        wait();
+        if (frame % kEvictEvery == 0) evict_textures();  // keeps what this scene uses (used == frame)
         // The translucent list in auto-sort mode: sorted for each pixel where
         // the device can (each draw onto the per-pixel lists, with its blend
         // factors and its place in the order sent), else triangle by triangle.
