@@ -1,45 +1,46 @@
 # ToyCommander--QilinRecomp
 
-Static recompilations of **Toy Commander** (No Cliché / Sega, Dreamcast, 1999) and **Toy Racer** (No Cliché / Sega, Dreamcast, 2000), the same studio's two games on the same engine and libraries, into portable C++23 with a Vulkan 1.3 renderer, aimed at 64-bit Windows, Linux and macOS, on x86-64 or ARM64. Anything with a Vulkan 1.3 driver is in scope, including the Raspberry Pi 4 (Mesa 24.3+); Macs are covered through MoltenVK. Efficiency is the first priority: a Raspberry Pi 4–class board is our reference for typical low-end hardware, not a floor.
+Static recompilations of **Toy Commander** (No Cliché / Sega, Dreamcast, 1999) and **Toy Racer** (No Cliché / Sega, Dreamcast, 2000) into portable C++23 with a Vulkan 1.3 renderer, for 64-bit Windows, Linux and macOS on x86-64 or ARM64. Any GPU with a Vulkan 1.3 driver is in scope, down to the Raspberry Pi 4 (Mesa 24.3+). Macs run it through MoltenVK.
 
-The two games share one repository and most of their code (`dreamcast/`): each has its own program (`toycommander`, `toyracer`), built from its own disc, its own releases and its own changes. Toy Racer was ported in a repository of its own, ToyRacer--QilinRecomp, until it moved here with all its work (its notes: [`docs/toyracer/notes-from-its-repo.md`](docs/toyracer/notes-from-its-repo.md)); that repository has since been removed.
+The two games share an engine and most of this repository's code; each has its own program (`toycommander`, `toyracer`), releases and changelog.
 
-They have the same requirements and scope as their sister projects, [GBTGhoulies--QilinRecomp](https://github.com/Qilin1066/GBTGhoulies--QilinRecomp), [PunchOutWii--QilinRecomp](https://github.com/Qilin1066/PunchOutWii--QilinRecomp), [RhythmHeavenFever--QilinRecomp](https://github.com/Qilin1066/RhythmHeavenFever--QilinRecomp) and [ApbArcade--QilinRecomp](https://github.com/Qilin1066/ApbArcade--QilinRecomp).
-
-> **No game data is included, and none ever will be.** You need your own copy of the game. The tools read your disc dump from a path you give them. `.gitignore` keeps game files, and anything generated from them, out of the repo.
+> **No game data is included, and none ever will be.** You need your own copy: Toy Commander's USA disc (`MK-57020`, `V1.022`) or Toy Racer's European disc (`MK-5114950`, `V1.050`, its only release), as a Redump-style dump (a `.cue` beside one `.bin` per track). The tools read it from a path you give them. `.gitignore` keeps game files, and anything generated from them, out of the repository.
 
 ## Status
 
-**Toy Commander plays**, from the movies through the menus into its missions, with sound, saves, the settings menu, four pads and the Jump Pack; the table below is its state. **Toy Racer** runs from its start-up into a race; it now builds on the same shared code (sound, saves and the menu included), and its own state is in [`docs/toyracer/`](docs/toyracer/).
+**Toy Commander** plays from the movies through the menus into its missions, with sound, saves, the settings menu, four pads and the Jump Pack. It has not been played to the end yet.
 
-| Piece | State |
+**Toy Racer** plays through its menus into a race, with sound. Its state is in [`docs/toyracer/`](docs/toyracer/).
+
+| Toy Commander | State |
 |---|---|
-| GD-ROM reader (Redump-style `.cue` + `.bin` dumps: tracks, bootstrap, files) | ✅ reads the supported disc; `qilin disc`, `qilin extract` |
-| Boot file loader (`1GUTH.BIN`, recognised by SHA-256) | ✅ |
-| SH-4 decoder (all 209 instruction forms, table-driven) | ✅ agrees with Capstone on every word of the 16-bit encoding space, the reviewed differences listed |
-| Function discovery and control flow (recursive descent, constants through literal pools, switch tables, tail calls, far branches, function pointers, unreferenced code) | ✅ 4,322 functions, 14 switch tables |
-| Layout: the game, the middleware, Shinobi and the data regions | ✅ every boundary with its evidence (`docs/code-analysis.md`). The game's code is fully accounted for: 0 unknown bytes. 0.27% of the whole image is still unknown, all in libraries not yet attributed |
-| Hardware-access profile | ✅ 76 functions reach hardware at constant addresses, none in the game itself (`qilin hwaccess`) |
-| FPSCR modes (precision, transfer size, bank, rounding, denormals) at every FPU instruction | ✅ all 35,959 FPU instructions in the game and the middleware proven (`qilin fpmode`) |
-| Lifter, SH-4 → C++ (`qilin lift`) | ✅ every function of the game (1,259) and all but 21 hardware-facing ones of the middleware: 2,916 lifted, tested end to end under every CI compiler. The FPU's approximate instructions are measured against a Dreamcast emulator (`tools/dcref`) |
-| Middleware attribution (engine, Kamui 2, audio manager, C runtime) | during bring-up: the lifted middleware stops on hardware, which names what to replace |
-| Differential test of every lifted instruction | ✅ against a reference interpreter of our own, in CI: 242,496 runs, 0 mismatches. Whole call trees to come |
-| Runtime: Sega's libraries replaced natively, Vulkan 1.3, SDL3 | 🔨 bring-up: `toycommander` boots the game's lifted code into `main`, drawn by the Vulkan 1.3 renderer in an SDL3 window and played with a controller, through the menus into the first mission, with sound, saves and the settings menu (`docs/runtime.md`) |
-| Enhancements (resolution, widescreen, high refresh rate) and the settings menu shared with the sister projects | to do, after the game plays at original spec |
+| GD-ROM reader | ✅ reads the supported disc; `qilin disc`, `qilin extract` |
+| Boot file loader (`1GUTH.BIN`, by SHA-256) | ✅ |
+| SH-4 decoder (209 forms) | ✅ agrees with Capstone on every 16-bit word, reviewed differences listed |
+| Function discovery and control flow | ✅ 4,338 functions, 17 jump tables |
+| Layout and coverage | ✅ 0 unknown bytes in every region (`docs/code-analysis.md`) |
+| Hardware-access profile | ✅ 77 functions reach hardware at constant addresses, none in the game |
+| FPSCR modes | ✅ every FPU instruction of the game and the middleware proven |
+| Lifter, SH-4 → C++ | ✅ 4,088 functions lifted, 250 replaced natively, none left over |
+| Differential test | ✅ 248,016 runs, 0 mismatches; whole call trees to do |
+| Runtime: natives, Vulkan 1.3, SDL3 | 🔨 plays into the missions (`docs/runtime.md`) |
+| Enhancements | 🔨 internal resolution, anisotropic filtering, MSAA, widescreen to 21:9, texture packs; high refresh rate to do |
 
-The latest shared reliability checks are recorded in
-[the validation notes](docs/validation-0.12-0.5.md). These cover
-runtime/tooling regressions and do not establish a complete playthrough of either game.
+Latest reliability checks: [the validation notes](docs/validation-0.12-0.5.md).
 
-The supported releases are Toy Commander's USA disc (`MK-57020`, `V1.022`; `docs/disc-analysis.md`) and Toy Racer's European disc (`MK-5114950`, `V1.050`, the only one; `docs/toyracer/disc-analysis.md`).
+## Playing
 
-## Versions and changes
+### Windows download
 
-Each game is released on its own: Toy Commander's releases are tagged `toycommander-vX.Y.Z` and recorded in [`CHANGELOG.md`](CHANGELOG.md), Toy Racer's `toyracer-vX.Y.Z` in [`toyracer/CHANGELOG.md`](toyracer/CHANGELOG.md). Past entries are kept, never rewritten. Each game's version lives in one place in `CMakeLists.txt` (`QILIN_TOYCOMMANDER_VERSION`, `QILIN_TOYRACER_VERSION`); `qilin --version` prints the recompiler's, which is Toy Commander's. 1.0.0 will be each game's first build that plays it through. Each release has a Windows download, built by GitHub (`.github/workflows/player-kit.yml`, `tools/player-kit`): `ToyCommander--QilinRecomp-X.Y.Z-windows-x64.zip` and `ToyRacer--QilinRecomp-X.Y.Z-windows-x64.zip`. Neither holds anything from the game: unpack it and double-click `Play Toy Commander.bat` (or `Play Toy Racer.bat`), choose your own disc dump's `.cue`, and the bundled recompiler and compiler (LLVM-MinGW) build the game from it on your PC, once, in a few minutes; after that it starts at once. The zip's `README.txt` has the details.
+`.github/workflows/player-kit.yml` builds a download for each game, `ToyCommander--QilinRecomp-X.Y.Z-windows-x64.zip` and `ToyRacer--QilinRecomp-X.Y.Z-windows-x64.zip`, on every push to `main` (an artifact of the run; attached to a release when one is tagged), with nothing from the game in it. Unpack it, double-click `Play Toy Commander.bat` (or `Play Toy Racer.bat`) and choose your dump's `.cue`: the bundled recompiler and compiler (LLVM-MinGW) build the game from it once, in a few minutes. `-ChooseDisc` picks another dump, `-Rebuild` forces a clean build. It needs 64-bit Windows 10 or 11 and a Vulkan 1.3 driver. The zip's `README.txt` has the controls.
+
+### From the source
+
+Build the project, then the game's program from your boot file ([Using it](#using-it)). F1 or Esc (Back + Start on a controller) opens the settings menu.
 
 ## Building
 
-The whole project is **C++23**. You need CMake ≥ 3.25 and one of:
+You need CMake 3.25 or later and one of:
 
 | Compiler | Minimum | Notes |
 |---|---|---|
@@ -48,7 +49,7 @@ The whole project is **C++23**. You need CMake ≥ 3.25 and one of:
 | Apple Clang | Xcode 16 | |
 | MSVC | Visual Studio 2022 17.10 | |
 
-CMake stops with a clear message if the compiler is older. SDL3, the Vulkan headers and volk are fetched and pinned at configure time (as in the sister projects); on Linux, SDL3 needs the X11, Wayland and sound development packages CI installs (`.github/workflows/ci.yml`).
+SDL3, the Vulkan headers, volk and Dear ImGui are fetched and pinned at configure time. On Linux, SDL3 needs the X11, Wayland and sound development packages listed in `.github/workflows/ci.yml`.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -56,7 +57,7 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-CI builds and tests with warnings as errors on Linux x64 (GCC 14 and Clang 19), Linux ARM64 (GCC 14), macOS ARM64 and x64, and Windows x64 (MSVC).
+CI builds with warnings as errors and runs the tests and checks on Linux x64 (GCC 14, Clang 19), Linux ARM64 (GCC 14), macOS ARM64 and x64, and Windows x64 (MSVC); `.github/workflows/player-kit.yml` builds the Windows downloads.
 
 ## Using it
 
@@ -74,9 +75,7 @@ build/qilin fpmode   extracted/files/1GUTH.BIN [--list] # the FPU's mode at ever
 build/qilin lift     extracted/files/1GUTH.BIN --out gen  # the lifted C++ (gen/ is ignored: never commit it)
 ```
 
-The dump is a Redump-style one: a `.cue` beside one `.bin` per track.
-
-To build a game's program from your own boot file, and run it:
+Toy Racer's boot file is `1TOYRACE.BIN`. To build a game's program and run it:
 
 ```sh
 cmake -S . -B build -DQILIN_TOYCOMMANDER_BOOT=extracted/files/1GUTH.BIN     # and/or -DQILIN_TOYRACER_BOOT=.../1TOYRACE.BIN
@@ -84,41 +83,65 @@ cmake --build build --target toycommander                                    # o
 build/toycommander path/to/game.cue
 ```
 
-The lifted C++ goes into the build tree only. Each program checks that the disc's boot file is the one it was built from.
+The lifted C++ goes into the build tree only; each program checks that the disc's boot file is the one it was built from. `QILIN_HEADLESS=1` runs without a window (other variables: `docs/runtime.md`).
 
-The decoder check needs no game files:
+### Tests
+
+`ctest` needs no game files: unit tests, end-to-end lifter tests on synthetic programs, and the differential test (every lifted instruction from random states against our own reference interpreter).
+
+### Decoder check
+
+The decoder against Capstone on all 65,536 words, reviewed differences apart. No game files needed:
 
 ```sh
 pip install capstone
 python3 tools/check/verify_decoder.py --qilin build/qilin
 ```
 
+### Native check
+
+Every replaced function lifted code can reach must have a native:
+
+```sh
+build/qilin lift extracted/files/1GUTH.BIN --out gen
+python3 tools/check/check_natives.py gen toycommander/src    # Toy Racer: toyracer/src
+```
+
+After changing a native, run `python3 tools/check/native_footprints.py`; CI fails while its table is out of date.
+
 ## Layout
 
 | Path | What |
 |---|---|
-| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported build's regions), `hwaccess` (the hardware-access profile), `fpmode` (the FPSCR mode pass), `lifter` and `lift_output` (SH-4 to C++), `main` (the `qilin` CLI) |
-| `recomp/runtime/` | What lifted code needs at run time: the guest context, memory access, the helpers, calls through the function table, guest memory, the registry of native replacements, the stop report |
-| `dreamcast/` | What the two games share: the hardware the port provides, the renderer, sound, the Maple bus, the window's settings and menu |
-| `toycommander/src/` | Toy Commander's program (`toycommander`): its start-up and the native replacements at its build's addresses |
-| `toyracer/src/` | Toy Racer's program (`toyracer`): the same for its build; `toyracer/CHANGELOG.md` |
-| `recomp/tests/` | Unit tests and end-to-end lifter tests on synthetic programs, so they need no game files |
-| `tools/check/` | The decoder cross-check against Capstone |
-| `tools/dcref/` | Measures the FPU's approximate instructions against a Dreamcast emulator run as a black box (Linux developer tool; the emulator is fetched, never committed) |
-| `docs/` | Design notes: the roadmap and targets, the disc, the code analysis, the recompiler core, prior art, naming; Toy Racer's in `docs/toyracer/` |
+| `recomp/src/` | Recompiler core: `gdrom` (disc reader), `bootfile` (loader), `decoder` (SH-4), `cfg` (function discovery and control flow), `layout` (the supported builds' regions), `hwaccess`, `fpmode` (the FPSCR mode pass), `lifter` and `lift_output` (SH-4 to C++), `main` (the `qilin` CLI) |
+| `recomp/runtime/` | What lifted code needs at run time: the guest context, memory, calls through the function table, the registry of natives, the stop report |
+| `recomp/tests/` | Unit tests, end-to-end lifter tests and the differential test (`difftest/`) |
+| `dreamcast/` | The hardware both games share: the PowerVR2 and tile accelerator, the renderer, sound, the Maple bus, flash memory, the settings and the menu |
+| `shinobi/` | Sega's system library, replaced natively for both games at each game's addresses: start-up, allocator, interrupt chains, clock, GD-ROM calls, threads |
+| `host/` | The window, Vulkan 1.3 device, display, sound output and data folder |
+| `toycommander/src/` | Toy Commander's own: its addresses (`build.hpp`), natives and game code |
+| `toyracer/src/` | Toy Racer's own, the same |
+| `tools/check/` | The decoder cross-check, the native checks, the Windows launcher check |
+| `tools/player-kit/` | Each game's Windows download |
+| `tools/dcref/` | Measures the FPU's approximate instructions and the PowerVR2's fog against a Dreamcast emulator run as a black box (Linux developer tool; the emulator is fetched, never committed) |
+| `docs/` | Design notes: the roadmap, the disc, the code analysis, the recompiler core, the runtime. Toy Racer's are in `docs/toyracer/`, with [the notes from its earlier repository](docs/toyracer/notes-from-its-repo.md) |
+
+## Versions and changes
+
+Toy Commander's releases are tagged `toycommander-vX.Y.Z` and recorded in [`CHANGELOG.md`](CHANGELOG.md); Toy Racer's are tagged `toyracer-vX.Y.Z` and recorded in [`toyracer/CHANGELOG.md`](toyracer/CHANGELOG.md). Each version lives in one place in `CMakeLists.txt`: `QILIN_TOYCOMMANDER_VERSION` (the project's version, which `qilin --version` prints) and `QILIN_TOYRACER_VERSION`. A minor bump (0.**x**) marks a milestone and a patch bump (0.x.**y**) a fix. 1.0.0 will be each game's first build that plays it through.
 
 ## Licence
 
-This project's own code and documentation are under the [GNU General Public License, version 3](LICENSE) (GPL-3.0), as in the other QilinRecomp projects: you may use, share, change and sell it, but anything you distribute that is built from it must come with its full source under the same licence. (Versions before 2026-11-21 were released under MIT, and those copies stay under MIT.)
+This project's own code and documentation are under the [GNU General Public License, version 3](LICENSE) (GPL-3.0): you may use, share, change and sell it, but anything you distribute that is built from it must come with its full source under the same licence. Versions before 2026-11-21 were released under MIT, and those copies stay under MIT. SDL3, the Vulkan headers, volk and Dear ImGui keep their own licences, which the Windows downloads carry in `LICENSES/`.
 
 The games themselves are Sega's and are not covered by anything here: you need your own copy, and nothing built from it may be shared.
 
-## Design targets (short version)
+## Design targets
 
 - **Efficiency and reliability come first.** Every choice is judged by whether it makes the game cheaper to run on low-end hardware, and whether it fails loudly instead of misbehaving quietly.
 - **Static recompilation, SH-4 → C++, compiled ahead of time.** No interpreter and no JIT. Hand-written C++ can override any lifted function.
-- **Vulkan 1.3 only**, on a deliberately small baseline feature set so one render path runs on everything from low-end ARM GPUs upwards.
-- **Sega's hardware-facing libraries are replaced natively** (Kamui 2, the Shinobi system layer, the audio manager); the game, its engine and the pure-software libraries are lifted for exact behaviour.
+- **Vulkan 1.3 only**, on a small baseline feature set, so one render path runs everywhere.
+- **Sega's hardware-facing code is replaced natively** (the Shinobi system layer, the sound driver, the boot ROM's GD-ROM calls); the game, its engine and the software libraries, Kamui 2 included, are lifted for exact behaviour.
 - **Ground truth is the original game.**
 
-See `docs/` for the full roadmap and the analysis notes.
+See [`docs/`](docs/) for the roadmap and the analysis notes.
