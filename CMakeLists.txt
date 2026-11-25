@@ -18,6 +18,10 @@ set(QILIN_TOYRACER_VERSION 0.5.1)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++ modules anywhere: without this, Ninja builds scan every C++ source
+# for them with clang-scan-deps, which zig's Clang (CLAUDE.md, building on a
+# Windows PC without LLVM) doesn't have, and the build stops at the first one.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()

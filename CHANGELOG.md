@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Fixed
+- **Builds with zig's Clang on Windows**: CMake no longer scans the C++ sources for modules (the project has none), which needed `clang-scan-deps` and stopped the build before it compiled anything.
 - The launcher check's file hashes resolve a relative path against PowerShell's current folder, not the process's.
 - **Widescreen from the first frame**: the picture stayed 4:3 until the game's options were changed or loaded from a save (the game widens its camera only then); it's now widened from the start, and follows the window when it's resized. Toy Commander's in-engine introduction and demo play checked at 21:9.
 
