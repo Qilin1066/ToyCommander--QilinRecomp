@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Changed
+- **Less data sent to the GPU a frame**: a smooth-shaded strip's vertices are sent once and its triangles as indices, instead of three copies of each inner vertex (a quad's data 26% smaller, a ten-vertex strip's 51%). The same pictures. Not timed yet.
 - **Faster texture decoding**: a twiddled texture's texels are placed by two small tables a level rather than a loop over the bits for each texel (16-bit, paletted and compressed textures). The same pictures (checked for every size). Not timed yet.
 - **Faster calls through pointers**: an indirect call's target is looked up in a small cache before the function table's binary search, so a repeat (the usual case: object and callback tables) is one compare. Not timed yet.
 - **Fewer loads in lifted code**: each function keeps guest memory's base in a local rather than reading the global again after every store (a store through a byte pointer could, as far as the compiler knows, change it). Not timed yet.

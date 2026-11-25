@@ -523,6 +523,16 @@ int renderer() {
         expect(pixel_is(pic, 60, 24, 0, 0, 255), "auto-sort: nothing behind an opaque surface");
         const auto sent = draw(sc, [](dreamcast::renderer::Source& s) { s.presort = true; });
         expect(pixel_is(sent, 6, 44, 64, 127, 0) && pixel_is(sent, 44, 4, 64, 127, 0), "presort: in the order sent everywhere");
+        // The fallback, triangle by triangle by mean depth: the green quad's
+        // lower-right triangle (mean 0.58) is nearer than the red, its upper-
+        // left one (0.42) farther, so each point is blended the other way
+        // from the per-pixel order.
+        r.set_per_pixel_sort(false);
+        const auto by_triangle = draw(sc, [](dreamcast::renderer::Source& s) { s.presort = false; });
+        r.set_per_pixel_sort(true);
+        expect(pixel_is(by_triangle, 6, 44, 64, 127, 0), "triangle sort: the lower-right triangle, nearer, blended last");
+        expect(pixel_is(by_triangle, 44, 4, 127, 64, 0), "triangle sort: the upper-left triangle, farther, blended first");
+        expect(pixel_is(by_triangle, 60, 24, 0, 0, 255), "triangle sort: nothing behind an opaque surface");
     }
     // More fragments a pixel than the lists hold (one a pixel at first):
     // five additive layers of a tenth of red. The renderer reads the count

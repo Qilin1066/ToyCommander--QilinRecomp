@@ -115,6 +115,11 @@ public:
     // edges are smoothed; their insides, the textures and the translucent
     // list's per-pixel sort are as before. Nothing to do while unchanged.
     void set_msaa(unsigned samples);
+    // The translucent list in auto-sort mode is sorted for each pixel where
+    // the device can (fragment-shader atomics), else triangle by triangle
+    // (by their mean depth): off, triangle by triangle everywhere (tests: the
+    // fallback's path, on any device).
+    void set_per_pixel_sort(bool on);
     unsigned msaa() const;  // what it is now, after the device's limit
 
     // Texture packs, an enhancement. Each texture is known by a hash of what

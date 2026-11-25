@@ -82,7 +82,7 @@ constexpr uint32_t sampler_bits(uint32_t tsp) { return ((tsp >> 13) & 0x3Fu) | (
 enum class Stencil : uint8_t { off, mark_none, mark_shadow, volume, resolve, shade };
 
 struct Draw {
-    uint32_t first = 0, count = 0;  // vertices
+    uint32_t first = 0, count = 0;  // indices (three a triangle)
     uint32_t pipeline = 0;          // the pipeline's key
     VkDescriptorSet set = VK_NULL_HANDLE;
     uint32_t flags = 0;
@@ -343,7 +343,7 @@ struct Renderer::Impl {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
-    Buffer vertex_buffer{}, staging{};
+    Buffer vertex_buffer{}, index_buffer{}, staging{};
     // The translucent modifier volumes, for the fragment shader's test
     // (pvr.frag): a header, the volumes, their triangles.
     Buffer volume_buffer{};
@@ -360,6 +360,7 @@ struct Renderer::Impl {
     // the node count read back to make the lists longer when a frame wanted
     // more, and sort.comp, which sorts and blends them into the picture.
     bool sorting = false;
+    bool per_pixel_sort = true;  // set_per_pixel_sort: off, the triangle sort even where the device can do better
     Buffer heads{}, nodes{}, node_count{};
     uint32_t node_capacity = 0;
     VkShaderModule sort_module = VK_NULL_HANDLE;
@@ -401,8 +402,17 @@ struct Renderer::Impl {
     bool opaque_volumes = false;  // this scene has opaque modifier volumes, drawn into the stencil
     bool translucent_volumes = false;  // and translucent modifier volumes for translucent polygons
 
-    // The frame being built.
+    // The frame being built: its vertices, the triangles as indices into
+    // them (three each; a Gouraud strip's vertices are shared by its
+    // triangles), and the draws, each a range of the indices.
     std::vector<HostVertex> vertices;
+    std::vector<uint32_t> indices;
+    std::vector<uint32_t> strip_at;  // add_strip's: a strip vertex's place in `vertices`, or ~0u
+    // A vertex used by one triangle only: its own index.
+    void emit(const HostVertex& h) {
+        indices.push_back(uint32_t(vertices.size()));
+        vertices.push_back(h);
+    }
     std::vector<Draw> draws;
     struct Upload {
         VkImage image;
@@ -986,9 +996,20 @@ struct Renderer::Impl {
             d.clip = uint32_t{s.clip[0]} | uint32_t{s.clip[1]} << 8 | uint32_t{s.clip[2]} << 16 | uint32_t{s.clip[3]} << 24;
         }
         d.set = s.textured ? set_for(texture_for(src, tsp, s.tcw[vol]), sampler_bits(tsp)) : set_for(white, 0);
-        d.first = uint32_t(vertices.size());
+        d.first = uint32_t(indices.size());
         const bool gouraud = s.pcw & 0x02u;
         const uint32_t cull = s.sprite || background ? 0u : cull_mode(s.isp);
+        // Gouraud: each of the strip's vertices once (when a triangle that's
+        // kept first names it, so a dropped one's never reaches the buffer),
+        // its triangles by index. Flat: each triangle's own three, its last
+        // vertex's colour on all of them.
+        const auto host = [&](const ta::Vertex& a, const ta::Vertex& c) {
+            HostVertex h;
+            h.x = a.x, h.y = a.y, h.z = clean_z(a.z), h.u = a.u[vol], h.v = a.v[vol];
+            std::memcpy(h.base, c.base[vol], sizeof h.base), std::memcpy(h.offset, c.offset[vol], sizeof h.offset);
+            return h;
+        };
+        if (gouraud) strip_at.assign(s.count, ~0u);
         for (uint32_t i = 0; i + 2 < s.count; ++i) {
             const ta::Vertex* t[3] = {&v[i], &v[i + 1], &v[i + 2]};
             // A vertex off in the infinite (or not a number) is the game's
@@ -1007,17 +1028,18 @@ struct Renderer::Impl {
                     continue;
                 }
             }
-            for (int k = 0; k < 3; ++k) {
-                const ta::Vertex& a = *t[k];
-                const ta::Vertex& c = gouraud ? a : *t[2];  // flat: the triangle's last vertex colours it
-                HostVertex h;
-                h.x = a.x, h.y = a.y, h.z = clean_z(a.z), h.u = a.u[vol], h.v = a.v[vol];
-                std::memcpy(h.base, c.base[vol], sizeof h.base), std::memcpy(h.offset, c.offset[vol], sizeof h.offset);
-                vertices.push_back(h);
+            for (uint32_t k = 0; k < 3; ++k) {
+                if (!gouraud) {
+                    emit(host(*t[k], *t[2]));
+                    continue;
+                }
+                uint32_t& at = strip_at[i + k];
+                if (at == ~0u) at = uint32_t(vertices.size()), vertices.push_back(host(*t[k], *t[k]));
+                indices.push_back(at);
             }
             ++stats.triangles;
         }
-        d.count = uint32_t(vertices.size()) - d.first;
+        d.count = uint32_t(indices.size()) - d.first;
         if (d.count == 0) return;
         if (!draws.empty() && draws.back().same_state(d) && draws.back().first + draws.back().count == d.first) draws.back().count += d.count;
         else draws.push_back(d);
@@ -1093,13 +1115,13 @@ struct Renderer::Impl {
         float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;  // the volume's bounds on screen
         bool any = false, drawn_apart = false;  // drawn_apart: some of this volume's faces are already in draws
         auto rectangle = [&](Draw d, float l, float t, float r, float b, float shade) {
-            d.first = uint32_t(vertices.size()), d.count = 6;
+            d.first = uint32_t(indices.size()), d.count = 6;
             const float corners[6][2] = {{l, t}, {r, t}, {l, b}, {r, t}, {r, b}, {l, b}};
             for (const auto& c : corners) {
                 HostVertex v{};
                 v.x = c[0], v.y = c[1], v.z = 1.0f;
                 v.base[0] = v.base[1] = v.base[2] = shade, v.base[3] = 1.0f;
-                vertices.push_back(v);
+                emit(v);
             }
             draws.push_back(d);
         };
@@ -1131,13 +1153,13 @@ struct Renderer::Impl {
             }
             faces.flags = clipped.flags, faces.clip = clipped.clip;
             for (uint32_t t = m.first; t < m.first + m.count; ++t) {
-                if (faces.count == 0) faces.first = uint32_t(vertices.size());
+                if (faces.count == 0) faces.first = uint32_t(indices.size());
                 const float* f = scene.modifier_triangles.data() + size_t{t} * 9;
                 for (int k = 0; k < 3; ++k) {
                     HostVertex h{};
                     h.x = f[3 * k], h.y = f[3 * k + 1], h.z = clean_z(f[3 * k + 2]);
                     x0 = std::min(x0, h.x), y0 = std::min(y0, h.y), x1 = std::max(x1, h.x), y1 = std::max(y1, h.y);
-                    vertices.push_back(h);
+                    emit(h);
                 }
                 faces.count += 3;
             }
@@ -1164,27 +1186,27 @@ struct Renderer::Impl {
     // away is blended first. Here its triangles are drawn from the farthest
     // to the nearest, by their mean z (1/w: smaller is farther), the order
     // sent kept between equals.
-    void sort_translucent(size_t first_draw, size_t first_vertex) {
+    void sort_translucent(size_t first_draw, size_t first_index) {
         struct Tri {
             float depth;
             uint32_t draw, at;
         };
         std::vector<Tri> tris;
         for (size_t d = first_draw; d < draws.size(); ++d)
-            for (uint32_t v = draws[d].first; v < draws[d].first + draws[d].count; v += 3)
-                tris.push_back({vertices[v].z + vertices[v + 1].z + vertices[v + 2].z, uint32_t(d), v});
+            for (uint32_t k = draws[d].first; k < draws[d].first + draws[d].count; k += 3)
+                tris.push_back({vertices[indices[k]].z + vertices[indices[k + 1]].z + vertices[indices[k + 2]].z, uint32_t(d), k});
         std::stable_sort(tris.begin(), tris.end(), [](const Tri& a, const Tri& b) { return a.depth < b.depth; });
-        std::vector<HostVertex> sorted;
+        std::vector<uint32_t> sorted;
         sorted.reserve(tris.size() * 3);
         std::vector<Draw> out(draws.begin(), draws.begin() + std::ptrdiff_t(first_draw));
         for (const Tri& t : tris) {
             Draw d = draws[t.draw];
-            d.first = uint32_t(first_vertex + sorted.size()), d.count = 3;
-            sorted.insert(sorted.end(), vertices.begin() + t.at, vertices.begin() + t.at + 3);
+            d.first = uint32_t(first_index + sorted.size()), d.count = 3;
+            sorted.insert(sorted.end(), indices.begin() + t.at, indices.begin() + t.at + 3);
             if (out.size() > first_draw && out.back().same_state(d)) out.back().count += 3;
             else out.push_back(d);
         }
-        std::copy(sorted.begin(), sorted.end(), vertices.begin() + std::ptrdiff_t(first_vertex));
+        std::copy(sorted.begin(), sorted.end(), indices.begin() + std::ptrdiff_t(first_index));
         draws = std::move(out);
     }
 
@@ -1275,7 +1297,7 @@ struct Renderer::Impl {
         t.widen = src.widen;
         current = &t;
         const Image& colour = t.colour;
-        vertices.clear(), draws.clear(), uploads.clear(), upload_bytes.clear();
+        vertices.clear(), indices.clear(), draws.clear(), uploads.clear(), upload_bytes.clear();
         if (frame == 1) {
             const uint32_t opaque_white = 0xFFFFFFFFu;
             queue_upload(white.image, &opaque_white, true);
@@ -1292,11 +1314,11 @@ struct Renderer::Impl {
         opaque_volumes = any_opaque;
         translucent_volumes = any_translucent && collect_translucent_volumes(src, scene);
         if (src.background.count) add_strip(src, src.background, src.background_vertices, true);
-        size_t translucent_draws = 0, translucent_vertices = 0;
+        size_t translucent_draws = 0, translucent_indices = 0;
         for (const ta::List list : {ta::kOpaque, ta::kPunchThrough, ta::kTranslucent}) {
             if (list == ta::kTranslucent) {
                 if (opaque_volumes) add_volumes(src, scene);
-                translucent_draws = draws.size(), translucent_vertices = vertices.size();
+                translucent_draws = draws.size(), translucent_indices = indices.size();
             }
             for (const ta::Strip& s : scene.strips) {
                 if (s.list != list) continue;
@@ -1312,8 +1334,8 @@ struct Renderer::Impl {
         // The translucent list in auto-sort mode: sorted for each pixel where
         // the device can (each draw onto the per-pixel lists, with its blend
         // factors and its place in the order sent), else triangle by triangle.
-        const bool sorted = !src.presort && sorting && draws.size() > translucent_draws;
-        if (!src.presort && !sorted) sort_translucent(translucent_draws, translucent_vertices);
+        const bool sorted = !src.presort && sorting && per_pixel_sort && draws.size() > translucent_draws;
+        if (!src.presort && !sorted) sort_translucent(translucent_draws, translucent_indices);
         if (sorted) {
             size_lists(colour.width * colour.height);
             for (size_t i = translucent_draws; i < draws.size(); ++i) {
@@ -1335,6 +1357,8 @@ struct Renderer::Impl {
 
         grow(vertex_buffer, vertices.size() * sizeof(HostVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         if (!vertices.empty()) std::memcpy(vertex_buffer.mapped, vertices.data(), vertices.size() * sizeof(HostVertex));
+        grow(index_buffer, indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        if (!indices.empty()) std::memcpy(index_buffer.mapped, indices.data(), indices.size() * sizeof(uint32_t));
         // The frame's buffer: the volumes (if any) and the table fog's registers, every frame.
         if (!translucent_volumes) volume_data.assign(kTrianglesAt, 0.0f);
         volume_data[3] = push.screen[2];  // the depth scale, for the volumes' z
@@ -1447,6 +1471,7 @@ struct Renderer::Impl {
         if (!draws.empty()) {
             const VkDeviceSize zero = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &zero);
+            vkCmdBindIndexBuffer(cmd, index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
         }
         uint32_t bound = ~0u;
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &volume_set, 0, nullptr);
@@ -1465,7 +1490,7 @@ struct Renderer::Impl {
             push.clip[0] = float(d.clip & 0xFFu) * 32.0f, push.clip[1] = float(d.clip >> 8 & 0xFFu) * 32.0f;
             push.clip[2] = float((d.clip >> 16 & 0xFFu) + 1) * 32.0f, push.clip[3] = float((d.clip >> 24) + 1) * 32.0f;
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
-            vkCmdDraw(cmd, d.count, 1, d.first, 0);
+            vkCmdDrawIndexed(cmd, d.count, 1, d.first, 0, 0);
         }
         vkCmdEndRendering(cmd);
         if (sorted) {
@@ -1568,7 +1593,7 @@ struct Renderer::Impl {
         heads.destroy(gpu), nodes.destroy(gpu), node_count.destroy(gpu);
         vkDestroyPipelineLayout(gpu.device, layout, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, set_layout, nullptr);
-        vertex_buffer.destroy(gpu), staging.destroy(gpu), volume_buffer.destroy(gpu);
+        vertex_buffer.destroy(gpu), index_buffer.destroy(gpu), staging.destroy(gpu), volume_buffer.destroy(gpu);
         vkDestroyDescriptorPool(gpu.device, volume_pool, nullptr);
         vkDestroyDescriptorSetLayout(gpu.device, volume_layout, nullptr);
         for (auto& [k, t] : targets) t.colour.destroy(gpu);
@@ -1589,6 +1614,7 @@ void Renderer::wait_texture_packs() {
     if (impl_->loader) impl_->loader->wait_idle();
 }
 unsigned Renderer::msaa() const { return impl_->samples; }
+void Renderer::set_per_pixel_sort(bool on) { impl_->per_pixel_sort = on; }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }
 const Renderer::Stats& Renderer::stats() const { return impl_->stats; }
