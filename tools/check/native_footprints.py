@@ -96,7 +96,7 @@ def definitions(paths):
 
 def uses(body, ctx):
     """The registers `ctx` is used for in `body`, and the calls it's passed to: (bits, [(callee, position)]),
-    or (None, []) if it's used some other way."""
+    or (None, why) if it's used some other way."""
     bits, calls = 0, []
     for m in re.finditer(r"\b%s\b" % re.escape(ctx), body):
         after = body[m.end():]
@@ -106,16 +106,16 @@ def uses(body, ctx):
             if field in ("r", "fr"):
                 im = re.match(r"\s*\.\s*\w+\s*\[\s*(\d+)u?\s*\]", after)
                 if not im or int(im.group(1)) > 15:
-                    return None, []
+                    return None, f"{ctx}.{field} not by a constant index"
                 bits |= 1 << (int(im.group(1)) + (32 if field == "fr" else 0))
             elif field in NAMED:
                 bits |= 1 << NAMED[field]
             elif field not in CONTEXT_ONLY:
-                return None, []
+                return None, f"{ctx}.{field}"
             continue
         # Passed whole to a call: the argument itself, a plain function's.
         if not re.match(r"\s*[,)]", after):
-            return None, []
+            return None, f"the whole context used ({ctx}{after[:12].split(chr(10))[0].rstrip()})"
         depth, j, position = 0, m.start() - 1, 0
         while j >= 0:
             ch = body[j]
@@ -128,24 +128,26 @@ def uses(body, ctx):
             elif ch == "," and depth == 0:
                 position += 1
             elif ch == ";" and depth == 0:
-                return None, []
+                return None, "the whole context used"
             j -= 1
         if j < 0 or body[j] != "(":
-            return None, []
+            return None, "the whole context used"
         before = body[:j].rstrip()
         cm = re.search(r"((?:\w+\s*::\s*)*)(\w+)$", before)
         if not cm or cm.group(2) in KEYWORDS:
-            return None, []
+            return None, "the whole context used"
         lead = before[:cm.start()].rstrip()
         if lead.endswith(".") or lead.endswith("->"):  # a member or a pointer called
-            return None, []
+            return None, f"passed through a pointer ({lead[-12:].split()[-1] if lead.split() else ''}{cm.group(2)})"
         calls.append((cm.group(2), position))
     return bits, calls
 
 
 def footprints(defs):
-    """name -> bits (None: everything) for every function defined, by a fixed point over the calls."""
+    """name -> bits (None: everything) for every function defined, by a fixed point over the calls; and
+    name -> why, for those that are everything."""
     result = {name: 0 for name in defs}
+    why = {}
     local = {}
     for name, ds in defs.items():
         total, calls = 0, []
@@ -154,7 +156,7 @@ def footprints(defs):
                 continue
             b, c = uses(body, ctx)
             if b is None:
-                total = None
+                total, why[name] = None, c
                 break
             total |= b
             calls += c
@@ -173,11 +175,12 @@ def footprints(defs):
                 fits = [d for d in defs.get(callee, []) if d[0] == position]
                 if not fits or result.get(callee) is None:
                     new = None
+                    why[name] = f"{callee}: {why[callee]}" if fits else f"passed to {callee}, not found"
                     break
                 new |= result[callee]
             if new != result[name]:
                 result[name], changed = new, True
-    return result
+    return result, why
 
 
 def natives(game):
@@ -222,11 +225,12 @@ def table():
              "// Each native whose registers are known: its entry, the registers it can read or change in the",
              "// context (lifter.hpp's RegSet, PR included), and its name. The others aren't here: every register.", ""]
     for game, array, title in GAMES:
-        fp = footprints(definitions(sources(game)))
-        rows = []
+        fp, why = footprints(definitions(sources(game)))
+        rows, others = [], []
         for address, label, fn in natives(game):
             bits = fp.get(fn)
             if bits is None:
+                others.append(f"//   0x{address:08X}  {label}: {why.get(fn, 'no definition found') if fn in fp else 'no definition found'}")
                 continue
             bits |= PR
             rows.append(f"    {{0x{address:08X}u, 0x{bits:X}ull, \"{label}\"}},  // {register_names(bits)}")
@@ -234,6 +238,8 @@ def table():
         lines.append(f"constexpr NativeFootprint {array}[] = {{")
         lines += rows
         lines.append("};")
+        lines.append("// Not listed (every register), and why:")
+        lines += others
         lines.append("")
     return "\n".join(lines)
 
