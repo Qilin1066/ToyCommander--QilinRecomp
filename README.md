@@ -4,7 +4,7 @@ Static recompilations of **Toy Commander** (No Cliché / Sega, Dreamcast, 1999) 
 
 The two games share an engine and most of this repository's code; each has its own program (`toycommander`, `toyracer`), releases and changelog.
 
-> **No game data is included, and none ever will be.** You need your own copy: Toy Commander's USA disc (`MK-57020`, `V1.022`) or Toy Racer's European disc (`MK-5114950`, `V1.050`, its only release), as a Redump-style dump (a `.cue` beside one `.bin` per track). The tools read it from a path you give them. `.gitignore` keeps game files, and anything generated from them, out of the repository.
+> **No game data is included, and none ever will be.** You need your own copy: Toy Commander's USA disc (`MK-57020`, `V1.022`) or Toy Racer's European disc (`MK-5114950`, `V1.050`, its only release), as a Redump-style dump (a `.cue` beside one `.bin` per track). The tools read it from a path you give them.
 
 ## Status
 
