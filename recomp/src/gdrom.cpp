@@ -138,27 +138,39 @@ std::expected<std::vector<uint8_t>, std::string> Disc::read_sector(uint32_t sect
 
 std::expected<std::vector<int16_t>, std::string> Disc::read_audio(uint32_t sector, uint32_t count) const {
     std::vector<int16_t> out;
-    out.reserve(size_t{count} * (kRawSector / 2));
-    const Track* track = nullptr;
-    std::ifstream f;
-    uint8_t raw[kRawSector];
-    for (uint32_t n = 0; n < count; ++n, ++sector) {
-        const std::string name = "sector " + std::to_string(sector);
-        if (!track || sector < track->file_start || sector >= track->end()) {
-            track = nullptr;
-            for (const Track& t : tracks_)
-                if (t.high_density == (sector >= kHighDensityStart) && sector >= t.file_start && sector < t.end()) track = &t;
-            if (!track) return fail(name + " is not on the disc");
-            if (!track->audio) return fail(name + " is in data track " + std::to_string(track->number));
-            f = std::ifstream(track->file, std::ios::binary);
-            if (!f) return fail("cannot open " + qilin::utf8_path(track->file));
-            f.seekg(static_cast<std::streamoff>(uint64_t(sector - track->file_start) * kRawSector));
-        }
-        f.read(reinterpret_cast<char*>(raw), kRawSector);
-        if (!f) return fail("cannot read " + name + " from " + qilin::utf8_path(track->file.filename()));
-        for (uint32_t k = 0; k < kRawSector; k += 2) out.push_back(static_cast<int16_t>(raw[k] | raw[k + 1] << 8));
-    }
+    AudioReader reader(*this);
+    if (auto r = reader.read(sector, count, out); !r) return std::unexpected(r.error());
     return out;
+}
+
+std::expected<void, std::string> AudioReader::read(uint32_t sector, uint32_t count, std::vector<int16_t>& out) {
+    out.resize(size_t{count} * (kRawSector / 2));
+    for (uint32_t n = 0; n < count; ++n, ++sector) {
+        if (!track_ || sector < track_->file_start || sector >= track_->end()) {
+            track_ = nullptr;
+            file_ = std::ifstream();
+            const Track* found = nullptr;
+            for (const Track& t : disc_->tracks())
+                if (t.high_density == (sector >= kHighDensityStart) && sector >= t.file_start && sector < t.end()) found = &t;
+            if (!found) return fail("sector " + std::to_string(sector) + " is not on the disc");
+            if (!found->audio) return fail("sector " + std::to_string(sector) + " is in data track " + std::to_string(found->number));
+            file_.open(found->file, std::ios::binary);
+            if (!file_) return fail("cannot open " + qilin::utf8_path(found->file));
+            track_ = found, next_ = found->file_start;
+        }
+        if (sector != next_) file_.seekg(static_cast<std::streamoff>(uint64_t(sector - track_->file_start) * kRawSector)), next_ = sector;
+        uint8_t raw[kRawSector];
+        file_.read(reinterpret_cast<char*>(raw), kRawSector);
+        if (!file_) {
+            const std::string why = "cannot read sector " + std::to_string(sector) + " from " + qilin::utf8_path(track_->file.filename());
+            track_ = nullptr;  // opened again next time
+            return fail(why);
+        }
+        ++next_;
+        int16_t* to = out.data() + size_t{n} * (kRawSector / 2);
+        for (uint32_t k = 0; k < kRawSector; k += 2) to[k / 2] = static_cast<int16_t>(raw[k] | raw[k + 1] << 8);
+    }
+    return {};
 }
 
 std::expected<std::vector<uint8_t>, std::string> Disc::read(uint32_t sector, uint64_t bytes) const {

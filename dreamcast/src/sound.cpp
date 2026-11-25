@@ -21,7 +21,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -142,18 +144,46 @@ struct Cd {
     uint32_t frame = 0;  // the sample frame within the sector at `at`
     std::vector<int16_t> buffer;  // sectors from `buffered`
     uint32_t buffered = 0;
+    // The disc is read off the sound lock, ahead of the play: the sectors
+    // after the buffer's (or the play's start again, at its end with a repeat
+    // left) are read into `ahead` by a task while the buffer plays. The
+    // reader keeps the track's file open; only that task or, when none is
+    // running, the lock's holder uses it.
+    std::optional<qilin::gdrom::AudioReader> reader;
+    std::future<std::expected<void, std::string>> reading;
+    std::vector<int16_t> ahead;
+    uint32_t ahead_from = 0, ahead_count = 0;
 } g_cd;
 constexpr uint32_t kFrameOffset = 150, kFramesPerSector = 588, kReadAhead = 16;
+
+// Fills the buffer with the sectors from `sector` (a disc sector): what was
+// read ahead if it's those, else read now.
+void cd_fill(uint32_t sector) {
+    const uint32_t count = std::min(kReadAhead, g_cd.end - kFrameOffset - sector);
+    std::optional<std::expected<void, std::string>> done;
+    if (g_cd.reading.valid()) done = g_cd.reading.get();
+    if (done && g_cd.ahead_from == sector && g_cd.ahead_count == count) {
+        if (!*done) rt::fatal("sound: CD audio: %s", done->error().c_str());
+        g_cd.buffer.swap(g_cd.ahead);
+    } else {
+        if (!g_cd.reader) g_cd.reader.emplace(*g_disc);
+        if (auto r = g_cd.reader->read(sector, count, g_cd.buffer); !r) rt::fatal("sound: CD audio: %s", r.error().c_str());
+    }
+    g_cd.buffered = sector;
+    // What plays next, as far as the play is known now.
+    uint32_t next = sector + count;
+    if (next >= g_cd.end - kFrameOffset) {
+        if (g_cd.repeats == 0) return;
+        next = g_cd.start - kFrameOffset;
+    }
+    g_cd.ahead_from = next, g_cd.ahead_count = std::min(kReadAhead, g_cd.end - kFrameOffset - next);
+    g_cd.reading = std::async(std::launch::async, [from = next, n = g_cd.ahead_count] { return g_cd.reader->read(from, n, g_cd.ahead); });
+}
 
 void cd_sample(float& left, float& right) {
     if (!g_cd.playing) return;
     const uint32_t sector = g_cd.at - kFrameOffset;
-    if (g_cd.buffer.empty() || sector < g_cd.buffered || sector >= g_cd.buffered + g_cd.buffer.size() / (2 * kFramesPerSector)) {
-        const uint32_t count = std::min(kReadAhead, g_cd.end - g_cd.at);
-        auto pcm = g_disc->read_audio(sector, count);
-        if (!pcm) rt::fatal("sound: CD audio: %s", pcm.error().c_str());
-        g_cd.buffer = std::move(*pcm), g_cd.buffered = sector;
-    }
+    if (g_cd.buffer.empty() || sector < g_cd.buffered || sector >= g_cd.buffered + g_cd.buffer.size() / (2 * kFramesPerSector)) cd_fill(sector);
     const size_t k = (size_t{sector - g_cd.buffered} * kFramesPerSector + g_cd.frame) * 2;
     left = g_cd.buffer[k], right = g_cd.buffer[k + 1];
     if (++g_cd.frame < kFramesPerSector) return;

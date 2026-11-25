@@ -1184,6 +1184,16 @@ void test_gdrom() {
         CHECK(!disc->read_audio(45059, 2).has_value());  // runs off track 4 into track 5's data
         const auto single = disc->read_audio(10, 12);    // track 2, the single-density area's
         CHECK(single.has_value() && single->size() == 12 * 1176 && (*single)[5] == 0x5555);
+        // A reader that keeps the file open: reading on, back, into another
+        // track and into data reads what read_audio does.
+        gdrom::AudioReader reader(*disc);
+        std::vector<int16_t> got;
+        const auto same = [&](uint32_t sector, uint32_t count) {
+            const auto want = disc->read_audio(sector, count);
+            return reader.read(sector, count, got).has_value() && want.has_value() && got == *want;
+        };
+        CHECK(same(45025, 1) && same(45026, 1) && same(45024, 2) && same(10, 12) && same(45025, 2));
+        CHECK(!reader.read(45000, 1, got).has_value() && !reader.read(45059, 2, got).has_value() && same(45025, 1));
     }
 
     // A sector of another mode stops the read.

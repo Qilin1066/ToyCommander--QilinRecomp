@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,6 +73,22 @@ public:
 
 private:
     std::vector<Track> tracks_;
+};
+
+// Reads audio sectors as read_audio does, keeping the track's file open
+// between reads: a stream read on from where it is doesn't open or seek
+// again. One reader is used by one thread at a time; the disc must outlive it.
+class AudioReader {
+public:
+    explicit AudioReader(const Disc& disc) : disc_(&disc) {}
+    // `count` sectors from `sector` into `out` (replacing what it held).
+    std::expected<void, std::string> read(uint32_t sector, uint32_t count, std::vector<int16_t>& out);
+
+private:
+    const Disc* disc_;
+    const Track* track_ = nullptr;  // the file open, if any
+    std::ifstream file_;
+    uint32_t next_ = 0;  // the sector the file is at
 };
 
 // Parses a bootstrap sector's first 256 bytes.
