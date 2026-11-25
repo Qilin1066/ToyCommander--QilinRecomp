@@ -35,6 +35,8 @@ void attach(const uint8_t* registers, const uint8_t* ram, const qilin::gdrom::Di
 // With the lock held:
 void sync();          // render up to the present guest time
 void key_execute();   // KYONEX written: each channel keyed on or off by its KYONB
+// As of the last sync (the driver's per-frame work syncs once, then reads
+// every channel at that one moment):
 uint32_t position(unsigned channel);  // the sample a channel plays (its CA)
 bool finished(unsigned channel);      // a channel without a loop has played to its loop end
 

@@ -354,9 +354,12 @@ bool passed(int32_t event, int32_t before, int32_t now) {
 // The driver's per-frame work: each playing port's position, and a port
 // whose channel played to its end without a loop is keyed off and no longer
 // playing; then the pending position events, ports 31 down to 0, then 63
-// down to 32.
+// down to 32. The channels are rendered up to now once, and every port read
+// at that moment (a read of the clock and a render a port was a cost on
+// every read of the driver's records).
 void driver_frame() {
     if (!g_driver_started) return;
+    sound::sync();
     for (unsigned port = 0; port < 64; ++port) {
         if (g_ram[g_driver.active + port] != 0xFF) continue;
         const uint32_t at = sound::position(port);

@@ -290,13 +290,9 @@ void key_execute() {
     }
 }
 
-uint32_t position(unsigned channel) {
-    sync();
-    return g_ch[channel & 63u].index;
-}
+uint32_t position(unsigned channel) { return g_ch[channel & 63u].index; }
 
 bool finished(unsigned channel) {
-    sync();
     return g_ch[channel & 63u].on && g_ch[channel & 63u].ended;
 }
 
