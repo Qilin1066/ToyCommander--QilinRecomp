@@ -34,7 +34,13 @@ uint64_t rate(const Timer& t) {
     static constexpr uint32_t kDiv[5] = {4, 16, 64, 256, 1024};
     return kPeripheralHz / kDiv[t.tcr & 7u];
 }
-uint64_t ticks_since(const Timer& t, uint64_t now) { return (now - t.since) / 1000u * rate(t) / 1'000'000u; }
+// The whole ticks in the guest nanoseconds since counting began: floor(ns *
+// rate / 1e9), exact (whole seconds and the rest scaled apart, so neither
+// product overflows), not in steps of a microsecond's 12 or 13 ticks.
+uint64_t ticks_since(const Timer& t, uint64_t now) {
+    const uint64_t ns = now - t.since, hz = rate(t);
+    return ns / 1'000'000'000u * hz + ns % 1'000'000'000u * hz / 1'000'000'000u;
+}
 
 // The counter now, and whether it has underflowed since it was set.
 uint32_t current(int n, uint64_t now) {

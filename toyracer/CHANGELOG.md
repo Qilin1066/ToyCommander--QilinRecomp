@@ -28,6 +28,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were. A race's two renders a frame each resolve only their own lines.
 
 ### Fixed
+- **The SH-4 timers count smoothly**: a timer moved in steps of 12 or 13 ticks (whole microseconds); it now counts every tick of guest time.
 - **Two crashes that could have happened are fixed**: an error in the sound driver's work on the mixer thread now gives a report instead of a silent exit, and clearing memory through RAM's uncached addresses no longer crashes.
 - **The console flash memory's save history keeps whole saves**: a copy was kept before each 64-byte write, so one save filled the history's five copies with itself half-written; now one copy is kept a save, as the memory card does.
 - **CD music no longer reads the disc with the sound lock held**: the next 0.2 seconds are read ahead in the background from a track file kept open, instead of opening the file and reading while the game's thread waits for the sound chip.
