@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -174,32 +175,44 @@ std::expected<void, std::string> AudioReader::read(uint32_t sector, uint32_t cou
 }
 
 std::expected<std::vector<uint8_t>, std::string> Disc::read(uint32_t sector, uint64_t bytes) const {
-    std::vector<uint8_t> out;
-    out.reserve(bytes);
-    const Track* track = nullptr;
-    std::ifstream f;
-    uint8_t raw[kRawSector];
-    while (out.size() < bytes) {
-        const std::string name = "sector " + std::to_string(sector);
-        if (!track || sector < track->file_start || sector >= track->end()) {
-            track = nullptr;
-            for (const Track& t : tracks_)
-                if (t.high_density == (sector >= kHighDensityStart) && sector >= t.file_start && sector < t.end()) track = &t;
-            if (!track) return fail(name + " is not on the disc");
-            if (track->audio) return fail(name + " is in audio track " + std::to_string(track->number));
-            f = std::ifstream(track->file, std::ios::binary);
-            if (!f) return fail("cannot open " + qilin::utf8_path(track->file));
-            f.seekg(static_cast<std::streamoff>(uint64_t(sector - track->file_start) * kRawSector));
-        }
-        f.read(reinterpret_cast<char*>(raw), kRawSector);
-        if (!f) return fail("cannot read " + name + " from " + qilin::utf8_path(track->file.filename()));
-        if (!std::equal(std::begin(kSync), std::end(kSync), raw)) return fail(name + " has no sync pattern: not a raw data sector");
-        if (raw[15] != 1) return fail(name + " is mode " + std::to_string(raw[15]) + ", not Mode 1");
-        const uint64_t take = std::min<uint64_t>(kSectorData, bytes - out.size());
-        out.insert(out.end(), raw + 16, raw + 16 + take);
-        ++sector;
-    }
+    const uint64_t sectors = (bytes + kSectorData - 1) / kSectorData;
+    if (sectors > 0xFFFFFFFFu) return fail("a read of " + std::to_string(bytes) + " bytes");
+    std::vector<uint8_t> out(sectors * kSectorData);
+    DataReader reader(*this);
+    if (auto r = reader.read(sector, static_cast<uint32_t>(sectors), out.data()); !r) return std::unexpected(r.error());
+    out.resize(bytes);
     return out;
+}
+
+std::expected<void, std::string> DataReader::read(uint32_t sector, uint32_t count, uint8_t* out) {
+    for (uint32_t n = 0; n < count; ++n, ++sector) {
+        const auto name = [&] { return "sector " + std::to_string(sector); };
+        if (!track_ || sector < track_->file_start || sector >= track_->end()) {
+            track_ = nullptr;
+            file_ = std::ifstream();
+            const Track* found = nullptr;
+            for (const Track& t : disc_->tracks())
+                if (t.high_density == (sector >= kHighDensityStart) && sector >= t.file_start && sector < t.end()) found = &t;
+            if (!found) return fail(name() + " is not on the disc");
+            if (found->audio) return fail(name() + " is in audio track " + std::to_string(found->number));
+            file_.open(found->file, std::ios::binary);
+            if (!file_) return fail("cannot open " + qilin::utf8_path(found->file));
+            track_ = found, next_ = found->file_start;
+        }
+        if (sector != next_) file_.seekg(static_cast<std::streamoff>(uint64_t(sector - track_->file_start) * kRawSector)), next_ = sector;
+        uint8_t raw[kRawSector];
+        file_.read(reinterpret_cast<char*>(raw), kRawSector);
+        if (!file_) {
+            const std::string why = "cannot read " + name() + " from " + qilin::utf8_path(track_->file.filename());
+            track_ = nullptr;  // opened again next time
+            return fail(why);
+        }
+        ++next_;
+        if (!std::equal(std::begin(kSync), std::end(kSync), raw)) return fail(name() + " has no sync pattern: not a raw data sector");
+        if (raw[15] != 1) return fail(name() + " is mode " + std::to_string(raw[15]) + ", not Mode 1");
+        std::memcpy(out + size_t{n} * kSectorData, raw + 16, kSectorData);
+    }
+    return {};
 }
 
 std::expected<Bootstrap, std::string> parse_bootstrap(const std::vector<uint8_t>& ip) {

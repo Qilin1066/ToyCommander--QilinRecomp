@@ -1176,6 +1176,24 @@ void test_gdrom() {
     CHECK(disc->read_sector(9).has_value());
     CHECK(!disc->read_sector(45001).has_value());   // no sync pattern
     CHECK(disc->read(45016, 3 * 2048).has_value()); // several sectors in one read
+    {
+        const auto part = disc->read(45016, 100);  // part of a sector
+        const auto whole = disc->read_sector(45016);
+        CHECK(part.has_value() && whole.has_value() && part->size() == 100 && std::equal(part->begin(), part->end(), whole->begin()));
+        CHECK(disc->read(45016, 0).has_value() && disc->read(45016, 0)->empty());
+        // A reader that keeps the file open: reading on, back, into another
+        // track, and on after an error reads what read does.
+        gdrom::DataReader reader(*disc);
+        std::vector<uint8_t> got;
+        const auto same = [&](uint32_t sector, uint32_t count) {
+            const auto want = disc->read(sector, uint64_t{count} * 2048);
+            got.assign(size_t{count} * 2048, 0xEE);
+            return reader.read(sector, count, got.data()).has_value() && want.has_value() && got == *want;
+        };
+        CHECK(same(45016, 3) && same(45019, 1) && same(45016, 1) && same(9, 1) && same(45017, 2));
+        got.resize(2048);
+        CHECK(!reader.read(45030, 1, got.data()).has_value() && !reader.read(45001, 1, got.data()).has_value() && same(45016, 2));
+    }
     // CD audio: 588 left/right pairs a sector, little-endian.
     {
         const auto pcm = disc->read_audio(45025, 2);

@@ -3,6 +3,9 @@
 #include "build.hpp"
 
 #include <cstdint>
+#include <cstring>
+#include <optional>
+#include <vector>
 
 #include "chain.hpp"
 #include "gdrom.hpp"
@@ -61,17 +64,31 @@ void deliver_pending(rt::Context& c) {
 // sector (the 2-second lead-in): the disc reader's sectors are the ISO's.
 constexpr uint32_t kFrameOffset = 150;
 
+// The data track's file stays open between reads (a file read in order
+// isn't opened or sought again), and a request is read whole, then copied
+// to the guest: into RAM in one copy, anywhere else a word at a time
+// through the bus.
+std::optional<qilin::gdrom::DataReader> g_reader;
+std::vector<uint8_t> g_sectors;
+
 uint32_t read_sectors(uint32_t frame, uint32_t count, uint32_t to) {
     if (!g_disc) rt::fatal("gdrom: no disc");
-    if (frame < kFrameOffset || count == 0) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, frame};
-    for (uint32_t k = 0; k < count; ++k) {
-        const auto data = g_disc->read_sector(frame - kFrameOffset + k);
-        if (!data) rt::fatal("gdrom: %s", data.error().c_str());
-        const uint32_t at = to + k * 2048;
-        for (uint32_t i = 0; i < 2048; i += 4)
-            rt::st32(at + i, uint32_t((*data)[i]) | uint32_t((*data)[i + 1]) << 8 | uint32_t((*data)[i + 2]) << 16 | uint32_t((*data)[i + 3]) << 24);
+    if (frame < kFrameOffset || count == 0 || count > 0x10000u) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, frame};
+    if (!g_reader) g_reader.emplace(*g_disc);
+    const uint32_t bytes = count * 2048;
+    g_sectors.resize(bytes);
+    if (auto r = g_reader->read(frame - kFrameOffset, count, g_sectors.data()); !r) rt::fatal("gdrom: %s", r.error().c_str());
+    if (rt::in_ram(to, bytes)) {
+        rt::check(to, bytes);
+        std::memcpy(rt::g_mem + to, g_sectors.data(), bytes);
+    } else {
+        for (uint32_t i = 0; i < bytes; i += 4) {
+            uint32_t w;
+            std::memcpy(&w, g_sectors.data() + i, 4);
+            rt::st32(to + i, w);
+        }
     }
-    return count * 2048;
+    return bytes;
 }
 
 // The table of contents of one area, as the drive gives it: 99 words for
@@ -266,7 +283,7 @@ constexpr rt::Provided kCalls[] = {
 
 }  // namespace
 
-void insert_disc(const qilin::gdrom::Disc& disc) { g_disc = &disc; }
+void insert_disc(const qilin::gdrom::Disc& disc) { g_disc = &disc, g_reader.reset(); }
 
 void provide_gdrom_bios() { rt::provide(kCalls); }
 
