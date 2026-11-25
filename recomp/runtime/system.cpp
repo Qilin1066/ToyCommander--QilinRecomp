@@ -2,6 +2,7 @@
 #include "system.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -57,17 +58,32 @@ void replaced(Context& c, uint32_t fn) {
     c.ret = c.pr;
 }
 
+namespace {
+// The registers lifted code keeps in locals, as the lifter's RegSet numbers them.
+struct Locals {
+    uint32_t r[16], named[9], fr[16];  // named: T PR GBR MACH MACL S Q M FPUL; fr as bits (NaNs too)
+};
+Locals locals_of(const Context& c) {
+    Locals l;
+    std::memcpy(l.r, c.r, sizeof l.r);
+    const uint32_t named[9] = {c.t, c.pr, c.gbr, c.mach, c.macl, c.s, c.q, c.m, c.fpul};
+    std::memcpy(l.named, named, sizeof named);
+    std::memcpy(l.fr, c.fr, sizeof l.fr);
+    return l;
+}
+}  // namespace
+
 void replaced_within(Context& c, uint32_t fn, uint64_t regs) {
-    const Context before = c;
+    const Locals before = locals_of(c);
     replaced(c, fn);
-    const auto kept = [&](unsigned bit, bool same) {
-        if (!same && !(regs >> bit & 1u)) throw Stop{Stop::Footprint, fn, bit};
-    };
-    for (unsigned n = 0; n < 16; ++n) kept(n, c.r[n] == before.r[n]);
-    kept(16, c.t == before.t), kept(17, c.pr == before.pr), kept(18, c.gbr == before.gbr), kept(19, c.mach == before.mach);
-    kept(20, c.macl == before.macl), kept(21, c.s == before.s), kept(22, c.q == before.q), kept(23, c.m == before.m);
-    kept(24, c.fpul == before.fpul);
-    for (unsigned n = 0; n < 16; ++n) kept(32 + n, std::memcmp(&c.fr[n], &before.fr[n], sizeof(float)) == 0);  // bits: NaNs too
+    const Locals after = locals_of(c);
+    // Which changed, as a RegSet, without a branch a register; then one test.
+    uint64_t changed = 0;
+    for (unsigned n = 0; n < 16; ++n) changed |= uint64_t{after.r[n] != before.r[n]} << n;
+    for (unsigned n = 0; n < 9; ++n) changed |= uint64_t{after.named[n] != before.named[n]} << (16 + n);
+    for (unsigned n = 0; n < 16; ++n) changed |= uint64_t{after.fr[n] != before.fr[n]} << (32 + n);
+    if (const uint64_t outside = changed & ~regs) [[unlikely]]
+        throw Stop{Stop::Footprint, fn, static_cast<uint32_t>(std::countr_zero(outside))};
 }
 
 uint32_t function_containing(uint32_t address) {
