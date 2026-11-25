@@ -60,6 +60,8 @@ public:
                 if (!body.contains(target) && !slot_copies.contains(target))
                     throw Fail{target, std::format("a branch to {:08X}, which isn't an instruction of its own here", target)};
             std::string out = std::format("void {}(rt::Context& c) {{\n", fn_name(f_.entry));
+            // Guest memory's base in a local (guest.hpp's accessors say why).
+            if (with_memory_base(body, slot_copies)) out += "    uint8_t* const mem = rt::g_mem;\n";
             for (unsigned n = 0; n < 16; ++n)
                 if (used_ & (1u << n)) out += std::format("    uint32_t r{} = c.r[{}];\n", n, n);
             for (const auto& [bit, name] : kNamed)
@@ -109,6 +111,22 @@ private:
     static constexpr std::pair<uint32_t, const char*> kNamed[] = {{kT, "t"},       {kPr, "pr"}, {kGbr, "gbr"}, {kMach, "mach"},
                                                                   {kMacl, "macl"}, {kS, "s"},   {kQ, "q"},     {kM, "m"},
                                                                   {kFpul, "fpul"}};
+
+    // The accessors that take guest memory's base, as lifted code calls them:
+    // `rt::ld32(` becomes `rt::ld32(mem, ` in the function's code.
+    static constexpr std::string_view kAccessors[] = {"ld8(", "ld16(", "ld32(", "ld8s(", "ld16s(", "st8(", "st16(", "st32(", "ldf(", "stf(", "tasb("};
+    static bool with_memory_base(std::map<uint32_t, std::string>& body, std::map<uint32_t, std::string>& slot_copies) {
+        bool any = false;
+        for (auto* part : {&body, &slot_copies})
+            for (auto& [pc, code] : *part)
+                for (const std::string_view a : kAccessors) {
+                    const std::string from = std::string("rt::") + std::string(a);
+                    if (code.find(from) == std::string::npos) continue;
+                    replace_all(code, from, from + "mem, ");
+                    any = true;
+                }
+        return any;
+    }
 
     static void replace_all(std::string& s, std::string_view from, std::string_view to) {
         for (size_t at = s.find(from); at != std::string::npos; at = s.find(from, at + to.size())) s.replace(at, from.size(), to);

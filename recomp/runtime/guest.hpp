@@ -107,43 +107,57 @@ inline bool in_ram(uint32_t a, uint32_t n) { return a - kRamLo <= kRamBytes - n;
 uint32_t bus_read(uint32_t a, unsigned n);
 void bus_write(uint32_t a, uint32_t v, unsigned n);
 
-inline uint32_t ld8(uint32_t a) {
+// Each with the base passed in (`mem`: g_mem), as lifted code calls them:
+// it takes g_mem into a local once, on entry. A store through a byte
+// pointer may change any memory, g_mem itself included, so with the global
+// the compiler loads it again after every store; a local nothing can reach
+// stays in a register. g_mem is set once, before any guest code runs.
+// Native code calls the forms without it.
+inline uint32_t ld8(const uint8_t* mem, uint32_t a) {
     if (!in_ram(a, 1)) [[unlikely]] return bus_read(a, 1);
     check(a, 1);
-    return g_mem[a];
+    return mem[a];
 }
-inline uint32_t ld16(uint32_t a) {
+inline uint32_t ld16(const uint8_t* mem, uint32_t a) {
     if (!in_ram(a, 2)) [[unlikely]] return bus_read(a, 2);
     check(a, 2);
     uint16_t v;
-    std::memcpy(&v, g_mem + a, 2);
+    std::memcpy(&v, mem + a, 2);
     return v;
 }
-inline uint32_t ld32(uint32_t a) {
+inline uint32_t ld32(const uint8_t* mem, uint32_t a) {
     if (!in_ram(a, 4)) [[unlikely]] return bus_read(a, 4);
     check(a, 4);
     uint32_t v;
-    std::memcpy(&v, g_mem + a, 4);
+    std::memcpy(&v, mem + a, 4);
     return v;
 }
-inline uint32_t ld8s(uint32_t a) { return static_cast<uint32_t>(static_cast<int8_t>(ld8(a))); }
-inline uint32_t ld16s(uint32_t a) { return static_cast<uint32_t>(static_cast<int16_t>(ld16(a))); }
-inline void st8(uint32_t a, uint32_t v) {
+inline uint32_t ld8s(const uint8_t* mem, uint32_t a) { return static_cast<uint32_t>(static_cast<int8_t>(ld8(mem, a))); }
+inline uint32_t ld16s(const uint8_t* mem, uint32_t a) { return static_cast<uint32_t>(static_cast<int16_t>(ld16(mem, a))); }
+inline void st8(uint8_t* mem, uint32_t a, uint32_t v) {
     if (!in_ram(a, 1)) [[unlikely]] return bus_write(a, v & 0xFFu, 1);
     check(a, 1);
-    g_mem[a] = static_cast<uint8_t>(v);
+    mem[a] = static_cast<uint8_t>(v);
 }
-inline void st16(uint32_t a, uint32_t v) {
+inline void st16(uint8_t* mem, uint32_t a, uint32_t v) {
     if (!in_ram(a, 2)) [[unlikely]] return bus_write(a, v & 0xFFFFu, 2);
     check(a, 2);
     const uint16_t h = static_cast<uint16_t>(v);
-    std::memcpy(g_mem + a, &h, 2);
+    std::memcpy(mem + a, &h, 2);
 }
-inline void st32(uint32_t a, uint32_t v) {
+inline void st32(uint8_t* mem, uint32_t a, uint32_t v) {
     if (!in_ram(a, 4)) [[unlikely]] return bus_write(a, v, 4);
     check(a, 4);
-    std::memcpy(g_mem + a, &v, 4);
+    std::memcpy(mem + a, &v, 4);
 }
+inline uint32_t ld8(uint32_t a) { return ld8(g_mem, a); }
+inline uint32_t ld16(uint32_t a) { return ld16(g_mem, a); }
+inline uint32_t ld32(uint32_t a) { return ld32(g_mem, a); }
+inline uint32_t ld8s(uint32_t a) { return ld8s(g_mem, a); }
+inline uint32_t ld16s(uint32_t a) { return ld16s(g_mem, a); }
+inline void st8(uint32_t a, uint32_t v) { st8(g_mem, a, v); }
+inline void st16(uint32_t a, uint32_t v) { st16(g_mem, a, v); }
+inline void st32(uint32_t a, uint32_t v) { st32(g_mem, a, v); }
 
 // ---- arithmetic with T ----
 
@@ -220,9 +234,9 @@ inline uint32_t cmpstr(uint32_t rn, uint32_t rm) {
 }
 
 // tas.b: T = whether the byte was zero; bit 7 set.
-inline uint32_t tasb(uint32_t a) {
-    const uint32_t v = ld8(a);
-    st8(a, v | 0x80u);
+inline uint32_t tasb(uint8_t* mem, uint32_t a) {
+    const uint32_t v = ld8(mem, a);
+    st8(mem, a, v | 0x80u);
     return v == 0 ? 1u : 0u;
 }
 
@@ -255,8 +269,10 @@ inline void set_dbl(float& hi, float& lo, double d) {
     hi = flt(static_cast<uint32_t>(v >> 32));
     lo = flt(static_cast<uint32_t>(v));
 }
-inline float ldf(uint32_t a) { return flt(ld32(a)); }
-inline void stf(uint32_t a, float f) { st32(a, bits(f)); }
+inline float ldf(const uint8_t* mem, uint32_t a) { return flt(ld32(mem, a)); }
+inline void stf(uint8_t* mem, uint32_t a, float f) { st32(mem, a, bits(f)); }
+inline float ldf(uint32_t a) { return ldf(g_mem, a); }
+inline void stf(uint32_t a, float f) { stf(g_mem, a, f); }
 inline float fabs_bits(float f) { return flt(bits(f) & 0x7FFFFFFFu); }
 inline float fneg_bits(float f) { return flt(bits(f) ^ 0x80000000u); }
 
