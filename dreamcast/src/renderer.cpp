@@ -137,8 +137,20 @@ struct Texture {
     uint64_t palette_hash = 0;
     uint32_t bytes = 0;
     uint64_t used = 0;  // the frame it was last checked in
-    std::vector<std::pair<uint32_t, VkDescriptorSet>> sets;  // by sampler bits
+    struct Set {
+        uint32_t bits;  // the sampler's
+        VkDescriptorSet set;
+        VkDescriptorPool pool;  // the one it came from, to give it back
+    };
+    std::vector<Set> sets;
 };
+
+// A texture no render has used for this many is let go (its image, memory
+// and descriptor sets): the cache holds what the game is drawing with, not
+// everything it ever drew (levels, menus and movies would otherwise add up
+// until the device's allocation count ran out). One that comes back is
+// decoded again. Looked at every kEvictEvery renders.
+constexpr uint64_t kTextureAge = 1200, kEvictEvery = 64;
 
 uint64_t hash_words(const uint32_t* w, uint32_t n, uint64_t h) {
     for (uint32_t k = 0; k < n; ++k) h = (h ^ w[k]) * 0x100000001B3ull;
@@ -537,29 +549,36 @@ struct Renderer::Impl {
         return s;
     }
 
+    // A texture's descriptor set for a sampler: from any pool with room (an
+    // evicted texture's sets go back to theirs), the newest first, or a new pool.
     VkDescriptorSet set_for(Texture& t, uint32_t bits) {
-        for (const auto& [b, s] : t.sets)
-            if (b == bits) return s;
+        for (const Texture::Set& s : t.sets)
+            if (s.bits == bits) return s.set;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        for (int attempt = 0; attempt < 2 && !set; ++attempt) {
-            if (!set_pools.empty()) {
-                VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                ai.descriptorPool = set_pools.back();
-                ai.descriptorSetCount = 1;
-                ai.pSetLayouts = &set_layout;
-                if (vkAllocateDescriptorSets(gpu.device, &ai, &set) == VK_SUCCESS) break;
-                set = VK_NULL_HANDLE;
-            }
+        VkDescriptorPool from = VK_NULL_HANDLE;
+        const auto allocate = [&](VkDescriptorPool p) {
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = p;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &set_layout;
+            if (vkAllocateDescriptorSets(gpu.device, &ai, &set) != VK_SUCCESS) return false;
+            from = p;
+            return true;
+        };
+        bool found = false;
+        for (auto p = set_pools.rbegin(); p != set_pools.rend() && !found; ++p) found = allocate(*p);
+        if (!found) {
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024};
             VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
             pci.maxSets = 1024;
             pci.poolSizeCount = 1;
             pci.pPoolSizes = &size;
             VkDescriptorPool p;
             check(vkCreateDescriptorPool(gpu.device, &pci, nullptr, &p), "vkCreateDescriptorPool");
             set_pools.push_back(p);
+            if (!allocate(p)) qilin::host::die("no descriptor set from a new pool");
         }
-        if (!set) qilin::host::die("no descriptor set from a new pool");
         const VkDescriptorImageInfo info{sampler(bits), t.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         w.dstSet = set;
@@ -567,8 +586,24 @@ struct Renderer::Impl {
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &info;
         vkUpdateDescriptorSets(gpu.device, 1, &w, 0, nullptr);
-        t.sets.emplace_back(bits, set);
+        t.sets.push_back({bits, set, from});
         return set;
+    }
+
+    // The textures no render has used for kTextureAge renders, let go. Only
+    // after wait(): no work in flight can be using them.
+    void evict_textures() {
+        for (auto it = textures.begin(); it != textures.end();) {
+            Texture& t = it->second;
+            if (frame - t.used < kTextureAge) {
+                ++it;
+                continue;
+            }
+            for (const Texture::Set& s : t.sets) check(vkFreeDescriptorSets(gpu.device, s.pool, 1, &s.set), "vkFreeDescriptorSets");
+            t.image.destroy(gpu);
+            it = textures.erase(it);
+            ++stats.evicted;
+        }
     }
 
     // An image's every level, one after another from the largest.
@@ -969,6 +1004,7 @@ struct Renderer::Impl {
     Picture draw(const Source& src) {
         wait();
         ++frame;
+        if (frame % kEvictEvery == 0) evict_textures();
         stats.draws = stats.triangles = stats.culled = stats.uploads = stats.dropped = 0;
         const float wide_width = float(src.width) * src.widen;  // the picture's width in the game's pixels
         Target& t = target(src.frame_buffer, static_cast<uint32_t>(std::lround(wide_width)), src.height);
@@ -1019,6 +1055,7 @@ struct Renderer::Impl {
             }
         }
         stats.draws = uint32_t(draws.size());
+        stats.cached = uint32_t(textures.size());
 
         float z_max = 0.0f;
         for (const HostVertex& v : vertices) z_max = std::max(z_max, v.z);

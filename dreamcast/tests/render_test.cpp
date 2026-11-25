@@ -541,6 +541,24 @@ int renderer() {
         expect(pixel_is(pic, 12, 20, 0, 128, 0), "volume clip: the translucent surface inside the volume and the clip, halved");
         expect(pixel_is(pic, 12, 36, 0, 255, 0), "volume clip: the translucent surface inside the volume, outside the clip");
     }
+
+    // The texture cache lets go of what no render has used for a while (1,200
+    // renders): the first scene's texture, after that many renders of a scene
+    // without it, is gone, and drawing the first scene again decodes it anew
+    // into the same picture.
+    {
+        r.draw(src);
+        const uint32_t decoded = r.stats().textures, evicted = r.stats().evicted;
+        expect(r.stats().cached >= 1, "texture cache: the scene's texture is held");
+        dreamcast::renderer::Source plain = src;
+        plain.scene = &shadow;  // untextured
+        for (int k = 0; k < 1300; ++k) r.draw(plain);
+        expect(r.stats().evicted > evicted, "texture cache: a texture unused for 1,200 renders is let go");
+        expect(r.stats().cached == 0, "texture cache: nothing unused is held (the scene since has no texture)");
+        r.draw(src);
+        expect(r.stats().textures == decoded + 1, "texture cache: drawn again, it's decoded anew");
+        expect(r.read_back() == px, "texture cache: into the same picture");
+    }
     return 0;
 }
 

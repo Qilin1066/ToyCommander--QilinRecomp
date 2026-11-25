@@ -10,6 +10,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were.
 
 ### Fixed
+- **The texture cache lets go of textures unused for a while** (1,200 renders): it kept every texture ever drawn, each with its own GPU memory and descriptor sets, which over a long session could reach the device's allocation limit.
 - **Less memory traffic a render**: a render draws, stores and resolves only its own area, instead of loading and storing the whole picture; with multisampling, one shared multisampled image whose samples are never stored, instead of one kept per frame buffer for nothing.
 - **The sound chip's interrupt** is no longer raised from the mixer thread into the system bus's status register while the game's thread reads and acknowledges it (it could be lost); it waits in a mailbox the game's thread takes in.
 - **A stop's report and exit code** are no longer at risk at the end: the program ends without static destructors while the sound mixer and the display's threads still run (after a stop, at the game's end and on a fatal error).

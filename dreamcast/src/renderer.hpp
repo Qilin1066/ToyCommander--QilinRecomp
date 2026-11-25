@@ -118,6 +118,8 @@ public:
 
     struct Stats {
         uint32_t draws = 0, triangles = 0, culled = 0, textures = 0, uploads = 0, dropped = 0;
+        uint32_t evicted = 0;  // textures let go, unused for a while (all the run's, as `textures` is)
+        uint32_t cached = 0;   // textures held now
     };
     const Stats& stats() const;
 
