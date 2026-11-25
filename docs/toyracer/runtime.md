@@ -25,7 +25,7 @@ Native code follows SHC's convention: arguments in r4–r7, the result in r0. It
 
 **SR.** Lifted code reads SR and writes its interrupt mask: the middleware masks interrupts around its hardware set-up (`stc sr,r0 ; and ; or #0xF0 ; ldc r0,sr`) in 19 functions. SR is held in the context but for T, S, Q and M, which live in their own locals. The system bits are fixed: privileged mode, register bank 0, exceptions unblocked, the FPU enabled. IMASK is whatever the code sets; the runtime will deliver its interrupts (vertical blank and the like) only where IMASK allows them, as the hardware does. An `ldc` that would change a system bit stops. The differential test covers the four SR forms. That leaves 2 functions unlifted, both setting up exception handling (`stc vbr`, `ldc rN,r1_bank`), which the port replaces.
 
-## The start-up (`toyracer/src/boot.cpp`)
+## The start-up (`shinobi/src/boot.cpp`, shared with Toy Commander since its runtime log's step 52)
 The boot file's entry code sets the cache control register and jumps to Shinobi's start-up at `0x8C0C5440`. The runtime does what that start-up does, natively:
 1. The boot file goes to `0x8C010000`; the rest of RAM is zero.
 2. r15 is `0x8C00F400`, and `0x8C00C000`–`0x8C00F400` is filled with the word `0x41474553` ("SEGA"), as the start-up fills its stack.
@@ -41,7 +41,7 @@ Toy Commander's bring-up had already named and replaced two dozen functions. The
 
 What it showed besides: here some of Shinobi's parts are linked among the middleware (the timer set-up `0x8C04D758`, the cable query `0x8C04DB04`), so they are lifted unless listed as replaced (`recomp/src/layout.cpp`).
 
-## Native replacements (`toyracer/src/natives.cpp`)
+## Native replacements (`toyracer/src/natives.cpp`, and the ones both games share in `shinobi/src`, at this game's addresses from `toyracer/src/build.hpp`)
 | Address | Name | What it does, and what the native code does |
 |---|---|---|
 | `0x8C05E108` | `memclr` | The C runtime's clear: zeroes r5 bytes from r4 and returns r4. The guest code clears 32-byte blocks through the store queues (`docs/code-analysis.md`), which leaves fr0 and fr1 zero when it takes that path. The native code is a bounds-checked `memset` and zeroes fr0 and fr1 on the same condition. |

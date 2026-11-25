@@ -6,6 +6,9 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
+### Changed
+- **The two games' system layers are one copy** (`shinobi/src`): the start-up and the replacements of Shinobi's allocator, interrupt chains, clock, GD-ROM calls and threads, which each game had its own copy of, differing only in addresses; each game now gives its addresses in its `build.hpp`. The same natives at the same addresses as before.
+
 ### Added
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were. A race's two renders a frame each resolve only their own lines.
 

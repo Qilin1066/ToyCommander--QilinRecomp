@@ -12,10 +12,12 @@
 
 #include <cstdint>
 
-namespace toycommander::heap {
+#include "build.hpp"
 
-inline constexpr uint32_t kTablePointer = 0x8C117DBCu;
-inline constexpr uint32_t kDefaultTable = 0x8C0C5AC8u;
+namespace shinobi::heap {
+
+inline constexpr uint32_t kTablePointer = kBuild.shinobi_data;
+inline constexpr uint32_t kDefaultTable = kBuild.heap_default_table;
 
 // 0x8C0B3E10: r5 bytes from r4, both rounded to 32 bytes.
 void init(uint32_t begin, uint32_t size);
@@ -26,4 +28,4 @@ void release(uint32_t block);
 // The free list's total in bytes, headers excluded (what 0x8C0B3E6E reports).
 uint32_t free_bytes();
 
-}  // namespace toycommander::heap
+}  // namespace shinobi::heap

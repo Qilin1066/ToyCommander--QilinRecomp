@@ -14,7 +14,7 @@
 
 #include "guest.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 // The system bus's event (0xA00 + 0x20 n: normal status bit n + 12... as
 // shinobi_chain_add numbers them) happening: its handlers run, as Shinobi's
@@ -24,4 +24,4 @@ void raise_bus_event(qilin::rt::Context& c, uint32_t event);
 // Registers the chain's natives.
 void provide_chain();
 
-}  // namespace toycommander
+}  // namespace shinobi

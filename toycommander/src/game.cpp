@@ -7,7 +7,7 @@
 namespace dreamcast::game {
 
 uint32_t interrupt_handler(uint32_t offset) { return toycommander::interrupt_handler(offset); }
-void raise_bus_event(qilin::rt::Context& c, uint32_t event) { toycommander::raise_bus_event(c, event); }
+void raise_bus_event(qilin::rt::Context& c, uint32_t event) { shinobi::raise_bus_event(c, event); }
 void set_console(unsigned language, bool stereo) { toycommander::set_console(language, stereo); }
 void on_sound_mode(void (*save)(bool stereo)) { toycommander::on_sound_mode(save); }
 // The factor the projection reads (1, or what the screen mode switch, a native, widened it by).

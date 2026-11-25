@@ -345,7 +345,12 @@ set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recom
 set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
                             dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
                             dreamcast/src/interrupts.cpp dreamcast/src/aica.cpp dreamcast/src/sound.cpp dreamcast/src/flash.cpp)
-set(QILIN_GAME_FILES main game boot natives heap gdrom_bios chain rtc threads)
+# Each game's own files (<game>/src: its build.hpp, the addresses), and the
+# Shinobi replacements both games share (shinobi/src), compiled into each
+# game's library with that game's build.hpp.
+set(QILIN_GAME_FILES game natives)
+set(QILIN_SHINOBI_SOURCES shinobi/src/main.cpp shinobi/src/boot.cpp shinobi/src/heap.cpp shinobi/src/gdrom_bios.cpp
+                          shinobi/src/chain.cpp shinobi/src/rtc.cpp shinobi/src/threads.cpp)
 if(QILIN_HOST)
     find_package(Threads REQUIRED)
 endif()
@@ -367,8 +372,8 @@ function(qilin_game game title boot version)
     foreach(f IN LISTS QILIN_GAME_FILES)
         list(APPEND own ${game}/src/${f}.cpp)
     endforeach()
-    add_library(${game}_game STATIC ${own} ${QILIN_DREAMCAST_SOURCES} ${QILIN_RT_SOURCES})
-    target_include_directories(${game}_game PUBLIC ${game}/src dreamcast/src recomp/runtime)
+    add_library(${game}_game STATIC ${own} ${QILIN_SHINOBI_SOURCES} ${QILIN_DREAMCAST_SOURCES} ${QILIN_RT_SOURCES})
+    target_include_directories(${game}_game PUBLIC ${game}/src shinobi/src dreamcast/src recomp/runtime)  # the game's build.hpp first
     target_link_libraries(${game}_game PUBLIC qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui SDL3::SDL3-static Threads::Threads
                                        PRIVATE qilin_warnings)
     target_compile_definitions(${game}_game PUBLIC QILIN_VERSION="${version}")

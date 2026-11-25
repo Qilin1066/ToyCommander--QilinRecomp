@@ -1,5 +1,5 @@
-// qilin_run: the recompiled game, being brought up (it takes the game's name,
-// toycommander, with the first player release: docs/naming.md).
+// The game's program (toycommander, toyracer: each game's library builds this
+// with its own build.hpp; docs/naming.md). It was qilin_run in the bring-up.
 //
 //   qilin_run <the game's .cue>
 //
@@ -26,7 +26,7 @@
 #include "gdrom_bios.hpp"
 #include "interrupts.hpp"
 #include "memory.hpp"
-#include "natives.hpp"
+#include "build.hpp"
 #include "pvr.hpp"
 #include "rtc.hpp"
 #include "sh4.hpp"
@@ -76,12 +76,12 @@ int main(int argc, char** argv) {
     rt::g_region_count = 1;
 #endif
     rt::host_fp_setup();
-    toycommander::provide_natives();
-    toycommander::provide_gdrom_bios();
-    toycommander::provide_chain();
-    toycommander::provide_rtc();
-    toycommander::provide_threads();
-    toycommander::insert_disc(*disc);
+    shinobi::provide_game_natives();
+    shinobi::provide_gdrom_bios();
+    shinobi::provide_chain();
+    shinobi::provide_rtc();
+    shinobi::provide_threads();
+    shinobi::insert_disc(*disc);
     dreamcast::map_pvr();
     dreamcast::ta::map();
     dreamcast::map_aica(*disc);
@@ -123,9 +123,9 @@ int main(int argc, char** argv) {
         }).detach();
     }
     try {
-        toycommander::boot(c, boot_file->image());
+        shinobi::boot(c, boot_file->image());
     } catch (const rt::Stop& s) {
-        if (const rt::Context* t = toycommander::thread_stop_context()) {
+        if (const rt::Context* t = shinobi::thread_stop_context()) {
             std::fprintf(stderr, "(in a guest thread of bu's thread library)\n");
             rt::report(stderr, s, t);
             rt::end(3);

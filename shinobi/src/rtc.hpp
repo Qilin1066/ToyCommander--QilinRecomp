@@ -3,9 +3,9 @@
 // which Shinobi turns into a date.
 #pragma once
 
-namespace toycommander {
+namespace shinobi {
 
 // Registers the clock's natives.
 void provide_rtc();
 
-}  // namespace toycommander
+}  // namespace shinobi

@@ -1,5 +1,7 @@
 #include "gdrom_bios.hpp"
 
+#include "build.hpp"
+
 #include <cstdint>
 
 #include "chain.hpp"
@@ -8,7 +10,7 @@
 #include "sound.hpp"
 #include "system.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 using namespace dreamcast;
 
@@ -61,7 +63,7 @@ constexpr uint32_t kFrameOffset = 150;
 
 uint32_t read_sectors(uint32_t frame, uint32_t count, uint32_t to) {
     if (!g_disc) rt::fatal("gdrom: no disc");
-    if (frame < kFrameOffset || count == 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, frame};
+    if (frame < kFrameOffset || count == 0) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, frame};
     for (uint32_t k = 0; k < count; ++k) {
         const auto data = g_disc->read_sector(frame - kFrameOffset + k);
         if (!data) rt::fatal("gdrom: %s", data.error().c_str());
@@ -79,7 +81,7 @@ uint32_t read_sectors(uint32_t frame, uint32_t count, uint32_t to) {
 // number << 16) and the lead-out (the last track's control | the frame
 // address after it).
 void write_toc(uint32_t area, uint32_t to) {
-    if (!g_disc || area > 1) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, area};
+    if (!g_disc || area > 1) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, area};
     uint32_t words[102];
     for (uint32_t& w : words) w = 0xFFFFFFFFu;
     const qilin::gdrom::Track* first = nullptr;
@@ -91,7 +93,7 @@ void write_toc(uint32_t area, uint32_t to) {
         if (!first) first = &t;
         last = &t;
     }
-    if (!first) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, area};
+    if (!first) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, area};
     words[99] = control(*first) | first->number << 16;
     words[100] = control(*last) | last->number << 16;
     words[101] = control(*last) | (last->end() + kFrameOffset);
@@ -115,7 +117,7 @@ uint32_t write_subcode(uint32_t format, uint32_t bytes, uint32_t to) {
         auto held = sound::lock();
         return sound::cd_state();
     }();
-    if (format != 1 || bytes != 14) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, format << 16 | (bytes & 0xFFFFu)};
+    if (format != 1 || bytes != 14) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, format << 16 | (bytes & 0xFFFFu)};
     uint8_t q[14] = {};
     q[1] = cd.playing ? 0x11 : cd.at != 0 ? 0x12 : 0x15;
     q[3] = 14;
@@ -144,7 +146,7 @@ void gd_send_command(rt::Context& c) {
         break;
     }
     case kToc: write_toc(rt::ld32(c.r[5]), rt::ld32(c.r[5] + 4)); break;
-    case kPlay2: throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+    case kPlay2: throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, command};
     case kPause: {
         auto held = sound::lock();
         sound::cd_pause();
@@ -152,7 +154,7 @@ void gd_send_command(rt::Context& c) {
     }
     case kRelease:
         // Only after a play, and with the parameter the game sends (0).
-        if (rt::ld32(c.r[5]) != 0) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+        if (rt::ld32(c.r[5]) != 0) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, command};
         {
             auto held = sound::lock();
             sound::cd_resume();
@@ -177,7 +179,7 @@ void gd_send_command(rt::Context& c) {
         for (uint32_t k = 0; k + 1 < sizeof kText; ++k) rt::st8(to + k, static_cast<uint8_t>(kText[k]));
         break;
     }
-    default: throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1520u, command};
+    default: throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_send_command, command};
     }
     if (g_next_id == 0) g_next_id = 1;
     g_last = r;
@@ -191,7 +193,7 @@ void gd_send_command(rt::Context& c) {
 void gd_check_command(rt::Context& c) {
     deliver_pending(c);
     const uint32_t id = c.r[4], status = c.r[5];
-    if (id == 0 || id != g_last.id) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1534u, id};
+    if (id == 0 || id != g_last.id) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_check_command, id};
     rt::st32(status, 0), rt::st32(status + 4, 0), rt::st32(status + 8, g_last.bytes), rt::st32(status + 12, 0);
     c.r[0] = 2;
 }
@@ -227,8 +229,8 @@ void gd_dma_end(rt::Context& c) { c.r[0] = 0; }
 // command's data into r5's buffer, and its progress (gdd, 0x8C0BD30E and
 // 0x8C0BD494). Only a stream command has one, and gd_send_command takes
 // none: reaching either means one was sent, which has already stopped.
-void gd_dma_transfer(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C1598u, c.r[4]}; }
-void gd_dma_progress(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, 0x8C0C15ACu, c.r[4]}; }
+void gd_dma_transfer(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_dma_transfer, c.r[4]}; }
+void gd_dma_progress(rt::Context& c) { throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.gd_dma_progress, c.r[4]}; }
 
 // 0x8C0C15C0, call 8: abandons request r4 (gdd, 0x8C0BD420). The drive does
 // each request as it is sent, so there is none in progress to abandon: the
@@ -250,16 +252,16 @@ void gd_reset(rt::Context& c) {
 }
 
 constexpr rt::Provided kCalls[] = {
-    {0x8C0C1598u, "gd_dma_transfer", gd_dma_transfer},
-    {0x8C0C15ACu, "gd_dma_progress", gd_dma_progress},
-    {0x8C0C15C0u, "gd_abort", gd_abort},
-    {0x8C0C15D4u, "gd_reset", gd_reset},
-    {0x8C0C1520u, "gd_send_command", gd_send_command},
-    {0x8C0C1534u, "gd_check_command", gd_check_command},
-    {0x8C0C1548u, "gd_main_loop", gd_main_loop},
-    {0x8C0C155Cu, "gd_init", gd_init},
-    {0x8C0C1570u, "gd_check_drive", gd_check_drive},
-    {0x8C0C1584u, "gd_dma_end", gd_dma_end},
+    {kBuild.natives.gd_dma_transfer, "gd_dma_transfer", gd_dma_transfer},
+    {kBuild.natives.gd_dma_progress, "gd_dma_progress", gd_dma_progress},
+    {kBuild.natives.gd_abort, "gd_abort", gd_abort},
+    {kBuild.natives.gd_reset, "gd_reset", gd_reset},
+    {kBuild.natives.gd_send_command, "gd_send_command", gd_send_command},
+    {kBuild.natives.gd_check_command, "gd_check_command", gd_check_command},
+    {kBuild.natives.gd_main_loop, "gd_main_loop", gd_main_loop},
+    {kBuild.natives.gd_init, "gd_init", gd_init},
+    {kBuild.natives.gd_check_drive, "gd_check_drive", gd_check_drive},
+    {kBuild.natives.gd_dma_end, "gd_dma_end", gd_dma_end},
 };
 
 }  // namespace
@@ -268,4 +270,4 @@ void insert_disc(const qilin::gdrom::Disc& disc) { g_disc = &disc; }
 
 void provide_gdrom_bios() { rt::provide(kCalls); }
 
-}  // namespace toycommander
+}  // namespace shinobi

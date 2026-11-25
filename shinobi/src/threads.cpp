@@ -1,5 +1,7 @@
 #include "threads.hpp"
 
+#include "build.hpp"
+
 #include <condition_variable>
 #include <cstring>
 #include <exception>
@@ -18,7 +20,7 @@
 
 #include "system.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 
 namespace rt = qilin::rt;
@@ -33,10 +35,10 @@ namespace {
 //     tick it may run from, +24 its saved registers (0x8C09CDCC's layout:
 //     +0 r15, +4 r14, +8 pr, +12 r13 ... +48 r4, +52 r3 ... +64 r0, +68
 //     mach, +72 macl, +76 gbr, +80 fr0-fr15, +144 fpul, +148 fpscr)
-constexpr uint32_t kCurrent = 0x8C124280u, kPrevious = 0x8C124284u;
+constexpr uint32_t kCurrent = kBuild.thread_current, kPrevious = kBuild.thread_current + 4u;
 constexpr uint32_t kTicks = 0x204u, kSlots = 0x208u, kThreads = 0x210u, kRunning = 0xD78u, kThreadBytes = 0x124u;
-constexpr uint32_t kExit = 0x8C0C4972u;   // where a killed thread's saved PR is pointed
-constexpr uint32_t kCleanup = 0x8C0C48E6u;  // a dead thread's slot freed (lifted)
+constexpr uint32_t kExit = kBuild.thread_exit;   // where a killed thread's saved PR is pointed
+constexpr uint32_t kCleanup = kBuild.thread_cleanup;  // a dead thread's slot freed (lifted)
 
 // A thread being killed unwinds its host thread with this.
 struct Killed {};
@@ -144,7 +146,7 @@ void run(uint32_t record, uint32_t caller_sr) {
     auto& slot = g_streams[record];
     if (!slot) slot = std::make_unique<Stream>(), slot->record = record;
     Stream& s = *slot;
-    if (s.finished) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C4A7Cu, record};  // ended without dying first
+    if (s.finished) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.thread_scheduler_pass, record};  // ended without dying first
     Stream* const outer = g_current;
     const void* me = self();
     std::unique_lock<std::mutex> lock(g_lock);
@@ -227,9 +229,9 @@ void scheduler_pass(rt::Context& c) {
 // in its record; nothing reads them but the restore, which this replaces.)
 void thread_yield(rt::Context& c) {
     Stream* const s = g_current;
-    if (!s) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C4A3Au, 0};  // not in a guest thread
+    if (!s) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.thread_yield, 0};  // not in a guest thread
     const uint32_t sched = rt::ld32(kCurrent), rec = rt::ld32(sched + kRunning);
-    if (rec != s->record) throw rt::Stop{rt::Stop::Unsupported, 0x8C0C4A3Au, rec};
+    if (rec != s->record) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.thread_yield, rec};
     const int32_t n = static_cast<int32_t>(c.r[4]);
     rt::st32(rec + 20, n >= 0 ? rt::ld32(sched + kTicks) + static_cast<uint32_t>(n) : 0x7FFFFFFFu);
     {
@@ -241,8 +243,8 @@ void thread_yield(rt::Context& c) {
 }
 
 constexpr rt::Provided kNatives[] = {
-    {0x8C0C4A3Au, "thread_yield", thread_yield},
-    {0x8C0C4A7Cu, "thread_scheduler_pass", scheduler_pass},
+    {kBuild.natives.thread_yield, "thread_yield", thread_yield},
+    {kBuild.natives.thread_scheduler_pass, "thread_scheduler_pass", scheduler_pass},
 };
 
 }  // namespace
@@ -254,4 +256,4 @@ void provide_threads() {
 
 const rt::Context* thread_stop_context() { return g_have_stop_context ? &g_stop_context : nullptr; }
 
-}  // namespace toycommander
+}  // namespace shinobi

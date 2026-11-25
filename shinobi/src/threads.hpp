@@ -13,7 +13,7 @@
 
 #include "guest.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 // Registers the natives.
 void provide_threads();
@@ -21,4 +21,4 @@ void provide_threads();
 // for the report.
 const qilin::rt::Context* thread_stop_context();
 
-}  // namespace toycommander
+}  // namespace shinobi

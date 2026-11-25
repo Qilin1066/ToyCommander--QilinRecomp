@@ -2,14 +2,14 @@
 
 #include "guest.hpp"
 
-namespace toycommander::heap {
+namespace shinobi::heap {
 
 namespace rt = qilin::rt;
 
 namespace {
 
-constexpr uint32_t kBase = 0x8C117DC0u, kRover = 0x8C117DE0u;
-constexpr uint32_t kStart = 0x8C117DE4u, kSize = 0x8C117DE8u, kStartCopy = 0x8C117DECu;
+constexpr uint32_t kBase = kBuild.shinobi_data + 0x4u, kRover = kBuild.shinobi_data + 0x24u;
+constexpr uint32_t kStart = kBuild.shinobi_data + 0x28u, kSize = kBuild.shinobi_data + 0x2Cu, kStartCopy = kBuild.shinobi_data + 0x30u;
 
 uint32_t next(uint32_t h) { return rt::ld32(h); }
 uint32_t units(uint32_t h) { return rt::ld32(h + 4); }
@@ -80,4 +80,4 @@ uint32_t free_bytes() {
     return n;
 }
 
-}  // namespace toycommander::heap
+}  // namespace shinobi::heap

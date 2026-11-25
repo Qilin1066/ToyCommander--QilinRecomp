@@ -1,16 +1,18 @@
 #include "chain.hpp"
 
+#include "build.hpp"
+
 #include "guest.hpp"
 #include "system.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 
 namespace rt = qilin::rt;
 
 namespace {
 
-constexpr uint32_t kRecords = 0x8C116ABCu, kRecordCount = 256, kHeads = 0x8C117ABCu;
+constexpr uint32_t kRecords = kBuild.chain_records, kRecordCount = 256, kHeads = kBuild.chain_records + 0x1000u;
 constexpr uint32_t kInUse = 0x80000000u;
 
 bool g_bus_dispatcher_installed = false;
@@ -35,7 +37,7 @@ void shinobi_chain_add(rt::Context& c) {
     const uint32_t handler = c.r[5], arg = c.r[7], priority = c.r[6] | kInUse;
     const bool kamui = event == 0x900u || event == 0x920u;
     const bool bus = (event >> 8) == 0xAu || (event >> 8) == 0xBu;
-    if (!kamui && !bus) throw rt::Stop{rt::Stop::Unsupported, 0x8C0B399Cu, event};
+    if (!kamui && !bus) throw rt::Stop{rt::Stop::Unsupported, kBuild.natives.chain_add, event};
     const uint32_t head = head_of(event);
     uint32_t next = rt::ld32(head), prev = next;
     while (next != 0 && rt::ld32(next + 12) < priority) prev = next, next = rt::ld32(next + 4);
@@ -47,8 +49,8 @@ void shinobi_chain_add(rt::Context& c) {
     }
     const uint32_t record = kRecords + index * 16;
     if (next == 0 && prev == 0) {
-        if (event == 0x900u) hook_kamui(c, 0x8C087E34u, 0x8C0B3B6Eu);
-        else if (event == 0x920u) hook_kamui(c, 0x8C087E1Cu, 0x8C0B3BB8u);
+        if (event == 0x900u) hook_kamui(c, kBuild.kamui_set_900, kBuild.natives.chain_dispatch_900);
+        else if (event == 0x920u) hook_kamui(c, kBuild.kamui_set_920, kBuild.natives.chain_dispatch_920);
         else g_bus_dispatcher_installed = true;  // the guest code puts 0x8C0B3BDE at VBR + 0x22C
         rt::st32(head, record);
         rt::st32(record + 4, 0);
@@ -95,8 +97,8 @@ void shinobi_chain_remove(rt::Context& c) {
         rt::st32(record + 12, 0);
         if (rt::ld32(head) != 0) return;
         const uint32_t event = slot << 4;
-        if (event == 0x900u) hook_kamui(c, 0x8C087E34u, 0);
-        else if (event == 0x920u) hook_kamui(c, 0x8C087E1Cu, 0);
+        if (event == 0x900u) hook_kamui(c, kBuild.kamui_set_900, 0);
+        else if (event == 0x920u) hook_kamui(c, kBuild.kamui_set_920, 0);
         else if ((event >> 8) == 0xAu) rt::st32(0xA05F6920u, rt::ld32(0xA05F6920u) & ~(1u << (((event & 0xFFu) >> 5) + 12)));
         else if ((event >> 8) == 0xBu) rt::st32(0xA05F6924u, rt::ld32(0xA05F6924u) & ~(1u << ((event & 0xFFu) >> 5)));
         return;
@@ -130,14 +132,14 @@ void shinobi_chain_dispatch_900(rt::Context& c) { dispatch(c, 0x900u); }
 void shinobi_chain_dispatch_920(rt::Context& c) { dispatch(c, 0x920u); }
 
 constexpr rt::Provided kNatives[] = {
-    {0x8C0B399Cu, "shinobi_chain_add", shinobi_chain_add},
-    {0x8C0B3CA4u, "shinobi_chain_remove", shinobi_chain_remove},
-    {0x8C0B3B6Eu, "shinobi_chain_dispatch_900", shinobi_chain_dispatch_900},
-    {0x8C0B3BB8u, "shinobi_chain_dispatch_920", shinobi_chain_dispatch_920},
+    {kBuild.natives.chain_add, "shinobi_chain_add", shinobi_chain_add},
+    {kBuild.natives.chain_remove, "shinobi_chain_remove", shinobi_chain_remove},
+    {kBuild.natives.chain_dispatch_900, "shinobi_chain_dispatch_900", shinobi_chain_dispatch_900},
+    {kBuild.natives.chain_dispatch_920, "shinobi_chain_dispatch_920", shinobi_chain_dispatch_920},
 };
 
 }  // namespace
 
 void provide_chain() { rt::provide(kNatives); }
 
-}  // namespace toycommander
+}  // namespace shinobi

@@ -13,12 +13,14 @@
 // registry of native replacements, and stop naming any that has none yet.
 #include "boot.hpp"
 
+#include "build.hpp"
+
 #include <cstring>
 
 #include "bootfile.hpp"
 #include "system.hpp"
 
-namespace toycommander {
+namespace shinobi {
 
 
 namespace rt = qilin::rt;
@@ -31,12 +33,12 @@ uint32_t peek32(uint32_t a) { return rt::ld32(a); }
 // addresses of each table's start and end words.
 void init_sections() {
     // Zero-initialised data, cleared a word at a time.
-    for (uint32_t a = peek32(0x8C09F5D0u), end = peek32(0x8C09F5DCu); a < end; a += 4) rt::st32(a, 0);
+    for (uint32_t a = peek32(kBuild.game_sections + 0x18u), end = peek32(kBuild.game_sections + 0x24u); a < end; a += 4) rt::st32(a, 0);
     // Initialised data, copied a byte at a time from its image.
-    for (uint32_t d = peek32(0x8C09F5C0u), s = peek32(0x8C09F5B8u), end = peek32(0x8C09F5CCu); d < end; ++d, ++s) rt::st8(d, rt::ld8(s));
+    for (uint32_t d = peek32(kBuild.game_sections + 0x8u), s = peek32(kBuild.game_sections), end = peek32(kBuild.game_sections + 0x14u); d < end; ++d, ++s) rt::st8(d, rt::ld8(s));
     // Shinobi's own: zero-initialised, then initialised.
-    for (uint32_t a = peek32(0x8C0C56B8u), end = peek32(0x8C0C56C4u); a < end; ++a) rt::st8(a, 0);
-    for (uint32_t d = peek32(0x8C0C56A8u), s = peek32(0x8C0C56A0u), end = peek32(0x8C0C56B4u); d < end; ++d, ++s) rt::st8(d, rt::ld8(s));
+    for (uint32_t a = peek32(kBuild.shinobi_sections + 0x18u), end = peek32(kBuild.shinobi_sections + 0x24u); a < end; ++a) rt::st8(a, 0);
+    for (uint32_t d = peek32(kBuild.shinobi_sections + 0x8u), s = peek32(kBuild.shinobi_sections), end = peek32(kBuild.shinobi_sections + 0x14u); d < end; ++d, ++s) rt::st8(d, rt::ld8(s));
 }
 
 }  // namespace
@@ -48,11 +50,11 @@ void boot(rt::Context& c, std::span<const uint8_t> boot_file) {
     c.r[15] = 0x8C00F400u;  // the top of the stack the start-up fills
     for (uint32_t a = 0x8C00C000u; a < 0x8C00F400u; a += 4) rt::st32(a, 0x41474553u);
     init_sections();
-    c.r[4] = peek32(0x8C0C5690u);
-    rt::call_guest(c, 0x8C0B068Au);
-    rt::call_guest(c, 0x8C02796Au);
-    c.r[4] = peek32(0x8C0C5690u);
-    rt::call_guest(c, 0x8C0B06E2u);
+    c.r[4] = peek32(kBuild.shinobi_sections - 0x10u);
+    rt::call_guest(c, kBuild.shinobi_init);
+    rt::call_guest(c, kBuild.game_main);
+    c.r[4] = peek32(kBuild.shinobi_sections - 0x10u);
+    rt::call_guest(c, kBuild.shinobi_exit);
 }
 
-}  // namespace toycommander
+}  // namespace shinobi

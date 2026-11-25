@@ -135,25 +135,25 @@ void shinobi_hardware_init(rt::Context&) { start_free_running_timer0(); }
 // end of the program's data and the rest of RAM). The caller doesn't use r0.
 void shinobi_heap_init(rt::Context& c) {
     rt::check(c.r[4], c.r[5]);
-    heap::init(c.r[4], c.r[5]);
+    shinobi::heap::init(c.r[4], c.r[5]);
 }
 
 // The allocator's entry points jump through the operations table at
 // 0x8C1BCAC0. Only its set-up writes it, with the default table, so anything
 // else there is something new: stop rather than guess.
 void check_heap_table(uint32_t entry) {
-    if (rt::ld32(heap::kTablePointer) != heap::kDefaultTable)
-        throw rt::Stop{rt::Stop::Unsupported, entry, rt::ld32(heap::kTablePointer)};
+    if (rt::ld32(shinobi::heap::kTablePointer) != shinobi::heap::kDefaultTable)
+        throw rt::Stop{rt::Stop::Unsupported, entry, rt::ld32(shinobi::heap::kTablePointer)};
 }
 // 0x8C0C5BCA and 0x8C0C5BD4 (two names for one call): malloc(r4).
 void shinobi_malloc(rt::Context& c) {
     check_heap_table(0x8C0C5BCAu);
-    c.r[0] = heap::alloc(c.r[4]);
+    c.r[0] = shinobi::heap::alloc(c.r[4]);
 }
 // 0x8C0C5C98 and 0x8C0C5CA2: free(r4).
 void shinobi_free(rt::Context& c) {
     check_heap_table(0x8C0C5C98u);
-    heap::release(c.r[4]);
+    shinobi::heap::release(c.r[4]);
 }
 // 0x8C0C5B56, the allocator's shut-down: an rts.
 void shinobi_heap_exit(rt::Context&) {}

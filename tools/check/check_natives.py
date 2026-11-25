@@ -4,8 +4,11 @@
 `qilin lift` writes a stub for each replaced function (stubs.cpp) and the
 lifted functions (lifted_*.cpp). A replaced function that lifted code calls,
 or whose address it holds, is reachable; the game's program must register a
-native for it (`{0x...u, "name", fn}` in the tables of <game>/src/*.cpp), or
-the game stops there as unregistered. This lists the ones without:
+native for it, or the game stops there as unregistered: the game's own
+natives are `{0x...u, "name", fn}` in the tables of <game>/src/*.cpp, and the
+shared Shinobi replacements' (shinobi/src) are the `.natives = {...}` block of
+<game>/src/build.hpp, one `.field = 0x...u` each (0 for one the game doesn't
+register). This lists the ones without:
 
     build/qilin lift <the game's .cue> --out gen
     python3 tools/check/check_natives.py gen toycommander/src
@@ -38,6 +41,14 @@ def main():
     for path in glob.glob(os.path.join(args.src, "*.cpp")):
         with open(path) as f:
             natives |= {a.upper() for a in re.findall(r"\{\s*0x([0-9A-Fa-f]{8})u\s*,\s*\"", f.read())}
+    build = os.path.join(args.src, "build.hpp")
+    if os.path.exists(build):
+        with open(build) as f:
+            block = re.search(r"\.natives\s*=\s*\{(.*?)\}", f.read(), re.S)
+        if not block:
+            print(f"{build}: no .natives block", file=sys.stderr)
+            return 2
+        natives |= {a.upper() for a in re.findall(r"\.\w+\s*=\s*0x([0-9A-Fa-f]{8})u", block.group(1))}
 
     reachable = sorted(replaced & reached)
     missing = [a for a in reachable if a not in natives]
