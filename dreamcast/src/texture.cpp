@@ -91,6 +91,17 @@ uint32_t twiddle(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     return i;
 }
 
+void twiddle_tables(uint32_t w, uint32_t h, uint32_t* cols, uint32_t* rows) {
+    const uint32_t m = std::min(w, h);
+    const auto spread = [m](uint32_t v, uint32_t shift) {  // v's bits below m, every other place from `shift`
+        uint32_t i = 0;
+        for (uint32_t bit = 0; (1u << bit) < m; ++bit) i |= ((v >> bit) & 1u) << (2 * bit + shift);
+        return i;
+    };
+    for (uint32_t x = 0; x < w; ++x) cols[x] = spread(x, 1) + (w > h ? (x / m) * m * m : 0u);
+    for (uint32_t y = 0; y < h; ++y) rows[y] = spread(y, 0) + (h > w ? (y / m) * m * m : 0u);
+}
+
 uint32_t bytes(const Params& p) {
     const uint32_t fmt = format(p.tcw);
     if (fmt == kBump || fmt == 7u) unsupported(p);
@@ -130,9 +141,12 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
             out[0] = book[d[0]][0];
             return;
         }
+        if (w > 2 * kMaxSide || h > 2 * kMaxSide) unsupported(p);
+        uint32_t cols[kMaxSide], rows[kMaxSide];
+        twiddle_tables(w / 2, h / 2, cols, rows);
         for (uint32_t y = 0; y < h; y += 2)
             for (uint32_t x = 0; x < w; x += 2) {
-                const uint32_t* b = book[d[twiddle(x / 2, y / 2, w / 2, h / 2)]];
+                const uint32_t* b = book[d[cols[x / 2] + rows[y / 2]]];
                 out[y * w + x] = b[0], out[(y + 1) * w + x] = b[1], out[y * w + x + 1] = b[2], out[(y + 1) * w + x + 1] = b[3];
             }
         return;
@@ -140,9 +154,12 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
     if (fmt == kPalette4 || fmt == kPalette8) {
         if (!p.palette) unsupported(p);
         const uint32_t base = palette_base(p.tcw), half = level_start(p, w) & 1u;  // a 4-bit level that starts at a high nibble
+        if (w > kMaxSide || h > kMaxSide) unsupported(p);
+        uint32_t cols[kMaxSide], rows[kMaxSide];
+        twiddle_tables(w, h, cols, rows);
         for (uint32_t y = 0; y < h; ++y)
             for (uint32_t x = 0; x < w; ++x) {
-                const uint32_t i = twiddle(x, y, w, h);
+                const uint32_t i = cols[x] + rows[y];
                 const uint32_t n = fmt == kPalette8 ? d[i] : (d[(i + half) / 2] >> (((i + half) & 1u) * 4)) & 15u;
                 out[y * w + x] = palette_entry(p, base + n);
             }
@@ -159,8 +176,11 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
         return;
     }
     if (twiddled(p.tcw)) {
+        if (w > kMaxSide || h > kMaxSide) unsupported(p);
+        uint32_t cols[kMaxSide], rows[kMaxSide];
+        twiddle_tables(w, h, cols, rows);
         for (uint32_t y = 0; y < h; ++y)
-            for (uint32_t x = 0; x < w; ++x) out[y * w + x] = texel16(fmt, rd16(d, twiddle(x, y, w, h)));
+            for (uint32_t x = 0; x < w; ++x) out[y * w + x] = texel16(fmt, rd16(d, cols[x] + rows[y]));
         return;
     }
     for (uint32_t y = 0; y < h; ++y)

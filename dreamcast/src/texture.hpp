@@ -54,5 +54,11 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
 
 // The place of texel (x, y) in a twiddled w x h texture.
 uint32_t twiddle(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+// The same as a column's part and a row's: twiddle(x, y, w, h) is
+// cols[x] + rows[y] (y's bits go to the even places, x's to the odd ones,
+// and a rectangle's squares along its longer side), for w and h up to
+// kMaxSide. The decoder's way: two tables a level instead of a loop a texel.
+inline constexpr uint32_t kMaxSide = 1024;
+void twiddle_tables(uint32_t w, uint32_t h, uint32_t* cols, uint32_t* rows);
 
 }  // namespace dreamcast::texture

@@ -40,6 +40,18 @@ void decoder() {
            "twiddle: the first 2x2 block");
     expect(tex::twiddle(2, 0, 8, 8) == 8 && tex::twiddle(7, 7, 8, 8) == 63, "twiddle: further out");
     expect(tex::twiddle(8, 0, 16, 8) == 64 && tex::twiddle(0, 8, 8, 16) == 64, "twiddle: rectangles");
+    // The decoder's tables give twiddle's place for every texel of every size, squares and rectangles.
+    {
+        bool same = true;
+        static uint32_t cols[tex::kMaxSide], rows[tex::kMaxSide];
+        for (uint32_t w = 1; w <= tex::kMaxSide; w *= 2)
+            for (uint32_t h = 1; h <= tex::kMaxSide; h *= 2) {
+                tex::twiddle_tables(w, h, cols, rows);
+                for (uint32_t y = 0; y < h && same; ++y)
+                    for (uint32_t x = 0; x < w && same; ++x) same = cols[x] + rows[y] == tex::twiddle(x, y, w, h);
+            }
+        expect(same, "twiddle tables: twiddle's place for every texel, every size from 1x1 to 1024x1024");
+    }
 
     // RGB565, raster order, 8x8: texel k = k (so red/green/blue bits vary).
     {

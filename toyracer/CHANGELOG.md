@@ -7,6 +7,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 ## [Unreleased]
 
 ### Changed
+- **Faster texture decoding**: a twiddled texture's texels are placed by two small tables a level rather than a loop over the bits for each texel (16-bit, paletted and compressed textures). The same pictures (checked for every size). Not timed yet.
 - **Faster calls through pointers**: an indirect call's target is looked up in a small cache before the function table's binary search, so a repeat (the usual case: object and callback tables) is one compare. Not timed yet.
 - **Fewer loads in lifted code**: each function keeps guest memory's base in a local rather than reading the global again after every store (a store through a byte pointer could, as far as the compiler knows, change it). Not timed yet.
 - **Calls into native code save fewer registers too**: each native's registers are worked out from its source (50 of Toy Commander's 61 natives, 70 of Toy Racer's 83), so a call to one, or to code that reaches only such natives, stores and reloads only those; a native that changes any other register stops the game, naming it. Stores and reloads around a direct call: 22.5 on average in Toy Commander (23.7 before, 33.8 originally), 22.1 in Toy Racer (25.3, 34.1). Not timed yet.
