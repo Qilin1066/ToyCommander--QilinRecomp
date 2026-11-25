@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Changed
+- **Faster texture updates**: a texture that changes every frame (movies, pictures drawn by the game) is read, decoded and uploaded with fewer passes over its data and less work a texel. The same pictures. Not timed yet.
 - **Less work in the sound driver**: its per-frame pass brings the sound up to date once, not once or twice for each playing channel. Not timed yet.
 - **One copy of the natives both games share**: 35 small replacements (memory fill and copy, the allocator's entry points, the console settings, timer and cache calls, the interrupt set-up) that each game had its own copy of now live once in `shinobi/src/library.cpp`, at each game's addresses. No change in behaviour.
 - **Cheaper calls to native code**: each replaced function finds its native once instead of on every call, and the release build no longer compares every register before and after it (development builds still check). Not timed yet.

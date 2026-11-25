@@ -133,7 +133,14 @@ void shot(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
 }
 
 // The texture packs' folders, as the settings say: in the data folder.
+// Called each vblank (the menu may have changed them): only a change, or a
+// renderer it hasn't told yet, makes the paths.
 void set_texture_packs() {
+    static const void* told = nullptr;
+    static unsigned last = 0;
+    const unsigned now = (g_settings.texture_packs ? 1u : 0u) | (g_settings.dump_textures ? 2u : 0u);
+    if (told == g_renderer.get() && last == now) return;
+    told = g_renderer.get(), last = now;
     const std::filesystem::path folder = g_data / "textures";
     g_renderer->set_texture_packs(g_settings.texture_packs ? folder / "load" : std::filesystem::path{},
                                   g_settings.dump_textures ? folder / "dump" : std::filesystem::path{});

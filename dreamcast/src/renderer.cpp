@@ -421,8 +421,10 @@ struct Renderer::Impl {
         bool fresh;
     };
     std::vector<Upload> uploads;
-    std::vector<uint8_t> upload_bytes, raw;
-    std::vector<uint32_t> pixels;
+    // The frame's texture uploads, one after another (each Upload's `at` is
+    // a byte offset into them); a decoded texture is decoded straight here.
+    std::vector<uint32_t> upload_texels;
+    std::vector<uint8_t> raw;
 
     Impl(Gpu& g, uint32_t s) : gpu(g), scale(s) {}
 
@@ -789,15 +791,20 @@ struct Renderer::Impl {
         retired.clear();
     }
 
-    // An image's every level, one after another from the largest.
+    // An image's every level, one after another from the largest: already
+    // in upload_texels from `at` (record_upload), or copied there.
+    void record_upload(const Image& image, size_t at, bool fresh) {
+        if (image.levels > 16) throw rt::Stop{rt::Stop::Unsupported, 0, image.levels};  // the copy's regions (draw)
+        uploads.push_back({image.image, image.width, image.height, image.levels, VkDeviceSize{at} * 4, fresh});
+        ++stats.uploads;
+    }
     void queue_upload(const Image& image, const uint32_t* rgba, bool fresh) {
         size_t n = 0;
-        for (uint32_t l = 0; l < image.levels; ++l) n += size_t{std::max(image.width >> l, 1u)} * std::max(image.height >> l, 1u) * 4;
-        const size_t at = upload_bytes.size();
-        upload_bytes.resize(at + n);
-        std::memcpy(upload_bytes.data() + at, rgba, n);
-        uploads.push_back({image.image, image.width, image.height, image.levels, at, fresh});
-        ++stats.uploads;
+        for (uint32_t l = 0; l < image.levels; ++l) n += size_t{std::max(image.width >> l, 1u)} * std::max(image.height >> l, 1u);
+        const size_t at = upload_texels.size();
+        upload_texels.resize(at + n);
+        std::memcpy(upload_texels.data() + at, rgba, n * 4);
+        record_upload(image, at, fresh);
     }
 
     // The texture a polygon names, decoded again if video memory or its
@@ -826,14 +833,18 @@ struct Renderer::Impl {
         const uint32_t levels = texture::levels(p);
         size_t texels = 0;
         for (uint32_t l = 0; l < levels; ++l) texels += size_t{std::max(p.width >> l, 1u)} * std::max(p.height >> l, 1u);
-        pixels.resize(texels);
+        // Decoded where it's uploaded from (dropped again if a pack's image
+        // replaces it).
+        const size_t decoded_at = upload_texels.size();
+        upload_texels.resize(decoded_at + texels);
+        uint32_t* const decoded = upload_texels.data() + decoded_at;
         for (uint32_t l = 0, at = 0; l < levels; ++l) {
-            texture::decode_level(p, raw.data(), l, pixels.data() + at);
+            texture::decode_level(p, raw.data(), l, decoded + at);
             at += std::max(p.width >> l, 1u) * std::max(p.height >> l, 1u);
         }
         // A texture pack's: dumped once a run, replaced where the load folder has it.
         uint32_t width = p.width, height = p.height, image_levels = levels;
-        const uint32_t* upload = pixels.data();
+        const uint32_t* upload = decoded;
         t.pack = 0;
         if (!pack_files.empty() || !pack_dump.empty()) {  // hashed only when there's something to match or dump
             const uint32_t shape[] = {tcw >> 21, tsp & 0x3Fu, p.stride, uint32_t(palette_hash), uint32_t(palette_hash >> 32)};
@@ -842,7 +853,7 @@ struct Renderer::Impl {
                 const std::filesystem::path file = pack_dump / pack_name(p.width, p.height, hash);
                 std::error_code ec;
                 std::string error;
-                if (!std::filesystem::exists(file, ec) && !qilin::host::save_png(file, p.width, p.height, pixels.data(), error))
+                if (!std::filesystem::exists(file, ec) && !qilin::host::save_png(file, p.width, p.height, decoded, error))
                     qilin::host::die("%s", ("cannot dump a texture to " + file.string() + ": " + error).c_str());
                 ++stats.dumped;
             }
@@ -873,7 +884,12 @@ struct Renderer::Impl {
             t.image = Image::create(gpu, width, height, kColourFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, image_levels);
             if (fresh) ++stats.textures;
         }
-        queue_upload(t.image, upload, new_image);
+        if (upload == decoded) {
+            record_upload(t.image, decoded_at, new_image);
+        } else {
+            upload_texels.resize(decoded_at);
+            queue_upload(t.image, upload, new_image);
+        }
         return t;
     }
 
@@ -1186,28 +1202,31 @@ struct Renderer::Impl {
     // away is blended first. Here its triangles are drawn from the farthest
     // to the nearest, by their mean z (1/w: smaller is farther), the order
     // sent kept between equals.
+    // Its working lists, kept from frame to frame (their capacity).
+    struct SortTri {
+        float depth;
+        uint32_t draw, at;
+    };
+    std::vector<SortTri> sort_tris;
+    std::vector<uint32_t> sort_indices;
+    std::vector<Draw> sort_draws;
     void sort_translucent(size_t first_draw, size_t first_index) {
-        struct Tri {
-            float depth;
-            uint32_t draw, at;
-        };
-        std::vector<Tri> tris;
+        sort_tris.clear();
         for (size_t d = first_draw; d < draws.size(); ++d)
             for (uint32_t k = draws[d].first; k < draws[d].first + draws[d].count; k += 3)
-                tris.push_back({vertices[indices[k]].z + vertices[indices[k + 1]].z + vertices[indices[k + 2]].z, uint32_t(d), k});
-        std::stable_sort(tris.begin(), tris.end(), [](const Tri& a, const Tri& b) { return a.depth < b.depth; });
-        std::vector<uint32_t> sorted;
-        sorted.reserve(tris.size() * 3);
-        std::vector<Draw> out(draws.begin(), draws.begin() + std::ptrdiff_t(first_draw));
-        for (const Tri& t : tris) {
+                sort_tris.push_back({vertices[indices[k]].z + vertices[indices[k + 1]].z + vertices[indices[k + 2]].z, uint32_t(d), k});
+        std::stable_sort(sort_tris.begin(), sort_tris.end(), [](const SortTri& a, const SortTri& b) { return a.depth < b.depth; });
+        sort_indices.clear();
+        sort_draws.assign(draws.begin(), draws.begin() + std::ptrdiff_t(first_draw));
+        for (const SortTri& t : sort_tris) {
             Draw d = draws[t.draw];
-            d.first = uint32_t(first_index + sorted.size()), d.count = 3;
-            sorted.insert(sorted.end(), indices.begin() + t.at, indices.begin() + t.at + 3);
-            if (out.size() > first_draw && out.back().same_state(d)) out.back().count += 3;
-            else out.push_back(d);
+            d.first = uint32_t(first_index + sort_indices.size()), d.count = 3;
+            sort_indices.insert(sort_indices.end(), indices.begin() + t.at, indices.begin() + t.at + 3);
+            if (sort_draws.size() > first_draw && sort_draws.back().same_state(d)) sort_draws.back().count += 3;
+            else sort_draws.push_back(d);
         }
-        std::copy(sorted.begin(), sorted.end(), indices.begin() + std::ptrdiff_t(first_index));
-        draws = std::move(out);
+        std::copy(sort_indices.begin(), sort_indices.end(), indices.begin() + std::ptrdiff_t(first_index));
+        draws.swap(sort_draws);
     }
 
     void set_stencil(Stencil s) {
@@ -1297,7 +1316,7 @@ struct Renderer::Impl {
         t.widen = src.widen;
         current = &t;
         const Image& colour = t.colour;
-        vertices.clear(), indices.clear(), draws.clear(), uploads.clear(), upload_bytes.clear();
+        vertices.clear(), indices.clear(), draws.clear(), uploads.clear(), upload_texels.clear();
         if (frame == 1) {
             const uint32_t opaque_white = 0xFFFFFFFFu;
             queue_upload(white.image, &opaque_white, true);
@@ -1388,8 +1407,8 @@ struct Renderer::Impl {
             vkUpdateDescriptorSets(gpu.device, 1, &w, 0, nullptr);
             volume_set_written = remade;
         }
-        grow(staging, upload_bytes.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        if (!upload_bytes.empty()) std::memcpy(staging.mapped, upload_bytes.data(), upload_bytes.size());
+        grow(staging, upload_texels.size() * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        if (!upload_texels.empty()) std::memcpy(staging.mapped, upload_texels.data(), upload_texels.size() * 4);
 
         check(vkResetFences(gpu.device, 1, &fence), "vkResetFences");
         check(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer");

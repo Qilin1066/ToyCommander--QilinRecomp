@@ -91,11 +91,19 @@ void dma_to_chip() {
     const bool to_ta = area == 0, to_texture = (area & 0x03000000u) == 0x01000000u;
     if (!to_ta && !to_texture) throw rt::Stop{rt::Stop::Unsupported, 0, to};
     if (to_texture && (reg(0x005F6884u) & 1u)) throw rt::Stop{rt::Stop::Unsupported, 0, to};  // LMMODE0: the 32-bit path
+    // From RAM's own view, straight from guest memory; any other source a
+    // word at a time through the bus.
+    const bool from_ram = rt::in_ram(ch.sar, bytes);
+    if (from_ram) rt::check(ch.sar, bytes);
     uint8_t block[32];
     for (uint32_t k = 0; k < bytes; k += 32) {
-        for (uint32_t i = 0; i < 32; i += 4) {
-            const uint32_t w = rt::ld32(ch.sar + k + i);
-            std::memcpy(block + i, &w, 4);
+        if (from_ram) {
+            std::memcpy(block, rt::g_mem + ch.sar + k, 32);
+        } else {
+            for (uint32_t i = 0; i < 32; i += 4) {
+                const uint32_t w = rt::ld32(ch.sar + k + i);
+                std::memcpy(block + i, &w, 4);
+            }
         }
         if (to_ta) ta::feed(block, 32);
         else vram_block(0x04000000u | ((to + k) & 0x00FFFFFFu), block, 32);
@@ -182,10 +190,15 @@ const uint8_t* vram() { return g_vram; }
 // as on the console.
 void vram64_read(uint32_t offset, uint8_t* out, uint32_t n) {
     if (offset >= sizeof g_vram || n > sizeof g_vram) throw rt::Stop{rt::Stop::Unsupported, 0, offset};
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t off = (offset + k) & (sizeof g_vram - 1);
-        out[k] = g_vram[((off & 4u) << 20) | ((off >> 1) & 0x003FFFFCu) | (off & 3u)];
-    }
+    // The 64-bit view keeps each aligned group of 4 bytes together (the banks
+    // alternate every 4): an unaligned head a byte at a time, then a group
+    // at a time, then the tail.
+    constexpr uint32_t kMask = sizeof g_vram - 1;
+    const auto linear = [](uint32_t off) { return ((off & 4u) << 20) | ((off >> 1) & 0x003FFFFCu) | (off & 3u); };
+    uint32_t k = 0;
+    for (; k < n && ((offset + k) & 3u); ++k) out[k] = g_vram[linear((offset + k) & kMask)];
+    for (; k + 4 <= n; k += 4) std::memcpy(out + k, g_vram + linear((offset + k) & kMask), 4);
+    for (; k < n; ++k) out[k] = g_vram[linear((offset + k) & kMask)];
 }
 uint64_t vram64_generation(uint32_t offset, uint32_t n) {
     if (offset >= sizeof g_vram || n > sizeof g_vram) throw rt::Stop{rt::Stop::Unsupported, 0, offset};

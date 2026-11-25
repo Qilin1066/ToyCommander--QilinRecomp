@@ -31,6 +31,16 @@ uint32_t texel16(uint32_t fmt, uint32_t t) {
     default: return argb4444(t);
     }
 }
+// Calls f with the conversion of a 16-bit format, a type of its own each,
+// so a loop in f is compiled once a format, with no choice a texel.
+template <class F>
+void with_texel16(uint32_t fmt, F&& f) {
+    switch (fmt) {
+    case kArgb1555: return f([](uint32_t t) { return argb1555(t); });
+    case kRgb565: return f([](uint32_t t) { return rgb565(t); });
+    default: return f([](uint32_t t) { return argb4444(t); });
+    }
+}
 
 uint32_t palette_entry(const Params& p, uint32_t index) {
     const uint32_t e = p.palette[index & 1023u];
@@ -157,12 +167,20 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
         if (w > kMaxSide || h > kMaxSide) unsupported(p);
         uint32_t cols[kMaxSide], rows[kMaxSide];
         twiddle_tables(w, h, cols, rows);
-        for (uint32_t y = 0; y < h; ++y)
-            for (uint32_t x = 0; x < w; ++x) {
-                const uint32_t i = cols[x] + rows[y];
-                const uint32_t n = fmt == kPalette8 ? d[i] : (d[(i + half) / 2] >> (((i + half) & 1u) * 4)) & 15u;
-                out[y * w + x] = palette_entry(p, base + n);
-            }
+        // The entries this texture can use, converted once.
+        uint32_t lut[256];
+        const uint32_t entries = fmt == kPalette8 ? 256u : 16u;
+        for (uint32_t n = 0; n < entries; ++n) lut[n] = palette_entry(p, base + n);
+        if (fmt == kPalette8) {
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x) out[y * w + x] = lut[d[cols[x] + rows[y]]];
+        } else {
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x) {
+                    const uint32_t i = cols[x] + rows[y] + half;
+                    out[y * w + x] = lut[(d[i / 2] >> ((i & 1u) * 4)) & 15u];
+                }
+        }
         return;
     }
     const uint32_t row = stride_select(p.tcw) ? p.stride * 32u : w;  // texels stored per row
@@ -179,12 +197,16 @@ void decode_level(const Params& p, const uint8_t* data, uint32_t level, uint32_t
         if (w > kMaxSide || h > kMaxSide) unsupported(p);
         uint32_t cols[kMaxSide], rows[kMaxSide];
         twiddle_tables(w, h, cols, rows);
-        for (uint32_t y = 0; y < h; ++y)
-            for (uint32_t x = 0; x < w; ++x) out[y * w + x] = texel16(fmt, rd16(d, cols[x] + rows[y]));
+        with_texel16(fmt, [&](auto conv) {
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x) out[y * w + x] = conv(rd16(d, cols[x] + rows[y]));
+        });
         return;
     }
-    for (uint32_t y = 0; y < h; ++y)
-        for (uint32_t x = 0; x < w; ++x) out[y * w + x] = x < row ? texel16(fmt, rd16(d, y * row + x)) : 0u;
+    with_texel16(fmt, [&](auto conv) {
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) out[y * w + x] = x < row ? conv(rd16(d, y * row + x)) : 0u;
+    });
 }
 
 }  // namespace dreamcast::texture
