@@ -122,7 +122,8 @@ public:
     // format, size and stride, its palette's colours), wherever it is.
     // `load` (empty: none): PNG files named as pack_name names them, in it or
     // in folders in it, each drawn in place of that texture, at any size
-    // (mip-mapped as the original is, where its sides are powers of 2).
+    // (mip-mapped as the original is, where its sides are powers of 2; read
+    // on a thread of their own, see wait_texture_packs).
     // `dump` (empty: none): every texture decoded is saved there, once a
     // run, so named (a file already there is kept). Nothing to do while
     // unchanged; a change looks at every texture again when it's next drawn.
@@ -132,6 +133,11 @@ public:
     // The load folder looked at again (files added, changed or removed), and
     // every texture with it when next drawn.
     void reload_texture_packs();
+    // Replacements are read on a thread of their own, and a texture is drawn
+    // as the game has it until its replacement is ready (a render never
+    // waits for the disk): this waits until those asked for so far are read,
+    // so the next render draws them (tests).
+    void wait_texture_packs();
 
     // The frame buffer at an address as last drawn: null image if none has
     // been drawn there.

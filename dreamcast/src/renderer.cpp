@@ -9,14 +9,19 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -142,6 +147,7 @@ struct Texture {
     uint64_t palette_hash = 0;
     uint32_t bytes = 0;
     uint64_t used = 0;  // the frame it was last checked in
+    uint64_t pack = 0;  // the hash it has a texture pack's replacement for (0: none)
     struct Set {
         uint32_t bits;  // the sampler's
         VkDescriptorSet set;
@@ -210,6 +216,93 @@ void mip_chain(std::vector<uint32_t>& px, uint32_t width, uint32_t height, uint3
         from = to;
     }
 }
+
+// A texture pack's replacement, ready to upload: every level, from the largest.
+struct PackImage {
+    uint32_t width = 0, height = 0, levels = 1;
+    std::vector<uint32_t> pixels;
+};
+
+// Texture packs' replacements read, decoded and given their mip levels on a
+// thread of their own: the render never waits for the disk or the PNG
+// decoder (a texture is drawn as the game has it until its replacement is
+// ready). Requests carry the packs' epoch: what was asked for before the
+// packs changed is dropped when it's taken.
+class PackLoader {
+public:
+    PackLoader() : thread_([this] { run(); }) {}
+    ~PackLoader() {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            stop_ = true;
+        }
+        work_.notify_all();
+        thread_.join();
+    }
+    PackLoader(const PackLoader&) = delete;
+    PackLoader& operator=(const PackLoader&) = delete;
+
+    // `mipmapped`: the original is, so the replacement is where its sides halve to 1x1.
+    void request(uint64_t epoch, uint64_t hash, std::filesystem::path file, bool mipmapped) {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            queue_.push_back({epoch, hash, std::move(file), mipmapped});
+        }
+        work_.notify_one();
+    }
+    // What has been read for `epoch`, moved into `out`.
+    void take(uint64_t epoch, std::vector<std::pair<uint64_t, PackImage>>& out) {
+        std::lock_guard<std::mutex> lock(m_);
+        for (auto& [e, hash, image] : done_)
+            if (e == epoch) out.emplace_back(hash, std::move(image));
+        done_.clear();
+    }
+    // Until everything asked for has been read.
+    void wait_idle() {
+        std::unique_lock<std::mutex> lock(m_);
+        idle_.wait(lock, [&] { return queue_.empty() && !busy_; });
+    }
+
+private:
+    struct Job {
+        uint64_t epoch, hash;
+        std::filesystem::path file;
+        bool mipmapped;
+    };
+    void run() {
+        for (;;) {
+            Job job;
+            {
+                std::unique_lock<std::mutex> lock(m_);
+                work_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+                if (stop_) return;
+                job = std::move(queue_.front());
+                queue_.pop_front();
+                busy_ = true;
+            }
+            PackImage image;
+            std::string error;
+            if (!qilin::host::load_png(job.file, image.width, image.height, image.pixels, error))
+                qilin::host::die("%s", ("cannot read the texture pack's " + job.file.string() + ": " + error).c_str());
+            const bool halves = !(image.width & (image.width - 1)) && !(image.height & (image.height - 1));
+            image.levels = job.mipmapped && halves ? uint32_t(std::bit_width(std::max(image.width, image.height))) : 1u;
+            mip_chain(image.pixels, image.width, image.height, image.levels);
+            {
+                std::lock_guard<std::mutex> lock(m_);
+                done_.emplace_back(job.epoch, job.hash, std::move(image));
+                busy_ = false;
+            }
+            idle_.notify_all();
+        }
+    }
+
+    std::mutex m_;
+    std::condition_variable work_, idle_;
+    std::deque<Job> queue_;
+    std::vector<std::tuple<uint64_t, uint64_t, PackImage>> done_;
+    bool stop_ = false, busy_ = false;
+    std::thread thread_;  // last: it starts once the rest is made
+};
 
 }  // namespace
 
@@ -291,7 +384,16 @@ struct Renderer::Impl {
     std::unordered_map<uint64_t, std::filesystem::path> pack_files;
     std::set<uint64_t> dumped;
     std::vector<Texture> retired;
-    std::vector<uint32_t> replacement;
+    // The replacements read so far (the loader's), up to kPackCache bytes,
+    // the oldest let go first (read again if wanted again); those asked for;
+    // the packs' epoch, which a change of them moves on.
+    static constexpr size_t kPackCache = size_t{256} << 20;
+    std::unique_ptr<PackLoader> loader;
+    std::unordered_map<uint64_t, PackImage> pack_ready;
+    std::deque<uint64_t> pack_order;
+    size_t pack_bytes = 0;
+    std::set<uint64_t> pack_requested;
+    uint64_t pack_epoch = 0;
     uint64_t frame = 0;
     Stats stats{};
     float anisotropy = 1.0f;  // for filtered textures (set_anisotropy)
@@ -722,6 +824,7 @@ struct Renderer::Impl {
         // A texture pack's: dumped once a run, replaced where the load folder has it.
         uint32_t width = p.width, height = p.height, image_levels = levels;
         const uint32_t* upload = pixels.data();
+        t.pack = 0;
         if (!pack_files.empty() || !pack_dump.empty()) {  // hashed only when there's something to match or dump
             const uint32_t shape[] = {tcw >> 21, tsp & 0x3Fu, p.stride, uint32_t(palette_hash), uint32_t(palette_hash >> 32)};
             const uint64_t hash = hash_words(shape, 5, hash_bytes(raw.data(), raw.size(), 0xCBF29CE484222325ull));
@@ -734,15 +837,17 @@ struct Renderer::Impl {
                 ++stats.dumped;
             }
             if (const auto it = pack_files.find(hash); it != pack_files.end()) {
-                std::string error;
-                if (!qilin::host::load_png(it->second, width, height, replacement, error))
-                    qilin::host::die("%s", ("cannot read the texture pack's " + it->second.string() + ": " + error).c_str());
-                // Mip-mapped as the original is, where its size halves to 1x1.
-                const bool halves = !(width & (width - 1)) && !(height & (height - 1));
-                image_levels = levels > 1 && halves ? uint32_t(std::bit_width(std::max(width, height))) : 1u;
-                mip_chain(replacement, width, height, image_levels);
-                upload = replacement.data();
-                ++stats.replaced;
+                t.pack = hash;
+                if (const auto ready = pack_ready.find(hash); ready != pack_ready.end()) {
+                    const PackImage& image = ready->second;
+                    width = image.width, height = image.height, image_levels = image.levels, upload = image.pixels.data();
+                    ++stats.replaced;
+                } else if (pack_requested.insert(hash).second) {
+                    // Read on the loader's thread: this texture is decoded
+                    // again once it's ready (collect_pack_images).
+                    if (!loader) loader = std::make_unique<PackLoader>();
+                    loader->request(pack_epoch, hash, it->second, levels > 1);
+                }
             }
         }
         // A replacement of another size (or none now, after one): a new
@@ -767,6 +872,9 @@ struct Renderer::Impl {
         if (load == pack_load && dump == pack_dump && !again) return;
         pack_load = load, pack_dump = dump;
         pack_files.clear(), dumped.clear();
+        ++pack_epoch;  // what the loader was asked for before is dropped
+        pack_ready.clear(), pack_order.clear(), pack_requested.clear();
+        pack_bytes = 0;
         std::error_code ec;
         if (!dump.empty()) {
             std::filesystem::create_directories(dump, ec);
@@ -784,6 +892,28 @@ struct Renderer::Impl {
         }
         for (auto& [k, t] : textures) t.generation = ~uint64_t{0};  // decoded (and looked up) again when next used
         stats.pack_files = uint32_t(pack_files.size());
+    }
+
+    // The replacements read since the last render: kept, and the textures
+    // waiting for them decoded again when next drawn.
+    void collect_pack_images() {
+        if (!loader) return;
+        std::vector<std::pair<uint64_t, PackImage>> got;
+        loader->take(pack_epoch, got);
+        for (auto& [hash, image] : got) {
+            pack_bytes += image.pixels.size() * sizeof(uint32_t);
+            pack_order.push_back(hash);
+            pack_ready[hash] = std::move(image);
+            for (auto& [k, t] : textures)
+                if (t.pack == hash) t.generation = ~uint64_t{0};
+        }
+        while (pack_bytes > kPackCache && pack_order.size() > 1) {
+            const uint64_t oldest = pack_order.front();
+            pack_order.pop_front();
+            pack_bytes -= pack_ready[oldest].pixels.size() * sizeof(uint32_t);
+            pack_ready.erase(oldest);
+            pack_requested.erase(oldest);  // read again if a texture wants it again
+        }
     }
 
     static bool sane(const ta::Vertex& a) {
@@ -1138,6 +1268,7 @@ struct Renderer::Impl {
     // replaces an attachment).
     Picture draw(const Source& src) {
         ++frame;
+        collect_pack_images();
         stats.draws = stats.triangles = stats.culled = stats.uploads = stats.dropped = 0;
         const float wide_width = float(src.width) * src.widen;  // the picture's width in the game's pixels
         Target& t = target(src.frame_buffer, static_cast<uint32_t>(std::lround(wide_width)), src.height);
@@ -1417,6 +1548,7 @@ struct Renderer::Impl {
     }
 
     void destroy() {
+        loader.reset();  // its thread stopped (after what it's reading)
         wait();
         for (auto& [k, t] : textures) t.image.destroy(gpu);
         for (Texture& t : retired) t.image.destroy(gpu);
@@ -1453,6 +1585,9 @@ void Renderer::set_anisotropy(unsigned level) { impl_->set_anisotropy(level); }
 void Renderer::set_msaa(unsigned samples) { impl_->set_msaa(samples); }
 void Renderer::set_texture_packs(const std::filesystem::path& load, const std::filesystem::path& dump) { impl_->set_texture_packs(load, dump); }
 void Renderer::reload_texture_packs() { impl_->set_texture_packs(impl_->pack_load, impl_->pack_dump, true); }
+void Renderer::wait_texture_packs() {
+    if (impl_->loader) impl_->loader->wait_idle();
+}
 unsigned Renderer::msaa() const { return impl_->samples; }
 std::vector<uint8_t> Renderer::read_back() { return impl_->read_back(); }
 Picture Renderer::picture(uint32_t frame_buffer) const { return impl_->picture(frame_buffer); }

@@ -594,6 +594,9 @@ int renderer() {
         r.set_texture_packs(root / "load", {});
         expect(r.stats().pack_files == 1, "texture packs: the replacement found, in a folder in the load folder");
         r.draw(src);
+        expect(r.read_back() == px, "texture packs: the original drawn while its replacement is read");
+        r.wait_texture_packs();
+        r.draw(src);
         const std::vector<uint8_t> packed = r.read_back();
         const auto packed_is = [&](int x, int y, uint8_t red, uint8_t green, uint8_t blue) {
             const uint8_t* q = &packed[size_t(y * 64 + x) * 4];
