@@ -330,6 +330,7 @@ int cmd_lift(const std::string& path, const std::string& out_dir, const std::opt
     options.files = files;
     options.replaced = replaced_functions(boot.sha256);
     options.natives = native_footprints(boot.sha256);
+    options.idle = idle_loops(boot.sha256);
     if (range) {
         const size_t dash = range->find('-');
         if (dash == std::string::npos) throw Failure{"--range takes lo-hi"};

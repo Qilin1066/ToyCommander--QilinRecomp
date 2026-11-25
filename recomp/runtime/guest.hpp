@@ -412,6 +412,24 @@ inline void poll_irq(Context& c, uint32_t r15) {
         if (::qilin::rt::g_irq_pending.load(std::memory_order_relaxed)) [[unlikely]] ::qilin::rt::poll_irq(c, (r15)); \
     } while (0)
 
+// An interrupt raised from any thread: pending, and a thread asleep in
+// idle_wait woken.
+void raise_irq();
+// Sleeps until an interrupt is raised, or 2 ms at most (a bound, should
+// anything a waiting loop tests change some other way).
+void idle_wait();
+// The backward branch of a loop that only waits for an interrupt (the
+// layout's IdleLoop, `branch`): while none is pending and the idle callback
+// it calls (the function whose address is the word at `callback`) is still
+// an empty one (its first instruction an rts), sleep instead of going round
+// again. The guest sees what it would have: nothing it tests changes until
+// an interrupt, which is then taken as at any backward branch.
+inline void idle_poll(Context& c, uint32_t r15, uint32_t callback) {
+    if (!g_irq_pending.load(std::memory_order_relaxed) && ld16(ld32(callback)) == 0x000Bu) idle_wait();
+    if (g_irq_pending.load(std::memory_order_relaxed)) poll_irq(c, r15);
+}
+#define QILIN_IDLE(r15, callback, branch) ::qilin::rt::idle_poll(c, (r15), (callback))
+
 // ldc to SR: IMASK and the other free bits are kept (the runtime delivers
 // interrupts only where IMASK allows them); a change of mode, register bank,
 // exception blocking or the FPU's enable isn't something lifted code can

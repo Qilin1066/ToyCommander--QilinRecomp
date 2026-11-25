@@ -35,7 +35,8 @@ enum : uint32_t {
 
 class Emitter {
 public:
-    Emitter(const BootFile& boot, const Cfg& cfg, const Function& f, const FpModes* modes) : boot_(boot), cfg_(cfg), f_(f), modes_(modes) {}
+    Emitter(const BootFile& boot, const Cfg& cfg, const Function& f, const FpModes* modes, const std::map<uint32_t, uint32_t>& idle)
+        : boot_(boot), cfg_(cfg), f_(f), modes_(modes), idle_(idle) {}
 
     LiftResult run() {
         try {
@@ -244,7 +245,12 @@ private:
     // A backward branch (a loop) is where interrupts are taken (guest.hpp).
     std::string go(uint32_t target) {
         labels_.insert(target);
-        if (target <= branch_pc_) return std::format("{{ QILIN_POLL_IRQ({}); goto {}; }}", R(15), label(target));
+        if (target <= branch_pc_) {
+            // A loop that only waits for an interrupt: sleep until one comes.
+            if (const auto it = idle_.find(branch_pc_); it != idle_.end())
+                return std::format("{{ QILIN_IDLE({}, {}, {}); goto {}; }}", R(15), hex(it->second), hex(branch_pc_), label(target));
+            return std::format("{{ QILIN_POLL_IRQ({}); goto {}; }}", R(15), label(target));
+        }
         return std::format("goto {};", label(target));
     }
 
@@ -871,6 +877,7 @@ private:
     const Cfg& cfg_;
     const Function& f_;
     const FpModes* modes_;
+    const std::map<uint32_t, uint32_t>& idle_;
     uint32_t used_ = 0;
     uint32_t fused_ = 0;  // fr0-fr15 of the current bank
     std::set<uint32_t> labels_;
@@ -884,7 +891,7 @@ private:
 
 LiftResult Lifter::lift_unlinked(const Function& f) const {
     const auto m = modes_.find(f.entry);
-    return Emitter(boot_, cfg_, f, m == modes_.end() ? nullptr : &m->second).run();
+    return Emitter(boot_, cfg_, f, m == modes_.end() ? nullptr : &m->second, idle_).run();
 }
 
 LiftResult Lifter::lift(const Function& f) const {

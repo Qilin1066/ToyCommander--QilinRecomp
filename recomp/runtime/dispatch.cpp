@@ -2,7 +2,10 @@
 // std::format.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <mutex>
 
 #include "guest.hpp"
 
@@ -41,5 +44,24 @@ void call(Context& c, uint32_t target, uint32_t from) {
 }
 
 void hang(uint32_t pc) { throw Stop{Stop::Hang, pc, 0}; }
+
+// idle_wait's sleep and raise_irq's wake. The flag is set before the lock is
+// taken and released, so a waiter that saw it clear is already waiting (or
+// sees it set) when the wake comes: none is lost.
+namespace {
+std::mutex g_idle_lock;
+std::condition_variable g_idle;
+}  // namespace
+
+void raise_irq() {
+    g_irq_pending.store(true, std::memory_order_relaxed);
+    { std::lock_guard<std::mutex> held(g_idle_lock); }
+    g_idle.notify_all();
+}
+
+void idle_wait() {
+    std::unique_lock<std::mutex> held(g_idle_lock);
+    g_idle.wait_for(held, std::chrono::milliseconds(2), [] { return g_irq_pending.load(std::memory_order_relaxed); });
+}
 
 }  // namespace qilin::rt

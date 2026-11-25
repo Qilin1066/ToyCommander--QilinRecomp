@@ -245,6 +245,28 @@ constexpr IndirectTargets kUsaIndirect[] = {
 
 #include "native_footprints.inc"
 
+// Kamui 2's waits for the graphics chip (the profile of a mission: the game's
+// thread spent about 80% of its time in them): each loops calling the idle
+// callback (slot 7 of the table at 0x8C113574, through 0x8C0868A8; Toy
+// Racer's 0x8C1B8FA4, through 0x8C091560; an empty function, 0x8C085AD4)
+// until an interrupt handler frees a buffer slot (0x8C08815E scans the eight
+// at 0x8C10FE2C) or posts the event it waits for (the words at 0x8C10FE0C,
+// 0x8C10FE14 and the pending bits at 0x8C10FE08). Toy Racer's four are the
+// same instructions but for their addresses. (The movie player's wait at
+// 0x8C06C0EC isn't one: it counts down a limit each time round.)
+constexpr IdleLoop kUsaIdle[] = {
+    {0x8C088736, 0x8C1135AC, "a free buffer slot (0x8C08815E)"},
+    {0x8C088786, 0x8C1135AC, "the render's event (0x8C10FE0C) and its pending bit"},
+    {0x8C08880E, 0x8C1135AC, "the render's event (0x8C10FE0C) and its pending bit"},
+    {0x8C088832, 0x8C1135AC, "the other list's event (0x8C088398)"},
+};
+constexpr IdleLoop kEuropeIdle[] = {
+    {0x8C093254, 0x8C1B8FDC, "a free buffer slot"},
+    {0x8C0932E2, 0x8C1B8FDC, "the render's event and its pending bit"},
+    {0x8C093342, 0x8C1B8FDC, "the render's event and its pending bit"},
+    {0x8C093366, 0x8C1B8FDC, "the other list's event"},
+};
+
 // Everything known about one build, found by its boot file's SHA-256.
 struct Build {
     std::string_view sha256;
@@ -254,10 +276,11 @@ struct Build {
     std::span<const KnownEntry> entries;
     std::span<const DataBlock> data;
     std::span<const NativeFootprint> natives;
+    std::span<const IdleLoop> idle;
 };
 constexpr Build kBuilds[] = {
-    {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", kUsa, kUsaReplaced, kUsaIndirect, kUsaEntries, kUsaData, kToyCommanderFootprints},  // Toy Commander (USA)
-    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", kEurope, kEuropeReplaced, {}, kEuropeEntries, kEuropeData, kToyRacerFootprints},  // Toy Racer (Europe)
+    {"ee68a326da964fec5892b7226311f2293fd3a0bbf5bac496ec82991964d49bbd", kUsa, kUsaReplaced, kUsaIndirect, kUsaEntries, kUsaData, kToyCommanderFootprints, kUsaIdle},  // Toy Commander (USA)
+    {"da29a065f9db779f0c95d778de36c019848b211ad93a667244bf58e9a10ee5d4", kEurope, kEuropeReplaced, {}, kEuropeEntries, kEuropeData, kToyRacerFootprints, kEuropeIdle},  // Toy Racer (Europe)
 };
 
 // The build's record; an empty one (nothing known) for any other boot file.
@@ -276,5 +299,6 @@ std::span<const ReplacedFunction> replaced_functions(std::string_view sha256_hex
 std::span<const KnownEntry> known_entries(std::string_view sha256_hex) { return build(sha256_hex).entries; }
 std::span<const DataBlock> data_blocks(std::string_view sha256_hex) { return build(sha256_hex).data; }
 std::span<const NativeFootprint> native_footprints(std::string_view sha256_hex) { return build(sha256_hex).natives; }
+std::span<const IdleLoop> idle_loops(std::string_view sha256_hex) { return build(sha256_hex).idle; }
 
 }  // namespace qilin

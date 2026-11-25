@@ -81,4 +81,16 @@ struct NativeFootprint {
 };
 std::span<const NativeFootprint> native_footprints(std::string_view sha256_hex);
 
+// A loop in which the guest only waits for an interrupt: each time round it
+// calls Kamui 2's idle callback (the function whose address is in the word
+// `callback`) and tests words only interrupt handlers change. At `branch`,
+// its backward branch, the lifted code sleeps until an interrupt is raised
+// (rt::idle_poll) instead of spinning, while that callback is still an empty
+// function (the game could set one that does work).
+struct IdleLoop {
+    uint32_t branch, callback;
+    std::string_view why;
+};
+std::span<const IdleLoop> idle_loops(std::string_view sha256_hex);
+
 }  // namespace qilin

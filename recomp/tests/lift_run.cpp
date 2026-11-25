@@ -5,6 +5,7 @@
 // QILIN_CHECKED_MEMORY, so a stray access stops instead of corrupting.
 // No game data.
 #include <bit>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <thread>
 #include <vector>
 
 #include "functions.hpp"
@@ -233,6 +235,31 @@ void test_interrupt_poll() {
     eq("interrupt sees the stack pointer", g_serviced_r15, sp);
     eq("interrupt no longer pending", qilin::rt::g_irq_pending.load() ? 1u : 0u, 0u);
     qilin::rt::g_irq_service = nullptr;
+}
+
+// An idle loop's sleep: woken by an interrupt raised on another thread, and
+// over within its bound when none comes; not at all when one is pending.
+void test_idle_wait() {
+    namespace rt = qilin::rt;
+    using clock = std::chrono::steady_clock;
+    rt::g_irq_pending.store(false);
+    auto t0 = clock::now();
+    rt::idle_wait();
+    const auto bounded = clock::now() - t0;
+    eq("idle_wait returns by its bound", bounded < std::chrono::milliseconds(200) ? 1u : 0u, 1u);
+    eq("idle_wait without an interrupt: none pending", rt::g_irq_pending.load() ? 1u : 0u, 0u);
+    std::thread raiser([] {
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        rt::raise_irq();
+    });
+    // Long enough waits that the raise lands in one of them.
+    for (int k = 0; k < 100 && !rt::g_irq_pending.load(); ++k) rt::idle_wait();
+    raiser.join();
+    eq("raise_irq: pending, the sleeper woken", rt::g_irq_pending.load() ? 1u : 0u, 1u);
+    t0 = clock::now();
+    rt::idle_wait();  // pending: no sleep
+    eq("idle_wait with one pending returns at once", clock::now() - t0 < std::chrono::milliseconds(50) ? 1u : 0u, 1u);
+    rt::g_irq_pending.store(false);
 }
 
 // A literal the code rewrites is read from memory, not folded from the image.
@@ -624,6 +651,7 @@ int main() {
     test_mul(rng);
     test_control();
     test_interrupt_poll();
+    test_idle_wait();
     test_patched_literal();
     test_stops();
     test_memory();

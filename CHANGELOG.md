@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Changed
+- **The game no longer keeps a CPU core busy while it waits**: the game's thread used a whole core spinning in the graphics library's waits for the GPU; it now sleeps until the interrupt it waits for. About three quarters less CPU in a mission, the same frame rate and pictures.
 - **Fewer GPU commands a frame**: each draw sets only the state that differs from the draw before it. The same pictures. Not timed yet.
 - **Faster texture updates**: a texture that changes every frame (movies, pictures drawn by the game) is read, decoded and uploaded with fewer passes over its data and less work a texel. The same pictures. Not timed yet.
 - **Less work in the sound driver**: its per-frame pass brings the sound up to date once, not once or twice for each playing channel. Not timed yet.

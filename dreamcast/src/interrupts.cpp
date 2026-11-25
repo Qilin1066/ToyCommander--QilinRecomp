@@ -91,7 +91,7 @@ void service(rt::Context& c) {
 
 }  // namespace
 
-void interrupt_pending() { rt::g_irq_pending.store(true, std::memory_order_relaxed); }
+void interrupt_pending() { rt::raise_irq(); }
 
 void start_interrupts() {
     rt::g_irq_service = service;

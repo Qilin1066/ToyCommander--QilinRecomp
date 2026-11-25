@@ -85,7 +85,11 @@ struct Footprint {
 class Lifter {
 public:
     // `modes`: fp_modes()'s result, the FPSCR mode at every FPU instruction.
-    Lifter(const BootFile& boot, const Cfg& cfg, const std::map<uint32_t, FpModes>& modes) : boot_(boot), cfg_(cfg), modes_(modes) {}
+    // `idle`: loops that only wait for an interrupt, by their backward
+    // branch, with the address of the idle callback's word each calls
+    // (layout.hpp's IdleLoop): there the code sleeps rather than spins.
+    Lifter(const BootFile& boot, const Cfg& cfg, const std::map<uint32_t, FpModes>& modes, std::map<uint32_t, uint32_t> idle = {})
+        : boot_(boot), cfg_(cfg), modes_(modes), idle_(std::move(idle)) {}
     // Every call stores and reloads all the function's registers.
     LiftResult lift(const Function& f) const;
     // The code with its direct calls left for link to fill in.
@@ -112,6 +116,7 @@ private:
     const BootFile& boot_;
     const Cfg& cfg_;
     const std::map<uint32_t, FpModes>& modes_;
+    std::map<uint32_t, uint32_t> idle_;
 };
 
 }  // namespace qilin
