@@ -4,6 +4,7 @@
 #include <array>
 #include <format>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -388,7 +389,6 @@ std::map<uint32_t, FpModes> fp_modes(const BootFile& boot, const Cfg& cfg, std::
         for (const auto& [site, targets] : f.indirect_targets) known_targets.insert(targets.begin(), targets.end());
     for (const auto& [e, f] : cfg.functions)
         if (!replaced(e) && !known_targets.contains(e) && (taken.contains(e) || !called.contains(e))) contexts.try_emplace({e, kDefaultMode});
-    std::vector<std::string> global_problems;
     for (int round = 0;; ++round) {
         bool changed = false;
         std::vector<Context> todo;
@@ -412,10 +412,10 @@ std::map<uint32_t, FpModes> fp_modes(const BootFile& boot, const Cfg& cfg, std::
             contexts[c] = std::move(s);
         }
         if (!changed) break;
-        if (round == 40) {
-            global_problems.push_back("the FPSCR modes don't converge across the call graph");
-            break;
-        }
+        // Not settled: the modes found so far may be short of the truth, and
+        // code lifted from them would be wrong without a word. Stop.
+        if (round == 40)
+            throw std::runtime_error(std::format("the FPSCR modes don't converge across the call graph ({} contexts after 40 rounds)", contexts.size()));
     }
 
     // The results per function, over its contexts.
@@ -491,8 +491,6 @@ std::map<uint32_t, FpModes> fp_modes(const BootFile& boot, const Cfg& cfg, std::
         m.problems.assign(problems.begin(), problems.end());
         out.emplace(e, std::move(m));
     }
-    if (!global_problems.empty() && !out.empty())
-        out.begin()->second.problems.insert(out.begin()->second.problems.end(), global_problems.begin(), global_problems.end());
     return out;
 }
 

@@ -55,7 +55,12 @@ void report(std::FILE* out, const Stop& s, const Context* c);
 // The return addresses on the guest stack from r15 up to `stack_top`, as a
 // call chain (memory must be readable there).
 void backtrace(std::FILE* out, const Context& c, uint32_t stack_top, unsigned most = 24);
-[[noreturn]] void fatal(const char* format, ...) QILIN_PRINTF(1, 2);
+// Ends the program with `code` once the game has started: the output
+// flushed, no static destructors (guest threads, the sound mixer and the
+// display's threads are still running and would use what they destroy). How
+// a game's program ends; any thread may call it.
+[[noreturn]] void end(int code);
+[[noreturn]] void fatal(const char* format, ...) QILIN_PRINTF(1, 2);  // the message, then end(3)
 void log(const char* format, ...) QILIN_PRINTF(1, 2);
 
 }  // namespace qilin::rt

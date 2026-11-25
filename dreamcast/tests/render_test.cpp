@@ -228,7 +228,7 @@ int renderer() {
         r.draw(src);
         expect(r.read_back() == px, "renderer: the same picture multisampled (the edges on pixels' edges)");
         r.draw(src);
-        expect(r.read_back() == px, "renderer: and again, from the kept samples");
+        expect(r.read_back() == px, "renderer: and again, into a picture already made");
         ta::Scene diag;
         auto strip = [&](std::initializer_list<ta::Vertex> vs) {
             ta::Strip s{};
@@ -259,6 +259,39 @@ int renderer() {
         r.draw(src);
         expect(r.read_back() == px, "renderer: the first picture again, multisampling off");
     }
+
+    // A frame in two renders (Toy Racer's races): the second's clip is the
+    // bottom half, where it draws a white quad over everything. Only its clip
+    // changes; the top half is the first render's, with and without
+    // multisampling (the render area is the clip: nothing else is cleared,
+    // stored or resolved).
+    for (const unsigned samples : {1u, 4u}) {
+        r.set_msaa(samples);
+        dreamcast::renderer::Source first = src;
+        first.frame_buffer = 0x1C0000;
+        r.draw(first);
+        const std::vector<uint8_t> whole = r.read_back();
+        ta::Scene white;
+        {
+            ta::Strip s{};
+            s.list = ta::kOpaque, s.pcw = gouraud, s.isp = isp_ge, s.count = 4;
+            white.vertices = {vertex(0, 0, 0.9f, 1, 1, 1), vertex(64, 0, 0.9f, 1, 1, 1), vertex(0, 48, 0.9f, 1, 1, 1), vertex(64, 48, 0.9f, 1, 1, 1)};
+            white.strips.push_back(s);
+        }
+        dreamcast::renderer::Source second = first;
+        second.scene = &white;
+        second.clip_y0 = 24;
+        r.draw(second);
+        const std::vector<uint8_t> parts = r.read_back();
+        const size_t half = size_t(64) * 24 * 4;
+        expect(std::equal(parts.begin(), parts.begin() + std::ptrdiff_t(half), whole.begin()),
+               samples == 1 ? "renderer: a second render leaves the picture outside its clip as it was"
+                            : "renderer: multisampled, a second render leaves the picture outside its clip as it was");
+        bool all_white = true;
+        for (size_t i = half; i < parts.size(); i += 4) all_white = all_white && parts[i] == 255 && parts[i + 1] == 255 && parts[i + 2] == 255;
+        expect(all_white, samples == 1 ? "renderer: and draws its clip" : "renderer: multisampled, and draws its clip");
+    }
+    r.set_msaa(1);
 
     // Cheap shadows: an opaque red quad over everything and a translucent
     // green one over the left quarter, both taking shadows (PCW bit 7); one

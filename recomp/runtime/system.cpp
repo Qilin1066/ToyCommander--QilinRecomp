@@ -129,7 +129,12 @@ void fatal(const char* format, ...) {
     std::vfprintf(stderr, format, args);
     std::fputc('\n', stderr);
     va_end(args);
-    std::exit(3);
+    end(3);
+}
+
+void end(int code) {
+    std::fflush(nullptr);
+    std::_Exit(code);
 }
 
 void log(const char* format, ...) {

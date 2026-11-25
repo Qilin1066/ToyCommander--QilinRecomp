@@ -338,6 +338,8 @@ int cmd_lift(const std::string& path, const std::string& out_dir, const std::opt
     std::print("{}", sum.report.substr(0, sum.report.find('\n') + 1));
     for (const auto& [why, fns] : sum.failures) std::println("  {:5}  {}", fns.size(), why);
     std::println("{} files written, {} removed ({})", sum.written, sum.removed, out_dir);
+    // A function not lifted would stop the game when reached: the build stops now instead.
+    if (sum.failed != 0) throw Failure{std::format("{} function{} not lifted (above)", sum.failed, sum.failed == 1 ? "" : "s")};
     return 0;
 }
 

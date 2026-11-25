@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
         if (const rt::Context* t = toycommander::thread_stop_context()) {
             std::fprintf(stderr, "(in a guest thread of bu's thread library)\n");
             rt::report(stderr, s, t);
-            return 3;
+            rt::end(3);
         }
         rt::report(stderr, s, &c);
         if (c.r[15] >= 0x8C00C000u && c.r[15] < 0x8C00F400u) {
@@ -155,8 +155,8 @@ int main(int argc, char** argv) {
             if (std::getenv("QILIN_STACK"))
                 for (uint32_t a = c.r[15]; a < 0x8C00F400u; a += 4) std::fprintf(stderr, "    %08X: %08X\n", a, rt::ld32(a));
         }
-        return 3;
+        rt::end(3);  // the sound mixer and the display's threads still run: no static destructors
     }
     std::fprintf(stderr, "qilin_run: the game returned from main\n");
-    return 0;
+    rt::end(0);
 }

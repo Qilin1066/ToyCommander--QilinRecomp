@@ -6,6 +6,7 @@
 #include "pvr.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -36,11 +37,25 @@ uint32_t& reg(uint32_t a) { return g_regs[(a - kLo) / 4]; }
 // ones clears them.
 constexpr uint32_t kStatusNormal = 0x005F6900u, kStatusExternal = 0x005F6904u, kStatusError = 0x005F6908u;
 
+// External events raised from another thread (the sound chip's interrupt,
+// from the mixer's 5 ms tick, aica.cpp): the register file is the guest
+// thread's alone, so they wait here and the guest thread takes them in
+// whenever it reads or acknowledges the external status. One raised just as
+// the guest looks is seen at its next look (the next interrupt service, at
+// most a frame later), as a hardware interrupt arriving a moment later would be.
+std::atomic<uint32_t> g_external_raised{0};
+uint32_t& external_status() {
+    uint32_t& r = reg(kStatusExternal);
+    if (g_external_raised.load(std::memory_order_relaxed) != 0) r |= g_external_raised.exchange(0, std::memory_order_acquire);
+    return r;
+}
+
 uint32_t read(uint32_t a, unsigned n) {
     if (n != 4 || (a & 3u)) throw rt::Stop{rt::Stop::Unsupported, 0, a};
     switch (a) {
     case kId: return 0x17FD11DBu;
     case kRevision: return 0x11u;
+    case kStatusExternal: return external_status();
     default: return reg(a);
     }
 }
@@ -109,8 +124,8 @@ void write(uint32_t a, uint32_t v, unsigned n) {
         reg(a) = v;
         start_render();
         return;
+    case kStatusExternal: external_status() &= ~v; return;  // what was raised meanwhile, then the acknowledgement
     case kStatusNormal:
-    case kStatusExternal:
     case kStatusError: reg(a) &= ~v; return;
     default: reg(a) = v; return;
     }
@@ -186,15 +201,18 @@ uint64_t vram64_generation(uint32_t offset, uint32_t n) {
     return newest;
 }
 
-uint32_t pvr_register(uint32_t a) { return reg(a & 0x1FFFFFFFu); }
+uint32_t pvr_register(uint32_t a) {
+    a &= 0x1FFFFFFFu;
+    return a == kStatusExternal ? external_status() : reg(a);
+}
 const uint32_t* pvr_palette() { return &reg(0x005F9000u); }
 void set_pvr_register(uint32_t a, uint32_t v) { write(a & 0x1FFFFFFFu, v, 4); }
 void raise_event(unsigned bit) {
     reg(kStatusNormal) |= 1u << bit;
     interrupt_pending();
 }
-void raise_external_event(unsigned bit) {
-    reg(kStatusExternal) |= 1u << bit;
+void raise_external_event(unsigned bit) {  // any thread
+    g_external_raised.fetch_or(1u << bit, std::memory_order_release);
     interrupt_pending();
 }
 

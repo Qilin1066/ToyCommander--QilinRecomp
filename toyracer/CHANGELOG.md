@@ -10,6 +10,10 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were. A race's two renders a frame each resolve only their own lines.
 
 ### Fixed
+- **Less memory traffic a render**: a render draws, stores and resolves only its own area (a race's two renders a frame each their own lines), instead of loading and storing the whole picture; with multisampling, one shared multisampled image whose samples are never stored, instead of one kept per frame buffer for nothing.
+- **The sound chip's interrupt from position events** is no longer raised from the mixer thread into the system bus's status register while the game's thread reads and acknowledges it (it could be lost); it waits in a mailbox the game's thread takes in.
+- **A stop's report and exit code** are no longer at risk at the end: the program ends without static destructors while the sound mixer and the display's threads still run (after a stop, at the game's end and on a fatal error).
+- **`qilin lift` fails if any function wasn't lifted**, and the FPSCR mode pass stops `qilin` if it doesn't settle, instead of going on with modes that could be incomplete.
 - **Builds with zig's Clang on Windows**: CMake no longer scans the C++ sources for modules (the project has none), which needed `clang-scan-deps` and stopped the build before it compiled anything.
 - **Widescreen from the first frame**: the picture stayed 4:3 until the game's options were changed or loaded from a save (the game widens its camera only then); it's now widened from the start, and follows the window when it's resized. A race checked at 21:9.
 
