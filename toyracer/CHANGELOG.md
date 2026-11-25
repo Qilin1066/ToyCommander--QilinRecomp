@@ -14,6 +14,7 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 - **Multisample anti-aliasing**: `msaa = 1, 2, 4 or 8` in the settings file and "Anti-aliasing (MSAA)" in the menu's Game page, at most what the GPU has, changed while the game runs. The `desktop` preset has 4x; `original` and `low-end` none. Polygons' edges are smoothed; the translucent list's per-pixel sort blends after the samples are resolved, so its own edges stay as they were. A race's two renders a frame each resolve only their own lines.
 
 ### Fixed
+- **The console flash memory's save history keeps whole saves**: a copy was kept before each 64-byte write, so one save filled the history's five copies with itself half-written; now one copy is kept a save, as the memory card does.
 - **CD music no longer reads the disc with the sound lock held**: the next 0.2 seconds are read ahead in the background from a track file kept open, instead of opening the file and reading while the game's thread waits for the sound chip.
 - **The texture cache lets go of textures unused for a while** (1,200 renders): it kept every texture ever drawn, each with its own GPU memory and descriptor sets, which over a long session could reach the device's allocation limit.
 - **Less memory traffic a render**: a render draws, stores and resolves only its own area (a race's two renders a frame each their own lines), instead of loading and storing the whole picture; with multisampling, one shared multisampled image whose samples are never stored, instead of one kept per frame buffer for nothing.

@@ -1,6 +1,7 @@
 #include "flash.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <iterator>
 #include <filesystem>
@@ -44,12 +45,21 @@ void load() {
     } else if (!missing) rt::fatal("cannot read the existing console flash memory; it has been left unchanged");
 }
 
-// The whole file, through a temporary one (a crash leaves the old), the old
-// kept in the saves' history first (save_history.hpp).
+// The whole file, through a temporary one (a crash leaves the old). A save
+// is several writes (Shinobi writes 64-byte blocks, after an erase): the
+// file as it was before the first of them (the first after two seconds
+// without one) is kept in the saves' history (save_history.hpp), as the
+// memory card's is, so the history's few copies are whole saves, not one
+// save's steps.
+std::chrono::steady_clock::time_point g_last_save{};
+
 void save() {
     std::string error;
-    if (!backup_save(g_file.parent_path(), g_file.filename().string(), error))
-        rt::fatal("cannot keep a copy of %s before saving: %s", qilin::utf8_path(g_file).c_str(), error.c_str());
+    const auto now = std::chrono::steady_clock::now();
+    if (g_last_save == std::chrono::steady_clock::time_point{} || now - g_last_save > std::chrono::seconds(2))
+        if (!backup_save(g_file.parent_path(), g_file.filename().string(), error))
+            rt::fatal("cannot keep a copy of %s before saving: %s", qilin::utf8_path(g_file).c_str(), error.c_str());
+    g_last_save = now;
     if (!write_file_safely(g_file, g_flash.data(), g_flash.size(), error)) rt::fatal("%s", error.c_str());
 }
 
