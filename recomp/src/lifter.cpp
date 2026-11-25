@@ -93,7 +93,7 @@ public:
     static std::string sync(RegSet regs, bool out) {
         std::string s;
         for (unsigned n = 0; n < 16; ++n)
-            if (regs & (1u << n)) s += out ? std::format(" c.r[{0}] = r{0};", n) : std::format(" r{0} = c.r[{0}];", n);
+            if (regs & (RegSet{1} << n)) s += out ? std::format(" c.r[{0}] = r{0};", n) : std::format(" r{0} = c.r[{0}];", n);
         for (const auto& [bit, name] : kNamed)
             if (regs & bit) s += out ? std::format(" c.{0} = {0};", name) : std::format(" {0} = c.{0};", name);
         for (unsigned n = 0; n < 16; ++n)
