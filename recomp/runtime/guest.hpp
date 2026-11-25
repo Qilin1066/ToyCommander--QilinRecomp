@@ -423,11 +423,33 @@ void call(Context& c, uint32_t target, uint32_t from);
 // stops as unregistered, naming it and its caller, if there is none.
 // Defined by the runtime (system.cpp).
 void replaced(Context& c, uint32_t fn);
+// The native code registered for `fn`; stops as unregistered (naming `from`,
+// the return address it was called with) if there is none. Natives are only
+// ever added, so a stub looks its native up once and keeps it.
+Fn native_of(uint32_t fn, uint32_t from);
+// Runs a replaced function's native `f` (native_of's) and returns to the
+// caller as the guest code would.
+inline void run_native(Context& c, Fn f) {
+    f(c);
+    c.ret = c.pr;
+}
 // The same for a native whose footprint the lifter knows (`regs`: the
 // registers it may read or change, as the lifter's RegSet numbers them;
 // tools/check/native_footprints.py works them out from its source): direct
 // calls to it store and reload only those, so it is checked to have changed
-// no other, and stops (Stop::Footprint) if it did.
+// no other, and stops (Stop::Footprint) if it did. The stubs call
+// run_native_within, which checks it in builds with QILIN_CHECKED_MEMORY
+// (bring-up, the tests) and in a release build runs the native as
+// run_native does (two snapshots of the registers a call cost more than a
+// small native's work).
 void replaced_within(Context& c, uint32_t fn, uint64_t regs);
+void run_native_checked(Context& c, Fn f, uint32_t fn, uint64_t regs);
+inline void run_native_within(Context& c, Fn f, [[maybe_unused]] uint32_t fn, [[maybe_unused]] uint64_t regs) {
+#ifdef QILIN_CHECKED_MEMORY
+    run_native_checked(c, f, fn, regs);
+#else
+    run_native(c, f);
+#endif
+}
 
 }  // namespace qilin::rt

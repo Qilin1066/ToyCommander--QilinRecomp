@@ -50,13 +50,14 @@ const char* native_name(uint32_t entry) {
     return it != r.end() && it->entry == entry ? it->name : nullptr;
 }
 
-void replaced(Context& c, uint32_t fn) {
+Fn native_of(uint32_t fn, uint32_t from) {
     const auto& r = registry();
     const auto it = std::lower_bound(r.begin(), r.end(), fn, [](const Provided& p, uint32_t a) { return p.entry < a; });
-    if (it == r.end() || it->entry != fn) unregistered(fn, c.pr);
-    it->fn(c);
-    c.ret = c.pr;
+    if (it == r.end() || it->entry != fn) unregistered(fn, from);
+    return it->fn;
 }
+
+void replaced(Context& c, uint32_t fn) { run_native(c, native_of(fn, c.pr)); }
 
 namespace {
 // The registers lifted code keeps in locals, as the lifter's RegSet numbers them.
@@ -73,9 +74,11 @@ Locals locals_of(const Context& c) {
 }
 }  // namespace
 
-void replaced_within(Context& c, uint32_t fn, uint64_t regs) {
+void replaced_within(Context& c, uint32_t fn, uint64_t regs) { run_native_checked(c, native_of(fn, c.pr), fn, regs); }
+
+void run_native_checked(Context& c, Fn f, uint32_t fn, uint64_t regs) {
     const Locals before = locals_of(c);
-    replaced(c, fn);
+    run_native(c, f);
     const Locals after = locals_of(c);
     // Which changed, as a RegSet, without a branch a register; then one test.
     uint64_t changed = 0;

@@ -70,7 +70,8 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     for (auto& [entry, r] : results)
         if (r.ok) lifted.emplace(entry, std::move(r));
     // A replaced function whose native's registers are known: its stub
-    // checks them (rt::replaced_within), and calls to it save only those.
+    // checks them in a checked build (rt::run_native_within), and calls to it
+    // save only those.
     // (A native registered where no replaced function is has no stub: its
     // footprint isn't used.)
     std::map<uint32_t, RegSet> natives;
@@ -93,10 +94,13 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
         header += std::format("void {}(rt::Context& c);\n", fn_name(entry));
         table += std::format("    {{0x{:08X}u, gen::{}}},\n", entry, fn_name(entry));
         if (plan_of(entry) == Plan::replace || replaced_here(entry)) {
+            // The native is looked up on the first call (a stop then names
+            // the caller), and kept: natives are only ever added.
+            const std::string find = std::format("static const rt::Fn f = rt::native_of(0x{:08X}u, c.pr);", entry);
             if (const auto n = natives.find(entry); n != natives.end())
-                stubs += std::format("void {}(rt::Context& c) {{ rt::replaced_within(c, 0x{:08X}u, 0x{:X}ull); }}\n", fn_name(entry), entry, n->second);
+                stubs += std::format("void {}(rt::Context& c) {{ {} rt::run_native_within(c, f, 0x{:08X}u, 0x{:X}ull); }}\n", fn_name(entry), find, entry, n->second);
             else
-                stubs += std::format("void {}(rt::Context& c) {{ rt::replaced(c, 0x{:08X}u); }}\n", fn_name(entry), entry);
+                stubs += std::format("void {}(rt::Context& c) {{ {} rt::run_native(c, f); }}\n", fn_name(entry), find);
             ++sum.replaced;
             continue;
         }

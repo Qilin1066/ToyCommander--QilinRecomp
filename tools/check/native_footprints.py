@@ -11,11 +11,12 @@ the lifter's default, every register: the context used any other way (a
 register by a computed index, the whole context copied or assigned, its
 address taken, passed to a function it can't find or through a pointer,
 which is how guest code is run: rt::call, rt::call_guest). PR is in every
-footprint: the return (rt::replaced) reads it.
+footprint: the return (rt::run_native) reads it.
 
-The lifted code checks the rest at run time: a native's stub compares the
-registers outside its footprint before and after (rt::replaced_within) and
-stops if one changed.
+Checked builds (QILIN_CHECKED_MEMORY: the games' default bring-up builds and
+the tests) check the rest at run time: a native's stub compares the
+registers outside its footprint before and after (rt::run_native_within)
+and stops if one changed.
 
     python3 tools/check/native_footprints.py          # write the table
     python3 tools/check/native_footprints.py --check  # CI: fail if it's out of date

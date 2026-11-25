@@ -7,6 +7,7 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 ## [Unreleased]
 
 ### Changed
+- **Cheaper calls to native code**: each replaced function finds its native once instead of on every call, and the release build no longer compares every register before and after it (development builds still check). Not timed yet.
 - **Faster loading**: the disc's data is read a request at a time with its file kept open, instead of opening the file again for every 2 KB sector, and copied into memory in one go. Not timed yet.
 - **Less register traffic in the recompiled code**: a function stores back only the registers it changes, and after a call reloads only those the callee may change (3% to 6% fewer of each across the game's code). Not timed yet.
 - **Less data sent to the GPU a frame**: a smooth-shaded strip's vertices are sent once and its triangles as indices, instead of three copies of each inner vertex (a quad's data 26% smaller, a ten-vertex strip's 51%). The same pictures. Not timed yet.
