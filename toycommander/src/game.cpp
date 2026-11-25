@@ -2,14 +2,15 @@
 #include "game.hpp"
 
 #include "chain.hpp"
+#include "library.hpp"
 #include "natives.hpp"
 
 namespace dreamcast::game {
 
-uint32_t interrupt_handler(uint32_t offset) { return toycommander::interrupt_handler(offset); }
+uint32_t interrupt_handler(uint32_t offset) { return shinobi::interrupt_handler(offset); }
 void raise_bus_event(qilin::rt::Context& c, uint32_t event) { shinobi::raise_bus_event(c, event); }
-void set_console(unsigned language, bool stereo) { toycommander::set_console(language, stereo); }
-void on_sound_mode(void (*save)(bool stereo)) { toycommander::on_sound_mode(save); }
+void set_console(unsigned language, bool stereo) { shinobi::set_console(language, stereo); }
+void on_sound_mode(void (*save)(bool stereo)) { shinobi::on_sound_mode(save); }
 // The factor the projection reads (1, or what the screen mode switch, a native, widened it by).
 float widening() { return qilin::rt::flt(qilin::rt::ld32(0x8C0A4120u)); }
 

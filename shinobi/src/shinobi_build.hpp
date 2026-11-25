@@ -26,6 +26,17 @@ struct Natives {
     uint32_t rtc_refresh, rtc_get_date, rtc_date_to_count;
     // bu's thread library (threads.cpp): a thread's yield and the scheduler's pass.
     uint32_t thread_yield, thread_scheduler_pass;
+    // The C runtime's, Shinobi's and Kamui 2's functions both games link in
+    // the same form (library.cpp). The C runtime's fill and clear:
+    uint32_t memset, memclr;
+    // Shinobi's initialisation and exit, the work area, the console's settings:
+    uint32_t library_init, library_exit, set_work_area, clear_work_area, set_sound_mode, sound_mode, area, language, broadcast, cable;
+    // Its hardware set-up, allocator (two names each for malloc and free), real-time clock set-up and exit:
+    uint32_t hardware_init, heap_init, heap_exit, malloc, malloc_2, free, free_2, rtc_init, rtc_exit;
+    // The cache calls, timer 0, copy and clear, the call on Shinobi's own stack:
+    uint32_t cache_invalidate, cache_purge, cache_write_back, timer_start, timer_count, timer_diff, copy, clear, call_on_own_stack;
+    // Kamui 2's interrupt set-up and removal; the debugger's register, break and trap:
+    uint32_t kamui_install_interrupt_handler, kamui_remove_interrupt_handler, read_dbr, debug_break, debug_trap;
 };
 
 struct Build {
@@ -48,6 +59,13 @@ struct Build {
     uint32_t thread_current;      // the scheduler running now; the one before it at +4
     uint32_t thread_exit;         // where a killed thread's saved PR is pointed
     uint32_t thread_cleanup;      // frees a dead thread's slot (lifted)
+    // library.cpp's: the global Shinobi keeps the work area's address in;
+    // Kamui 2's interrupt state (IMASK and the masks at +8.., its handlers at
+    // +40, +44); the top of the stack Shinobi calls callbacks on (the
+    // caller's stack pointer kept 4 above it); and the console's area and
+    // broadcast standard, the disc's (the factory record's bytes 10 and 12).
+    uint32_t work_area, kamui_state, own_stack_top;
+    uint32_t console_area, console_broadcast;
     Natives natives;
 };
 

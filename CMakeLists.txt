@@ -350,7 +350,7 @@ set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp drea
 # game's library with that game's build.hpp.
 set(QILIN_GAME_FILES game natives)
 set(QILIN_SHINOBI_SOURCES shinobi/src/main.cpp shinobi/src/boot.cpp shinobi/src/heap.cpp shinobi/src/gdrom_bios.cpp
-                          shinobi/src/chain.cpp shinobi/src/rtc.cpp shinobi/src/threads.cpp)
+                          shinobi/src/chain.cpp shinobi/src/rtc.cpp shinobi/src/threads.cpp shinobi/src/library.cpp)
 if(QILIN_HOST)
     find_package(Threads REQUIRED)
 endif()

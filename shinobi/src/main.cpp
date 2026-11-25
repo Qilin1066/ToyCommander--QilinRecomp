@@ -25,6 +25,7 @@
 #include "gdrom.hpp"
 #include "gdrom_bios.hpp"
 #include "interrupts.hpp"
+#include "library.hpp"
 #include "memory.hpp"
 #include "build.hpp"
 #include "pvr.hpp"
@@ -77,6 +78,7 @@ int main(int argc, char** argv) {
 #endif
     rt::host_fp_setup();
     shinobi::provide_game_natives();
+    shinobi::provide_library();
     shinobi::provide_gdrom_bios();
     shinobi::provide_chain();
     shinobi::provide_rtc();
