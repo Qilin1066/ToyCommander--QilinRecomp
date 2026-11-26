@@ -303,9 +303,13 @@ size_t g_oldest = 0;  // the slot to reuse when neither holds the base
 
 void list_init(uint32_t base) {
     if (g_building != kNoBase) {  // the scene built so far is kept for its buffer
-        size_t slot = g_oldest;
+        // Its own buffer's slot, else a free one, else the one kept longest.
+        size_t slot = g_built.size();
         for (size_t i = 0; i < g_built.size(); ++i)
             if (g_built[i].base == g_building) slot = i;
+        for (size_t i = 0; i < g_built.size() && slot == g_built.size(); ++i)
+            if (g_built[i].base == kNoBase) slot = i;
+        if (slot == g_built.size()) slot = g_oldest;
         std::swap(g_built[slot].scene, g.scene);  // the slot's old scene's storage is reused
         g_built[slot].base = g_building;
         if (slot == g_oldest) g_oldest = (g_oldest + 1) % g_built.size();
