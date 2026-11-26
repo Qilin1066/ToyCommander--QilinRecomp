@@ -1,6 +1,8 @@
 #include "ta.hpp"
 
+#include <array>
 #include <cstring>
+#include <utility>
 
 #include "bus.hpp"
 #include "guest.hpp"
@@ -287,13 +289,41 @@ void word_write(uint32_t a, uint32_t v, unsigned n) {
 
 void map() { rt::map({0x10000000u, 0x11000000u, "tile accelerator input", nullptr, word_write, block_write}); }
 
-void list_init() {
+// Scenes finished in other parameter buffers, by the buffer's address (TA_ISP_BASE when their lists
+// began). The game builds the next scene's lists in a second buffer while the last renders, and
+// starts that render (STARTRENDER, PARAM_BASE naming the buffer) when the hardware's done with the
+// one before: by then the next scene may be begun. g.scene is the one being built, in g_building.
+struct Built {
+    uint32_t base = kNoBase;
+    Scene scene;
+};
+std::array<Built, 2> g_built;
+uint32_t g_building = kNoBase;
+size_t g_oldest = 0;  // the slot to reuse when neither holds the base
+
+void list_init(uint32_t base) {
+    if (g_building != kNoBase) {  // the scene built so far is kept for its buffer
+        size_t slot = g_oldest;
+        for (size_t i = 0; i < g_built.size(); ++i)
+            if (g_built[i].base == g_building) slot = i;
+        std::swap(g_built[slot].scene, g.scene);  // the slot's old scene's storage is reused
+        g_built[slot].base = g_building;
+        if (slot == g_oldest) g_oldest = (g_oldest + 1) % g_built.size();
+    }
+    for (Built& b : g_built)
+        if (b.base == base) b.base = kNoBase;  // overwritten by the scene beginning
+    g_building = base;
     g.scene.clear();
     g.in_list = false, g.have_global = false, g.open_strip = false, g.want = 0, g.open_modifier = false;
 }
 
 void feed(const uint8_t* data, unsigned n) { block_write(0x10000000u, data, n); }
 
-const Scene& scene() { return g.scene; }
+const Scene& scene(uint32_t base) {
+    if (base != g_building)
+        for (const Built& b : g_built)
+            if (b.base == base) return b.scene;
+    return g.scene;
+}
 
 }  // namespace dreamcast::ta

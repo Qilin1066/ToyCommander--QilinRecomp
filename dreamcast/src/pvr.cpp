@@ -62,11 +62,13 @@ uint32_t read(uint32_t a, unsigned n) {
 
 void vram_block(uint32_t a, const uint8_t* data, unsigned n);
 
-// TA_LIST_INIT (0x005F8144): bit 31 starts a new scene's lists.
-// STARTRENDER (0x005F8014): renders the scene the lists built. For now the
+// TA_LIST_INIT (0x005F8144): bit 31 starts a new scene's lists, in the
+// parameter buffer at TA_ISP_BASE (0x005F8128).
+// STARTRENDER (0x005F8014): renders the scene built in the buffer at
+// PARAM_BASE (0x005F8020), which may not be the one being built. For now the
 // renderer (video.cpp) draws the scene and the render ends at once: the
 // ISP's, the TSP's and the video's ends (normal events 1, 2 and 0) are raised.
-constexpr uint32_t kTaListInit = 0x005F8144u, kStartRender = 0x005F8014u;
+constexpr uint32_t kTaListInit = 0x005F8144u, kStartRender = 0x005F8014u, kTaIspBase = 0x005F8128u;
 void start_render() {
     video::render();
     raise_event(0), raise_event(1), raise_event(2);
@@ -122,7 +124,7 @@ void write(uint32_t a, uint32_t v, unsigned n) {
         return;
     case kTaListInit:
         reg(a) = v & 0x7FFFFFFFu;  // reads back without the start bit
-        if (v & 0x80000000u) ta::list_init();
+        if (v & 0x80000000u) ta::list_init(reg(kTaIspBase) & 0x00FFFFFCu);
         return;
     case 0x005F6C18u:  // MDST: the Maple bus's DMA (maple.cpp)
         reg(a) = v & 1u;

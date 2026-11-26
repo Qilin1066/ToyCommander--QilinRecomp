@@ -60,9 +60,12 @@ void map();
 // Parameters by DMA (channel 2 to 0x10000000-0x107FFFFF): n bytes, a
 // multiple of 32.
 void feed(const uint8_t* data, unsigned n);
-// TA_LIST_INIT: a new scene begins.
-void list_init();
-// The scene the stream has built so far (since the last list_init).
-const Scene& scene();
+// TA_LIST_INIT: a new scene begins, its lists built in the parameter buffer at `base`
+// (TA_ISP_BASE). The scene built before it is kept for its own buffer.
+inline constexpr uint32_t kNoBase = 0xFFFFFFFFu;
+void list_init(uint32_t base);
+// The scene built in the parameter buffer at `base` (PARAM_BASE, for a render): the one being built
+// if that's its buffer, else the last finished there; the one being built if none was.
+const Scene& scene(uint32_t base);
 
 }  // namespace dreamcast::ta

@@ -213,7 +213,7 @@ float screen_widening() { return g_screen_widening.load(std::memory_order_relaxe
 void render() {
     if (!g_renderer) return;
     renderer::Source src;
-    src.scene = &ta::scene();
+    src.scene = &ta::scene(pvr_register(kParamBase) & 0x00FFFFFCu);  // the buffer this render's lists are in
     src.frame_buffer = pvr_register(kFbWSof1) & 0x00FFFFFCu;
     // The rectangle written: the frame buffer clip (inclusive).
     const uint32_t xc = pvr_register(kFbXClip), yc = pvr_register(kFbYClip);
