@@ -206,7 +206,7 @@ struct ChdFile {
 };
 
 // A whole number, all of `s`.
-std::optional<uint32_t> number(std::string_view s) {
+std::optional<uint32_t> whole_number(std::string_view s) {
     uint32_t v = 0;
     const auto r = std::from_chars(s.data(), s.data() + s.size(), v);
     if (r.ec != std::errc() || r.ptr != s.data() + s.size() || s.empty()) return std::nullopt;
@@ -277,7 +277,7 @@ std::expected<Disc, std::string> Disc::open_gdi(const std::filesystem::path& gdi
         if (line.empty()) continue;
         const std::string where = name + " line " + std::to_string(line_no) + ": ";
         if (!count) {
-            count = number(line);
+            count = whole_number(line);
             if (!count || *count < 3 || *count > 99) return fail(where + "the first line must be the number of tracks");
             continue;
         }
@@ -286,7 +286,7 @@ std::expected<Disc, std::string> Disc::open_gdi(const std::filesystem::path& gdi
         // track, first sector, type (0 audio, 4 data), sector size, file, offset
         if (fields->size() != 6) return fail(where + "a track line has six fields: number, sector, type, sector size, file, offset");
         const auto& v = *fields;
-        const auto n = number(v[0]), lba = number(v[1]), type = number(v[2]), size = number(v[3]), offset = number(v[5]);
+        const auto n = whole_number(v[0]), lba = whole_number(v[1]), type = whole_number(v[2]), size = whole_number(v[3]), offset = whole_number(v[5]);
         if (!n || !lba || !type || !size || !offset) return fail(where + "a field that should be a number isn't");
         if (*n != disc.tracks_.size() + 1) return fail(where + "tracks are not numbered in order");
         if (*type != 0 && *type != 4) return fail(where + "track type " + v[2] + " is not supported (0 is audio, 4 data)");

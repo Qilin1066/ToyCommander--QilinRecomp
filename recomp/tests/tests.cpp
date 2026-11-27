@@ -1247,8 +1247,8 @@ void test_gdrom() {
         };
         const std::string good = "5\n1 0 4 2352 t1.bin 0\n2 10 0 2352 t2.bin 0\n3 45000 4 2352 t3.bin 0\n4 45020 0 2352 t4.bin 0\n5 45070 4 2352 t5.bin 0\n";
         const auto changed = [&](std::string_view from, std::string_view to) {
-            std::string t = good;
-            return t.replace(t.find(from), from.size(), to);
+            std::string text = good;
+            return text.replace(text.find(from), from.size(), to);
         };
         CHECK(!bad_gdi(good));
         CHECK(bad_gdi(changed("5\n1 0", "4\n1 0")));                    // the count disagrees
