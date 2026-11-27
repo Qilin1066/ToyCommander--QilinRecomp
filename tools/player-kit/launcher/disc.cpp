@@ -1,7 +1,6 @@
 // Identifying the player's disc (disc.hpp).
 #include "disc.hpp"
 
-#include <cctype>
 #include <system_error>
 
 #include "bootfile.hpp"
@@ -14,11 +13,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
-
 // "V1.022" as "1.022".
 std::string plain_version(std::string_view v) {
     if (!v.empty() && (v.front() == 'V' || v.front() == 'v')) v.remove_prefix(1);
@@ -27,11 +21,7 @@ std::string plain_version(std::string_view v) {
 
 }  // namespace
 
-bool disc_image_name(const fs::path& path) {
-    // gdrom::Disc::is_image says the same once the disc reader reads all three.
-    const std::string ext = lower(path.extension().string());
-    return ext == ".cue" || ext == ".gdi" || ext == ".chd";
-}
+bool disc_image_name(const fs::path& path) { return gdrom::Disc::is_image(path); }
 
 DiscCheck check_disc(const Kit& kit, const fs::path& disc) {
     const std::string wanted = "This download is for " + kit.wanted_disc() + ".";

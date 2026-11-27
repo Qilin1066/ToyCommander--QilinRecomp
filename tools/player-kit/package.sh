@@ -14,6 +14,7 @@
 # Environment:
 #   LLVM_MINGW_CROSS    the Linux-hosted llvm-mingw release, unpacked
 #   LLVM_MINGW_WINDOWS  the x86_64 Windows-hosted release of the same version, unpacked
+#   ZSTD_LICENSE        zstd v1.5.7's LICENSE file (its BSD licence, for LICENSES/libchdr)
 #   BUILD_DIR           where to build (default build-player-kit)
 #   CMAKE_EXTRA         more cmake arguments (e.g. -DFETCHCONTENT_SOURCE_DIR_IMGUI=...)
 set -eu
@@ -57,6 +58,18 @@ imgui=$(sed -n 's/^FETCHCONTENT_SOURCE_DIR_IMGUI:PATH=//p' "$build/CMakeCache.tx
 cp "$imgui/LICENSE.txt" "$lic/Dear ImGui/"
 cp "$build/_deps/vulkanheaders-src/LICENSE.md" "$lic/Vulkan-Headers/" 2>/dev/null || cp "$build/_deps/vulkanheaders-src/LICENSE"* "$lic/Vulkan-Headers/"
 cp "$build/_deps/volk-src/LICENSE.md" "$lic/volk/"
+# libchdr (the .chd reader) and what it bundles: LZMA, miniz, dr_flac (their
+# licence texts are in their sources) and zstd's decompressor, taken under
+# its BSD licence (ZSTD_LICENSE: that file from zstd's own repository).
+chdr=$(sed -n 's/^FETCHCONTENT_SOURCE_DIR_LIBCHDR:PATH=//p' "$build/CMakeCache.txt")
+[ -n "$chdr" ] || chdr="$build/_deps/libchdr-src"
+mkdir -p "$lic/libchdr"
+cp "$chdr/LICENSE.txt" "$lic/libchdr/LICENSE.txt"
+cp "$chdr"/deps/lzma-*/LICENSE "$lic/libchdr/LZMA-LICENSE.txt"
+sed -n '/This is free and unencumbered/,/unlicense.org/p' "$chdr"/deps/miniz-*/miniz.c > "$lic/libchdr/miniz-LICENSE.txt"
+sed -n '/^This software is available as a choice/,$p' "$chdr/include/dr_libs/dr_flac.h" > "$lic/libchdr/dr_flac-LICENSE.txt"
+for f in miniz dr_flac; do [ -s "$lic/libchdr/$f-LICENSE.txt" ] || { echo "no licence text found for $f" >&2; exit 1; }; done
+cp "${ZSTD_LICENSE:?set ZSTD_LICENSE to zstd v1.5.7 LICENSE file}" "$lic/libchdr/zstd-LICENSE.txt"
 
 rm -f "$out"
 (cd "$stage" && zip -q -r -9 "$out" "$PACKAGE")

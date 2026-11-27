@@ -19,6 +19,7 @@ env:
   LLVM_MINGW: "20261104"
   LLVM_MINGW_CROSS_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
   LLVM_MINGW_WINDOWS_SHA256: 552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f
+  ZSTD_LICENSE_SHA256: 7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8   # zstd v1.5.7 LICENSE (BSD), for libchdr's bundled decompressor
 
 jobs:
   package:
@@ -60,6 +61,9 @@ jobs:
           curl -sSfL -o windows.zip "$base/llvm-mingw-$LLVM_MINGW-ucrt-x86_64.zip"
           echo "$LLVM_MINGW_CROSS_SHA256  cross.tar.xz" | sha256sum -c
           echo "$LLVM_MINGW_WINDOWS_SHA256  windows.zip" | sha256sum -c
+          curl -sSfL -o zstd-LICENSE https://raw.githubusercontent.com/facebook/zstd/v1.5.7/LICENSE
+          echo "$ZSTD_LICENSE_SHA256  zstd-LICENSE" | sha256sum -c
+          echo "ZSTD_LICENSE=$PWD/zstd-LICENSE" >> "$GITHUB_ENV"
           mkdir cross windows
           tar xJf cross.tar.xz -C cross
           unzip -q windows.zip -d windows

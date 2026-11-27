@@ -122,7 +122,8 @@ fs::path with_suffix(fs::path p, const wchar_t* suffix) {
     return p;
 }
 
-fs::path staging_folder(const Kit& kit) { return with_suffix(kit.top, L".update"); }
+// A name only the launcher makes: it is emptied before each download.
+fs::path staging_folder(const Kit& kit) { return with_suffix(kit.top, L".qilin-update"); }
 
 }  // namespace
 

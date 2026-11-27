@@ -6,6 +6,13 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+### Added
+- **Disc images as `.gdi` or `.chd`**, as well as a Redump `.cue` with its `.bin` tracks. A `.chd` is read with libchdr (BSD licence); its licence and those of what it bundles are in the download's `LICENSES` folder. Each data track is placed by the addresses written in its own sectors, so a `.gdi` whose last track is listed at its pregap's end or its start reads the same.
+- **A plain message before building on a nearly full drive**: a build needs about 2 GB.
+
+### Changed
+- **A faster first build**: the recompiled code is split into 64 files of about equal size, compiled side by side on every core, the biggest first; the launcher compiles them itself (no console windows; the compilers' output goes to `work\build.log`).
+
 ### Changed
 - **The Windows download starts with `Play Toy Commander.exe`**, a window in place of the `.bat` and its console: choose your disc (or drag it onto the window) and it says at once whether it's the right disc, the other game's or another version; a progress bar while the game is built; Play; and Check for updates, which installs a newer release from the Releases page and leaves the old one working if anything fails. The disc is remembered in `%LOCALAPPDATA%\qilin\toycommander`, and compiled files are cached there, so a new download folder or an update recompiles only what changed. Ninja is no longer in the download.
 
