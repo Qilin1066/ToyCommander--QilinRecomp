@@ -1,8 +1,8 @@
 // qilin: Toy Commander static recompiler (work in progress).
 //
-//   qilin disc    <game.cue>                  the disc's bootstrap, tracks and files
-//   qilin extract <game.cue> --out <dir>      the disc's files and its bootstrap (IP.BIN), to a folder
-//   qilin info    <boot file>   (any command taking a boot file also takes the disc's .cue) [--json out.json]
+//   qilin disc    <disc image>                the disc's bootstrap, tracks and files (.cue, .gdi or .chd)
+//   qilin extract <disc image> --out <dir>    the disc's files and its bootstrap (IP.BIN), to a folder
+//   qilin info    <boot file>   (any command taking a boot file also takes the disc image) [--json out.json]
 //                                             SHA-256, supported build, load address
 //   qilin insns   <boot file> [-o out.txt]    every word of the boot file, decoded (a linear
 //                                             sweep: data decodes too, until function discovery)
@@ -73,8 +73,8 @@ int usage() {
     std::print(stderr,
                "qilin " QILIN_VERSION "\n"
                "usage:\n"
-               "  qilin disc    <game.cue>\n"
-               "  qilin extract <game.cue> --out <dir>\n"
+               "  qilin disc    <disc image: .cue, .gdi or .chd>\n"
+               "  qilin extract <disc image> --out <dir>\n"
                "  qilin info    <boot file> [--json out.json]\n"
                "  qilin insns   <boot file> [-o out.txt]\n"
                "  qilin disasm  [--pc addr] [-o out.txt]\n"
@@ -129,11 +129,9 @@ private:
     std::string path_;
 };
 
-// A boot file, or a disc's (a .cue): the file its bootstrap names.
+// A boot file, or a disc's (a .cue, .gdi or .chd): the file its bootstrap names.
 BootFile load_boot(const std::string& path) {
-    std::string ext = native_path(path).extension().string();
-    for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    if (ext == ".cue") {
+    if (gdrom::Disc::is_image(native_path(path))) {
         auto disc = gdrom::Disc::open(native_path(path));
         if (!disc) throw Failure{disc.error()};
         const auto ip = disc->bootstrap();

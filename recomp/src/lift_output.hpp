@@ -31,7 +31,7 @@ namespace qilin {
 struct LiftOptions {
     std::optional<std::pair<uint32_t, uint32_t>> range;  // lift only functions starting in [lo, hi)
     bool orphans = true;                                  // lift unreferenced functions too (every function found is lifted or replaced)
-    unsigned files = 0;  // lifted_NNN.cpp files: 0 for 256 functions each; else exactly this many (for build systems)
+    unsigned files = 0;  // lifted_NNN.cpp files: 0 for 256 functions each; else exactly this many, of about equal size in code (for build systems: they finish compiling together)
     std::span<const ReplacedFunction> replaced;  // functions replaced natively outside the replaced regions
     std::span<const NativeFootprint> natives;     // replaced functions whose natives' registers are known
     std::span<const IdleLoop> idle;               // loops that wait for an interrupt (each must be found)

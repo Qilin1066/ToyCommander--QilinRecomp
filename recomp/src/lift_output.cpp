@@ -91,10 +91,20 @@ LiftSummary write_lifted(const BootFile& boot, const Cfg& cfg, std::span<const R
     }
     const std::map<uint32_t, Footprint> footprints = Lifter::footprints(lifted, natives);
     for (auto& [entry, r] : lifted) Lifter::link(r, footprints);
+    // With a fixed number of files, each gets about as much code (in address
+    // order): files compiled in parallel then finish together, rather than
+    // waiting on one holding the biggest functions.
+    uint64_t code_total = 0, code_before = 0;
+    for (const auto& [entry, r] : lifted) code_total += r.code.size();
     for (const auto& [entry, f] : cfg.functions) {
         std::string* chunk;
         if (options.files) {
-            chunk = &chunks[index * options.files / total];
+            const auto it = lifted.find(entry);
+            const uint64_t size = it == lifted.end() ? 0 : it->second.code.size();
+            const uint64_t middle = code_before + size / 2;
+            code_before += size;
+            chunk = code_total ? &chunks[std::min<uint64_t>(middle * options.files / code_total, options.files - 1)]
+                               : &chunks[index * options.files / total];
         } else {
             if (index % kChunkFunctions == 0) chunks.emplace_back();
             chunk = &chunks.back();

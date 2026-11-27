@@ -1101,10 +1101,22 @@ struct FakeDisc {
         "FILE \"t4.bin\" BINARY\n  TRACK 04 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:00:05\n"
         "FILE \"t5.bin\" BINARY\r\n  TRACK 05 MODE1/2352\r\n    INDEX 00 00:00:00\r\n    INDEX 01 00:00:10\r\n";
 
+    // Where each track file starts on the disc.
+    static constexpr uint32_t kFileStart[5] = {0, 10, 45000, 45020, kTrack5File};
+
     void write_all() const {
         for (size_t i = 0; i < track.size(); ++i) {
+            std::vector<uint8_t> bytes = track[i];
+            // Each raw data sector's header holds its address, as a disc's do.
+            const auto bcd = [](uint32_t v) { return static_cast<uint8_t>((v / 10) << 4 | v % 10); };
+            for (size_t k = 0; (k + 1) * 2352 <= bytes.size(); ++k) {
+                uint8_t* s = bytes.data() + k * 2352;
+                if (s[0] != 0 || s[1] != 0xFF || s[11] != 0) continue;
+                const uint32_t msf = kFileStart[i] + static_cast<uint32_t>(k) + 150;
+                s[12] = bcd(msf / 4500), s[13] = bcd(msf / 75 % 60), s[14] = bcd(msf % 75);
+            }
             std::ofstream f(dir / std::format("t{}.bin", i + 1), std::ios::binary);
-            f.write(reinterpret_cast<const char*>(track[i].data()), static_cast<std::streamsize>(track[i].size()));
+            f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         }
     }
     std::filesystem::path write_cue(std::string_view text, std::string_view name = "disc.cue") const {
@@ -1212,6 +1224,45 @@ void test_gdrom() {
         };
         CHECK(same(45025, 1) && same(45026, 1) && same(45024, 2) && same(10, 12) && same(45025, 2));
         CHECK(!reader.read(45000, 1, got).has_value() && !reader.read(45059, 2, got).has_value() && same(45025, 1));
+    }
+
+    // The same tracks as a .gdi, track 5 listed at its index 1 (45070) as some
+    // tools write it: its sectors' headers place its file at 45060.
+    {
+        std::ofstream(fake.dir / "disc.gdi", std::ios::binary)
+            << "5\n1 0 4 2352 t1.bin 0\n2 10 0 2352 t2.bin 0\n3 45000 4 2352 \"t3.bin\" 0\n4 45020 0 2352 t4.bin 0\n5 45070 4 2352 t5.bin 0\n";
+        const auto g = Disc::open(fake.dir / "disc.gdi");
+        CHECK(g.has_value());
+        if (g) {
+            const std::vector<Track>& gt = g->tracks();
+            CHECK(gt.size() == 5 && gt[2].start == 45000 && gt[4].file_start == FakeDisc::kTrack5File && gt[3].audio && !gt[4].audio);
+            const auto gf = g->files();
+            CHECK(gf.has_value() && gf->size() == 3);
+            if (gf && files && gf->size() == 3 && files->size() == 3) CHECK(g->read_file((*gf)[1]) == disc->read_file((*files)[1]));
+            CHECK(g->read_audio(45025, 2) == disc->read_audio(45025, 2));
+        }
+        const auto bad_gdi = [&](std::string_view text) {
+            std::ofstream(fake.dir / "bad.gdi", std::ios::binary) << text;
+            return !Disc::open(fake.dir / "bad.gdi").has_value();
+        };
+        const std::string good = "5\n1 0 4 2352 t1.bin 0\n2 10 0 2352 t2.bin 0\n3 45000 4 2352 t3.bin 0\n4 45020 0 2352 t4.bin 0\n5 45070 4 2352 t5.bin 0\n";
+        const auto changed = [&](std::string_view from, std::string_view to) {
+            std::string t = good;
+            return t.replace(t.find(from), from.size(), to);
+        };
+        CHECK(!bad_gdi(good));
+        CHECK(bad_gdi(changed("5\n1 0", "4\n1 0")));                    // the count disagrees
+        CHECK(bad_gdi(changed("45000 4 2352", "45000 4 2048")));           // not whole 2048-byte sectors
+        CHECK(bad_gdi(changed("4 45020 0", "4 45010 0")));                 // overlaps track 3
+        CHECK(bad_gdi(changed("45020 0 2352", "45020 3 2352")));           // no such type
+        CHECK(bad_gdi(changed("t4.bin 0", "t4.bin 2352")));                // an offset
+        CHECK(bad_gdi(changed("t4.bin", "missing.bin")));
+        // Not a disc image, and not a CHD: messages, not guesses.
+        std::ofstream(fake.dir / "bad.chd", std::ios::binary) << std::string(4096, 'x');
+        const auto chd = Disc::open(fake.dir / "bad.chd");
+        CHECK(!chd.has_value() && chd.error().contains("not a CHD"));
+        CHECK(!Disc::open(fake.dir / "t3.bin").has_value());
+        CHECK(Disc::is_image("a.GDI") && Disc::is_image("b.chd") && Disc::is_image("c.Cue") && !Disc::is_image("d.iso"));
     }
 
     // A sector of another mode stops the read.

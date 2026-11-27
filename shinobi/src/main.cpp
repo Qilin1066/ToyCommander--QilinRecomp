@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     const qilin::CommandLine command_line(argc, argv);
     argc = command_line.count(); argv = command_line.values();
     if (argc != 2) {
-        std::fprintf(stderr, "usage: " QILIN_APP " <the game's .cue>\n");
+        std::fprintf(stderr, "usage: " QILIN_APP " <the game's disc image: .cue, .gdi or .chd>\n");
         return 2;
     }
     dreamcast::set_command_line(argc, argv);  // for the menu's "Restore and restart"

@@ -84,9 +84,38 @@ add_library(qilin_file_store STATIC host/src/file_store.cpp)
 target_include_directories(qilin_file_store PUBLIC host/include)
 target_link_libraries(qilin_file_store PRIVATE qilin_warnings)
 
+# ---- libchdr (BSD-3-Clause): reading .chd disc images ----
+# v0.3.0, fetched and pinned, built statically with what it bundles: LZMA
+# (public domain), miniz (Unlicense), zstd's decompressor (taken under its BSD
+# licence) and dr_flac (public domain). Its own CMake project is added by hand
+# (SOURCE_SUBDIR points nowhere) so its test programs stay out of the build.
+include(FetchContent)
+FetchContent_Declare(libchdr
+    URL https://github.com/rtissera/libchdr/archive/93d8c239ff0d4e8d7722985992649fce12d2463b.tar.gz
+    URL_HASH SHA256=f38fb1b3e907c8927271a57ad6e3c02347eaa2d5803f910880b4b3c3021b3657
+    SOURCE_SUBDIR no-cmake)
+FetchContent_MakeAvailable(libchdr)
+set(qilin_saved_shared ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+set(WITH_SYSTEM_ZLIB OFF CACHE BOOL "" FORCE)
+set(WITH_SYSTEM_ZSTD OFF CACHE BOOL "" FORCE)
+set(WITH_LZMA_ASM OFF CACHE BOOL "" FORCE)  # plain C: no assembler needed on any target
+add_subdirectory(${libchdr_SOURCE_DIR} ${libchdr_BINARY_DIR} EXCLUDE_FROM_ALL SYSTEM)
+set(BUILD_SHARED_LIBS ${qilin_saved_shared})
+set(QILIN_CHDR_LIBRARIES chdr-static chdr-lzma miniz zstd)
+foreach(library IN LISTS QILIN_CHDR_LIBRARIES)
+    set_target_properties(${library} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if(MSVC)
+        target_compile_options(${library} PRIVATE /W0)  # third-party code: its warnings aren't ours
+    else()
+        target_compile_options(${library} PRIVATE -w)
+    endif()
+endforeach()
+
 # ---- The boot file loader and the GD-ROM reader: runtime code too (no std::format) ----
 add_library(qilin_disc STATIC recomp/src/bootfile.cpp recomp/src/gdrom.cpp recomp/src/sha256.cpp)
 target_include_directories(qilin_disc PUBLIC recomp/src recomp/runtime)
+target_link_libraries(qilin_disc PRIVATE chdr-static)
 if(WIN32)
     target_link_libraries(qilin_disc PUBLIC shell32)
 endif()
@@ -429,7 +458,7 @@ function(qilin_player_kit game)
     if(NOT TARGET SDL3-static)
         message(FATAL_ERROR "the player kit needs SDL3 built statically (QILIN_HOST=ON)")
     endif()
-    set(kit_libraries ${game}_game qilin_file_store qilin_disc dreamcast_menu_${game} qilin_host_${game} qilin_imgui qilin_volk SDL3-static)
+    set(kit_libraries ${game}_game qilin_file_store qilin_disc ${QILIN_CHDR_LIBRARIES} dreamcast_menu_${game} qilin_host_${game} qilin_imgui qilin_volk SDL3-static)
     set(kit_archive "${CMAKE_BINARY_DIR}/kit/${game}/lib${game}_kit.a")
     set(mri "CREATE ${kit_archive}\n")
     foreach(library IN LISTS kit_libraries)
