@@ -19,8 +19,6 @@ env:
   LLVM_MINGW: "20261104"
   LLVM_MINGW_CROSS_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
   LLVM_MINGW_WINDOWS_SHA256: 552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f
-  NINJA: v1.13.2
-  NINJA_SHA256: 07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65
 
 jobs:
   package:
@@ -50,7 +48,7 @@ jobs:
         if: env.BUILD == 'yes'
         with:
           fetch-depth: 0   # the tags, for the version of an untagged build
-      - name: Ninja and zip (Linux)
+      - name: Ninja and zip (Linux, for the cross build)
         if: env.BUILD == 'yes'
         run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build zip
       - name: Get the toolchains (pinned, checked)
@@ -60,18 +58,13 @@ jobs:
           base=https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW
           curl -sSfL -o cross.tar.xz "$base/llvm-mingw-$LLVM_MINGW-ucrt-ubuntu-22.04-x86_64.tar.xz"
           curl -sSfL -o windows.zip "$base/llvm-mingw-$LLVM_MINGW-ucrt-x86_64.zip"
-          curl -sSfL -o ninja-win.zip "https://github.com/ninja-build/ninja/releases/download/$NINJA/ninja-win.zip"
-          curl -sSfL -o COPYING "https://raw.githubusercontent.com/ninja-build/ninja/$NINJA/COPYING"
           echo "$LLVM_MINGW_CROSS_SHA256  cross.tar.xz" | sha256sum -c
           echo "$LLVM_MINGW_WINDOWS_SHA256  windows.zip" | sha256sum -c
-          echo "$NINJA_SHA256  ninja-win.zip" | sha256sum -c
-          mkdir cross windows ninja
+          mkdir cross windows
           tar xJf cross.tar.xz -C cross
           unzip -q windows.zip -d windows
-          unzip -q ninja-win.zip -d ninja && mv COPYING ninja/
           echo "LLVM_MINGW_CROSS=$PWD/cross/llvm-mingw-$LLVM_MINGW-ucrt-ubuntu-22.04-x86_64" >> "$GITHUB_ENV"
           echo "LLVM_MINGW_WINDOWS=$PWD/windows/llvm-mingw-$LLVM_MINGW-ucrt-x86_64" >> "$GITHUB_ENV"
-          echo "NINJA_WINDOWS=$PWD/ninja" >> "$GITHUB_ENV"
       - name: Package
         if: env.BUILD == 'yes'
         env:
@@ -102,5 +95,5 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$zip" --title "$TITLE QilinRecomp $VERSION" \
-              --notes "The Windows download: unpack it and double-click Play $TITLE.bat (see README.txt). You need your own disc, $DISC, dumped as a .cue with its .bin tracks. Changes: $CHANGELOG."
+              --notes "The Windows download: unpack it, double-click Play $TITLE.exe, choose your disc (or drag it onto the window) and wait for the first build (see README.txt). You need your own disc, $DISC, dumped as a .cue with its .bin tracks, a .gdi or a .chd. Changes: $CHANGELOG."
           fi

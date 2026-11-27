@@ -2,12 +2,12 @@
 case "$game" in
 toycommander)
     TITLE="Toy Commander"; PACKAGE="ToyCommander--QilinRecomp"; EXE="ToyCommander.exe"; BOOT="1GUTH.BIN"
-    BUILD_TITLE="Toy Commander (USA)"; RELEASE="the USA release, MK-57020, version 1.022"
+    BUILD_TITLE="Toy Commander (USA)"; RELEASE="the USA release, MK-57020, version 1.022"; PRODUCT="MK-57020"; DISC_VERSION="1.022"
     STUDIO="No Cliché / Sega, Dreamcast, 1999"
     ;;
 toyracer)
     TITLE="Toy Racer"; PACKAGE="ToyRacer--QilinRecomp"; EXE="ToyRacer.exe"; BOOT="1TOYRACE.BIN"
-    BUILD_TITLE="Toy Racer (Europe)"; RELEASE="the European release, MK-5114950, version 1.050"
+    BUILD_TITLE="Toy Racer (Europe)"; RELEASE="the European release, MK-5114950, version 1.050"; PRODUCT="MK-5114950"; DISC_VERSION="1.050"
     STUDIO="No Cliché / Sega, Dreamcast, 2000"
     ;;
 *)

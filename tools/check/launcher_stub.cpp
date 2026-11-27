@@ -1,6 +1,9 @@
-// Child-process fixtures for the real launcher and Ninja. No game data or code.
+// Child-process stand-ins for the launcher's build test (launcher_build_test):
+// the recompiler (`lift`), the compiler (`--version`, `-c`, linking) and the
+// game (one argument: a file that exists). No game data or code.
 #include "command_line.hpp"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -9,8 +12,10 @@
 int main(int argc, char** argv) {
     const qilin::CommandLine command_line(argc, argv);
     argc = command_line.count(); argv = command_line.values();
-    if (argc == 3 && std::strcmp(argv[1], "info") == 0) {
-        std::puts("{\"build\": {\"title\": \"fixture\"}, \"sha256\": \"fixture\"}");
+    if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
+        // The test changes the "compiler" by changing what it says it is.
+        const char* version = std::getenv("QILIN_STUB_COMPILER");
+        std::printf("stub clang version %s\n", version ? version : "1");
         return 0;
     }
     if (argc == 7 && std::strcmp(argv[1], "lift") == 0) {
@@ -18,31 +23,39 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(dir);
         // Match qilin lift: unchanged output keeps its timestamps.
         if (!std::filesystem::exists(dir / "fixture.cpp")) std::ofstream(dir / "fixture.cpp") << "// fixture\n";
+        if (!std::filesystem::exists(dir / "table.cpp")) std::ofstream(dir / "table.cpp") << "// fixture table\n";
+        if (!std::filesystem::exists(dir / "functions.hpp")) std::ofstream(dir / "functions.hpp") << "// fixture\n";
         return 0;
     }
-    // Stand in for the compiler only. Ninja itself is the real executable.
+    // Stand in for the compiler.
     bool compile = false;
-    std::string output, dependency, revision;
+    std::string output;
     std::vector<std::string> objects;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-c") compile = true;
         if (arg == "-o" && i + 1 < argc) output = argv[++i];
-        else if (arg == "-MF" && i + 1 < argc) dependency = argv[++i];
-        else if (arg.starts_with("-DQILIN_KIT_COMPILE_ID=")) revision = arg;
         else if (arg.ends_with(".o")) objects.push_back(arg);
     }
     if (!output.empty()) {
-        std::ofstream log("tool-calls.txt", std::ios::app);
-        log << (compile ? "compile" : "link") << '\n';
+        {
+            // Compiles run side by side: an append by the system is atomic
+            // (the C runtime's seeks to the end, then writes, and can lose lines).
+            const HANDLE log = CreateFileW(L"tool-calls.txt", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                                           FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (log == INVALID_HANDLE_VALUE) return 6;
+            const char* line = compile ? "compile\n" : "link\n";
+            DWORD written = 0;
+            const BOOL ok = WriteFile(log, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+            CloseHandle(log);
+            if (!ok) return 6;
+        }
         const auto target = qilin::native_path(output);
         if (compile) {
             std::filesystem::create_directories(target.parent_path());
             std::ofstream object(target, std::ios::binary);
-            object << revision << '\n';
             std::ifstream header("../kit/include/stub.hpp", std::ios::binary);
             object << header.rdbuf();
-            if (!dependency.empty()) std::ofstream(qilin::native_path(dependency)) << output << ": gen/fixture.cpp ../kit/include/stub.hpp\n";
             return object ? 0 : 3;
         }
         std::filesystem::copy_file(qilin::native_path(argv[0]), target, std::filesystem::copy_options::overwrite_existing);

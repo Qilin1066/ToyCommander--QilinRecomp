@@ -6,6 +6,9 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+### Changed
+- **The Windows download starts with `Play Toy Commander.exe`**, a window in place of the `.bat` and its console: choose your disc (or drag it onto the window) and it says at once whether it's the right disc, the other game's or another version; a progress bar while the game is built; Play; and Check for updates, which installs a newer release from the Releases page and leaves the old one working if anything fails. The disc is remembered in `%LOCALAPPDATA%\qilin\toycommander`, and compiled files are cached there, so a new download folder or an update recompiles only what changed. Ninja is no longer in the download.
+
 ## [0.13.0] - 2026-11-27
 
 ### Added
