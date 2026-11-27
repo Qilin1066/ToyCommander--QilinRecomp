@@ -3,17 +3,17 @@
 #   tools/player-kit/package.sh <toycommander|toyracer> <version> <out.zip>
 #
 # Cross-compiles on Linux with llvm-mingw, then lays out:
-#   <Package>/Play <Title>.bat, README.txt, LICENSES/
+#   <Package>/Play <Title>.exe, README.txt, LICENSES/
 #   <Package>/kit/  qilin.exe, lib/lib<game>_kit.a, include/, kit.ninja,
-#                   play.ps1, game.txt, ninja.exe, toolchain/ (llvm-mingw, trimmed), VERSION
+#                   game.txt, toolchain/ (llvm-mingw, trimmed), VERSION
 # Nothing in it is made from the game: the player's PC lifts the boot file
 # from their own disc dump and compiles that code with the bundled compiler
-# (play.ps1).
+# (Play <Title>.exe, the launcher: tools/player-kit/launcher, the same
+# program for both games, which reads kit/game.txt).
 #
 # Environment:
 #   LLVM_MINGW_CROSS    the Linux-hosted llvm-mingw release, unpacked
 #   LLVM_MINGW_WINDOWS  the x86_64 Windows-hosted release of the same version, unpacked
-#   NINJA_WINDOWS       a folder with ninja.exe (Windows) and Ninja's COPYING
 #   BUILD_DIR           where to build (default build-player-kit)
 #   CMAKE_EXTRA         more cmake arguments (e.g. -DFETCHCONTENT_SOURCE_DIR_IMGUI=...)
 set -eu
@@ -30,25 +30,27 @@ pkg="$stage/$PACKAGE"
 # shellcheck disable=SC2086
 cmake -S "$root" -B "$build" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$here/mingw-cross.cmake" \
       -DCMAKE_BUILD_TYPE=Release -DQILIN_PLAYER_KIT=ON -DQILIN_RUN_CHECKED=OFF -DQILIN_WERROR=ON ${CMAKE_EXTRA:-}
-cmake --build "$build" --target qilin "${game}_kit" "${game}_kit_link_check" --parallel
+cmake --build "$build" --target qilin qilin_launcher "${game}_kit" "${game}_kit_link_check" --parallel
 cmake --install "$build" --component "$game" --prefix "$pkg"
 
 "$here/trim-toolchain.sh" "$LLVM_MINGW_WINDOWS" "$pkg/kit/toolchain"
-cp "$NINJA_WINDOWS/ninja.exe" "$pkg/kit/"
-cp "$here/play.ps1" "$pkg/kit/"
-# What play.ps1 needs to know about the game, one name=value a line.
-printf 'title=%s\r\nexe=%s\r\nboot=%s\r\nbuild=%s\r\nrelease=%s\r\n' "$TITLE" "$EXE" "$BOOT" "$BUILD_TITLE" "$RELEASE" > "$pkg/kit/game.txt"
-fill "$here/play.bat.in" | sed 's/$/\r/' > "$pkg/Play $TITLE.bat"
+cp "$build/qilin_launcher.exe" "$pkg/Play $TITLE.exe"
+# What the launcher needs to know about the game, one name=value a line:
+# its data folder's and tags' name, its titles, the disc it builds from
+# (`build` is recomp/src/bootfile.cpp's known build's title), the release's
+# zip name and where releases are published.
+printf 'game=%s\r\ntitle=%s\r\nexe=%s\r\nboot=%s\r\nbuild=%s\r\nproduct=%s\r\ndisc_version=%s\r\nrelease=%s\r\npackage=%s\r\nrepo=%s\r\n' \
+    "$game" "$TITLE" "$EXE" "$BOOT" "$BUILD_TITLE" "$PRODUCT" "$DISC_VERSION" "$RELEASE" "$PACKAGE" "Qilin1066/ToyCommander--QilinRecomp" \
+    > "$pkg/kit/game.txt"
 fill "$here/README.txt.in" | sed 's/$/\r/' > "$pkg/README.txt"
 printf '%s\n' "$version" > "$pkg/kit/VERSION"
 
 # Every licence of what's included, by component.
 lic="$pkg/LICENSES"
-mkdir -p "$lic/$PACKAGE" "$lic/llvm-mingw" "$lic/ninja" "$lic/SDL3" "$lic/Dear ImGui" "$lic/Vulkan-Headers" "$lic/volk"
+mkdir -p "$lic/$PACKAGE" "$lic/llvm-mingw" "$lic/SDL3" "$lic/Dear ImGui" "$lic/Vulkan-Headers" "$lic/volk"
 mv "$pkg/kit/toolchain/licenses/"* "$lic/llvm-mingw/"
 rmdir "$pkg/kit/toolchain/licenses"
 sed 's/$/\r/' "$root/LICENSE" > "$lic/$PACKAGE/LICENSE.txt"  # GPL-3.0
-cp "$NINJA_WINDOWS/COPYING" "$lic/ninja/"
 cp "$build/_deps/sdl3-src/LICENSE.txt" "$lic/SDL3/"
 imgui=$(sed -n 's/^FETCHCONTENT_SOURCE_DIR_IMGUI:PATH=//p' "$build/CMakeCache.txt")
 [ -n "$imgui" ] || imgui="$build/_deps/imgui-src"

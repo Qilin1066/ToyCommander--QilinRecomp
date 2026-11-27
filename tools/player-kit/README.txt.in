@@ -5,23 +5,27 @@
 translated into C++ and compiled for your PC, drawn with Vulkan.
 
 No game data is included. You need your own copy of the game: @RELEASE@,
-dumped as a .cue file with its .bin tracks (a Redump-style dump of the
-GD-ROM, music tracks included).
+dumped from the GD-ROM as a .cue file with its .bin tracks (a Redump-style
+dump, music tracks included), a .gdi with its tracks, or a .chd.
 
 
 Playing
 -------
-1. Unpack this folder anywhere (it needs about 2 GB once built).
-2. Double-click "Play @TITLE@.bat".
-   - The first time, it asks for your disc dump's .cue file, then builds the
-     game from it: a few minutes (up to 15 on a slower PC). Your game files
-     never leave your PC.
-   - After that, it starts the game straight away. @EXE@ in this folder can
-     be started directly too, with the .cue as its argument.
-   - To use a different dump: Play @TITLE@.bat -ChooseDisc
-   - To force a clean build: Play @TITLE@.bat -Rebuild
-3. Game output is in run.log and run-errors.log beside the executable.
-   Send both files when reporting a problem.
+1. Unpack this folder anywhere. Building the game needs about 2 GB free.
+2. Double-click "Play @TITLE@.exe".
+3. Click "Choose your disc" and pick your disc's .cue, .gdi or .chd file,
+   or drag the file onto the window. It tells you straight away if the disc
+   is the wrong game or another version.
+4. Wait for the first build: a few minutes (up to 15 on a slower PC). Your
+   game files never leave your PC.
+5. Click Play. The window hides while the game runs.
+
+After that, Play @TITLE@.exe remembers your disc (even in a new download
+folder), and Play starts the game straight away. After an update it builds
+the game again first, recompiling only what changed.
+
+The game's output is in run.log and run-errors.log in this folder, and the
+build's in work\build.log. Send them when reporting a problem.
 
 If Windows says "Windows protected your PC": More info, then Run anyway.
 (The download isn't signed.) Or before unpacking, right-click the zip,
@@ -48,17 +52,17 @@ controls (set by pressing them), the window, the picture, the refresh
 rate, enhancements and the Dreamcast's own settings (language, sound).
 Alt+Enter or F11: full screen. A controller that rumbles plays the Jump Pack.
 
-Settings and memory-card saves are kept in %LOCALAPPDATA%\qilin\@GAME@.
+Settings and memory-card saves are kept in %LOCALAPPDATA%\qilin\@GAME@, with
+the disc you chose and the build's cache of compiled files (build-cache).
 
 
 What's in here
 --------------
-Play @TITLE@.bat    builds (once) and starts the game
+Play @TITLE@.exe    chooses your disc, builds the game (once) and starts it
 kit\qilin.exe       the recompiler: turns the disc's @BOOT@ into C++
 kit\lib, include    the prebuilt rest of the game: its runtime, the renderer,
                     sound, the window and controls (SDL3), the menu (Dear ImGui)
 kit\toolchain       LLVM-MinGW, a C++ compiler for Windows (Clang)
-kit\ninja.exe       Ninja, which drives the compiler
 work\               made when building: the recompiled code (from your disc)
 LICENSES\           the licences of everything included
 
@@ -66,11 +70,18 @@ Source, changes and issues: https://github.com/Qilin1066/ToyCommander--QilinReco
 
 Updates and recovery
 --------------------
-Close the game before updating. A changed runtime is relinked even if its
-files have older timestamps. Changed headers, compiler or CPU recompile the
-lifted code; unchanged launches reuse the installed executable. Updates keep
-the previous executable as @EXE@.previous. A failed installation keeps the
-working executable and build stamp.
+"Check for updates" in Play @TITLE@.exe asks GitHub for a newer release of
+@TITLE@ (it sends nothing about you or your PC). If there is one, it
+downloads it, unpacks it beside this folder and swaps in the new kit and
+launcher, then starts again and builds the game for the new version. If
+anything fails on the way, the old version is left as it was. You can also
+unpack a new download anywhere: it finds your disc and the cache by itself.
+
+The game is compiled for this PC's processor; moved to another PC, it is
+built again. Compiled files come from the cache when nothing they're made
+from has changed. The previous executable is kept as @EXE@.previous, and a
+failed build leaves the working executable as it was. "Build again from
+scratch" compiles everything anew.
 
 Before a save burst, the memory card is copied into its five-entry history;
 flash updates keep their own history too. Use the settings menu's Game page
