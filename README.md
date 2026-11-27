@@ -30,9 +30,14 @@ Latest reliability checks: [the validation notes](docs/validation-0.12-0.5.md).
 
 ## Playing
 
-### Windows download
+**On Windows, no tools needed:**
 
-`.github/workflows/player-kit.yml` builds a download for each game, `ToyCommander--QilinRecomp-X.Y.Z-windows-x64.zip` and `ToyRacer--QilinRecomp-X.Y.Z-windows-x64.zip`, on every push to `main` (an artifact of the run; attached to a release when one is tagged), with nothing from the game in it. Unpack it, double-click `Play Toy Commander.bat` (or `Play Toy Racer.bat`) and choose your dump's `.cue`: the bundled recompiler and compiler (LLVM-MinGW) build the game from it once, in a few minutes. `-ChooseDisc` picks another dump, `-Rebuild` forces a clean build. It needs 64-bit Windows 10 or 11 and a Vulkan 1.3 driver. The zip's `README.txt` has the controls.
+1. Go to [**Releases**](https://github.com/Qilin1066/ToyCommander--QilinRecomp/releases) and download the newest `ToyCommander--QilinRecomp-…-windows-x64.zip` (or `ToyRacer--QilinRecomp-…`). Ignore the "Source code" files.
+2. Unzip it anywhere (right-click, **Extract All**).
+3. Double-click **`Play Toy Commander.bat`** (or **`Play Toy Racer.bat`**). If Windows says "Windows protected your PC", click **More info**, then **Run anyway**.
+4. The first time, pick your disc dump's `.cue` file. It builds the game from your disc once, which takes a few minutes; after that it starts straight away.
+
+You need 64-bit Windows 10 or 11, a graphics driver with Vulkan 1.3 (any recent NVIDIA, AMD or Intel one), and your own disc dumped as a `.cue` with its `.bin` tracks. The zip's `README.txt` has the controls; **F1** or **Esc** opens the settings menu. Nothing from the game is in the download, and your game files never leave your PC.
 
 ### From the source
 

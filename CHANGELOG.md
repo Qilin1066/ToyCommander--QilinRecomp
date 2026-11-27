@@ -6,6 +6,11 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-27
+
+### Added
+- **A ready-made Windows download on the Releases page**: the first version published there as a GitHub Release, so playing needs no build tools or GitHub account.
+
 ### Changed
 - **The game no longer keeps a CPU core busy while it waits**: the game's thread used a whole core spinning in the graphics library's waits for the GPU; it now sleeps until the interrupt it waits for. About three quarters less CPU in a mission, the same frame rate and pictures.
 - **Fewer GPU commands a frame**: each draw sets only the state that differs from the draw before it. The same pictures. Not timed yet.
