@@ -6,6 +6,8 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-27
+
 ### Added
 - **Disc images as `.gdi` or `.chd`**, as well as a Redump `.cue` with its `.bin` tracks. A `.chd` is read with libchdr (BSD licence); its licence and those of what it bundles are in the download's `LICENSES` folder. Each data track is placed by the addresses written in its own sectors, so a `.gdi` whose last track is listed at its pregap's end or its start reads the same.
 - **A plain message before building on a nearly full drive**: a build needs about 2 GB.

@@ -99,5 +99,5 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$zip" --title "$TITLE QilinRecomp $VERSION" \
-              --notes "The Windows download: unpack it, double-click Play $TITLE.exe, choose your disc (or drag it onto the window) and wait for the first build (see README.txt). You need your own disc, $DISC, dumped as a .cue with its .bin tracks, a .gdi or a .chd. Changes: $CHANGELOG."
+              --notes "To play: download $zip below, unzip it, open the folder and double-click Play $TITLE.exe. Choose your disc (or drag it onto the window); the first start builds the game from it in a few minutes. You need your own disc, $DISC, as a .cue with its .bin tracks, a .gdi or a .chd. Changes: $CHANGELOG."
           fi
