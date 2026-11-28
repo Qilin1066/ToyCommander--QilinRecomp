@@ -1,10 +1,10 @@
-// Building the game from the player's disc: `qilin lift` writes the lifted
-// C++ (64 files of about equal size) to work\gen, the bundled clang++
-// compiles each file (a pool of worker threads, the largest files first;
-// objects come from the per-user cache when their inputs are unchanged), and
-// the objects are linked with the kit's prebuilt library into the game's .exe,
-// staged and swapped in as work\<Game>.exe. Every tool's output goes to
-// work\build.log.
+// Building the game from the player's data: game.txt's steps run in order
+// (by default `qilin lift`, which writes the lifted C++ to work/gen), the
+// kit's compiler compiles every .cpp under work/gen (a pool of worker
+// threads, the largest files first; objects come from the per-user cache
+// when their inputs are unchanged), and the objects are linked with the
+// kit's prebuilt library into the game's program, staged and swapped in as
+// work/<exe>. Every tool's output goes to work/build.log.
 #pragma once
 
 #include <atomic>
@@ -19,24 +19,23 @@
 #include <vector>
 
 #include "kit.hpp"
+#include "process.hpp"
 
 namespace qilin::launcher {
 
-struct Command;
-
-enum class Stage { CheckingDisc, Recompiling, Compiling, Linking, Done };
+enum class Stage { Checking, Recompiling, Compiling, Linking, Done };
 
 struct BuildProgress {
-    std::atomic<Stage> stage{Stage::CheckingDisc};
-    std::atomic<int> done{0};   // files compiled (or taken from the cache)
-    std::atomic<int> total{0};  // files to compile
+    std::atomic<Stage> stage{Stage::Checking};
+    std::atomic<int> done{0};   // files compiled (or taken from the cache); while Recompiling, steps done
+    std::atomic<int> total{0};  // files to compile; while Recompiling, steps
     std::atomic<int> cached{0};
 };
 
 struct BuildOptions {
-    bool check_disc = true;                       // the tests' discs are stand-ins
-    std::uintmax_t need_bytes = 2ull << 30;       // free space a build needs on the folder's drive
-    std::uintmax_t cache_bytes = 2ull << 30;      // the cache is trimmed to its newest this much
+    bool check_input = true;                      // run game.txt's identify first
+    std::optional<std::uintmax_t> need_bytes;     // free space a build needs (default: game.txt's build_space_mb)
+    std::optional<std::uintmax_t> cache_bytes;    // the cache is trimmed to its newest this much (default: cache_mb)
     std::string native = "-march=native";         // the game is compiled for this PC's CPU
     unsigned jobs = 0;                            // 0: one per core
     bool use_cache = true;                        // false: compile everything again (and refill the cache)
@@ -53,8 +52,12 @@ bool up_to_date(const Kit& kit, const std::string& identity);
 
 // Builds; the error is a plain message for the player (pointing to
 // build.log where there's more). `cancel` stops it between steps.
-std::expected<void, std::string> build_game(const Kit& kit, const std::filesystem::path& disc, BuildProgress& progress,
+std::expected<void, std::string> build_game(const Kit& kit, const std::filesystem::path& input, BuildProgress& progress,
                                             const std::atomic<bool>& cancel, const BuildOptions& options = {});
+
+// The game, started with game.txt's run_args (by default the input's path)
+// from the download's folder, its output to work/run.log and run-errors.log.
+std::expected<Command, std::string> game_command(const Kit& kit, const std::filesystem::path& input);
 
 // "1.4 GB"
 std::string show_bytes(std::uintmax_t bytes);
@@ -73,7 +76,8 @@ private:
     std::ofstream file_;
 };
 
-// Compiling the lifted C++ (every .cpp in `gen`) with a pool of workers and
+// Compiling the lifted C++ (every .cpp under `gen`, in subfolders too, each
+// object at the same relative path under `obj`) with a pool of workers and
 // the object cache: the game's build for this computer, and the iPad's
 // (ios_install.cpp) with another compiler, flags and cache.
 struct CompileJob {
@@ -92,7 +96,8 @@ struct CompileJob {
     std::filesystem::path include;           // the kit's headers, which every object depends on
     bool use_cache = true;
     unsigned jobs = 0;                       // 0: one per core (no more than memory allows)
-    std::string see_log;                     // added to a failure's message
+    std::uint64_t memory_mb = 1200;          // one compiler's peak (game.txt's compile_memory_mb)
+    std::string see_log;                    // added to a failure's message
 };
 
 // The objects (relative to `cwd`, sorted), or a plain message. progress.total

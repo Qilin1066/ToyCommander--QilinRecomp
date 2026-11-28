@@ -138,6 +138,7 @@ target_link_libraries(qilin_disc PRIVATE qilin_warnings)
 # ---- Recompiler core ----
 add_library(qilin_core STATIC
     recomp/src/bootfile_json.cpp
+    recomp/src/identify.cpp
     recomp/src/decoder.cpp
     recomp/src/cfg.cpp
     recomp/src/cfg_report.cpp
@@ -163,58 +164,15 @@ target_link_libraries(qilin_tests PRIVATE qilin_core qilin_warnings)
 qilin_tool(qilin_tests)
 add_test(NAME qilin_tests COMMAND qilin_tests)
 
-# The Windows download's launcher (tools/player-kit/launcher): its portable
-# parts (the JSON reader, versions and the releases list, the kit's text
-# files, and what "Play on iPad" reads from Apple's tools: ios_text.hpp) are
-# tested everywhere; the rest is built further down, on Windows.
-add_executable(qilin_launcher_test tools/player-kit/launcher/launcher_test.cpp)
-target_link_libraries(qilin_launcher_test PRIVATE qilin_warnings)
-qilin_tool(qilin_launcher_test)
-foreach(part IN ITEMS json version kit ios)
-    add_test(NAME qilin_launcher_${part}_test COMMAND qilin_launcher_test ${part})
-endforeach()
-
-# The launcher's build engine, process handling, disc check and updates, on
-# every desktop system: what the system provides is platform_win.cpp,
-# process_win.cpp and shortcut_win.cpp on Windows, the _posix.cpp ones on
-# Linux and macOS. The build test runs the real build with stand-in children
-# (launcher_stub.cpp), on every system it is built for (not a cross-compile).
+# The downloads' launcher (tools/player-kit/launcher, the same files in every
+# project: ADOPTING.md there): its core and tests here, its program further
+# down (qilin_launcher_program, where SDL3 and Dear ImGui are known). Its
+# build test runs the real build with stand-in children, and qilin's identify.
 if(QILIN_REQUIRE_LAUNCHER_TESTS AND CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR "the launcher's build test needs a native build")
 endif()
-set(QILIN_LAUNCHER_DIR tools/player-kit/launcher)
-if(WIN32)
-    set(qilin_launcher_system win)
-else()
-    set(qilin_launcher_system posix)
-endif()
-add_library(qilin_launcher_core STATIC ${QILIN_LAUNCHER_DIR}/kit.cpp ${QILIN_LAUNCHER_DIR}/disc.cpp ${QILIN_LAUNCHER_DIR}/build.cpp
-                                       ${QILIN_LAUNCHER_DIR}/update.cpp ${QILIN_LAUNCHER_DIR}/tidy.cpp
-                                       ${QILIN_LAUNCHER_DIR}/platform_${qilin_launcher_system}.cpp
-                                       ${QILIN_LAUNCHER_DIR}/process_${qilin_launcher_system}.cpp
-                                       ${QILIN_LAUNCHER_DIR}/shortcut_${qilin_launcher_system}.cpp)
-target_include_directories(qilin_launcher_core PUBLIC ${QILIN_LAUNCHER_DIR})
-target_link_libraries(qilin_launcher_core PUBLIC qilin_disc PRIVATE qilin_warnings)
-if(WIN32)
-    target_link_libraries(qilin_launcher_core PUBLIC winhttp ole32 uuid shell32)
-endif()
-qilin_tool(qilin_launcher_core)
-if(NOT CMAKE_CROSSCOMPILING)
-    add_executable(qilin_launcher_stub tools/check/launcher_stub.cpp)
-    target_include_directories(qilin_launcher_stub PRIVATE recomp/runtime)
-    target_link_libraries(qilin_launcher_stub PRIVATE qilin_warnings)
-    add_executable(qilin_launcher_build_test ${QILIN_LAUNCHER_DIR}/launcher_build_test.cpp)
-    target_link_libraries(qilin_launcher_build_test PRIVATE qilin_launcher_core qilin_warnings)
-    if(WIN32)
-        target_link_libraries(qilin_launcher_stub PRIVATE shell32)
-        target_link_libraries(qilin_launcher_build_test PRIVATE shell32)
-    endif()
-    qilin_tool(qilin_launcher_stub)
-    qilin_tool(qilin_launcher_build_test)
-    add_test(NAME qilin_launcher_build_test COMMAND qilin_launcher_build_test "$<TARGET_FILE:qilin_launcher_stub>" "$<TARGET_FILE:qilin>"
-                                                    "${CMAKE_CURRENT_BINARY_DIR}/launcher-check/$<CONFIG>")
-    set_tests_properties(qilin_launcher_build_test PROPERTIES TIMEOUT 120)
-endif()
+set(QILIN_LAUNCHER_QILIN qilin)
+include(tools/player-kit/launcher/launcher.cmake)
 
 add_executable(qilin_file_store_test host/tests/file_store_test.cpp)
 target_include_directories(qilin_file_store_test PRIVATE recomp/runtime)
@@ -431,30 +389,13 @@ if(QILIN_HOST)
     set_tests_properties(qilin_audio_callback_test PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy;SDL_AUDIO_DEVICE_SAMPLE_FRAMES=128" TIMEOUT 25)
 
     # The downloads' launcher, `Play <Title>` (Windows: .exe; macOS: the app's
-    # program): one program for both games, which reads kit/game.txt. Dear
-    # ImGui over SDL_Renderer (its Vulkan or software driver).
-    add_library(qilin_imgui_sdlrenderer STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
-    target_link_libraries(qilin_imgui_sdlrenderer PUBLIC qilin_imgui)
-    if(MSVC)
-        target_compile_options(qilin_imgui_sdlrenderer PRIVATE /W0)
-    else()
-        target_compile_options(qilin_imgui_sdlrenderer PRIVATE -w)
-    endif()
-    add_executable(qilin_launcher WIN32 tools/player-kit/launcher/main.cpp tools/player-kit/launcher/vulkan_check.cpp)
-    target_link_libraries(qilin_launcher PRIVATE qilin_launcher_core qilin_imgui_sdlrenderer qilin_imgui qilin_volk SDL3::SDL3-static Threads::Threads
-                                                 qilin_warnings)
-    qilin_tool(qilin_launcher)
+    # program): one program for both games, which reads kit/game.txt
+    # (tools/player-kit/launcher/launcher.cmake).
+    qilin_launcher_program(IMGUI_DIR ${imgui_SOURCE_DIR} LIBRARIES qilin_imgui qilin_volk SDL3::SDL3-static Threads::Threads)
     if(WIN32)
-        # Its icon, file details and manifest (launcher.rc), and the same icon
-        # for the game, which the player's PC links (the player kit's icon.o).
-        # Off only where there's no resource compiler (zig as the compiler).
-        option(QILIN_WINDOWS_RESOURCES "Compile the launcher's and the game's icon and file details (needs windres or rc)" ON)
+        # The launcher's icon for the game too, which the player's PC links
+        # (the player kit's icon.o; QILIN_WINDOWS_RESOURCES is launcher.cmake's).
         if(QILIN_WINDOWS_RESOURCES)
-            enable_language(RC)
-            target_sources(qilin_launcher PRIVATE tools/player-kit/launcher/launcher.rc)
-            if(MSVC)
-                target_link_options(qilin_launcher PRIVATE /MANIFEST:NO)  # the manifest is launcher.rc's
-            endif()
             add_library(qilin_game_icon OBJECT tools/player-kit/game_icon.rc)
         elseif(QILIN_PLAYER_KIT)
             message(FATAL_ERROR "the player kit needs QILIN_WINDOWS_RESOURCES=ON (the game's icon)")

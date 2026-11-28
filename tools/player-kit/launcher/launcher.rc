@@ -19,7 +19,7 @@ BEGIN
         BLOCK "080904b0"
         BEGIN
             VALUE "CompanyName", "QilinRecomp"
-            VALUE "FileDescription", "QilinRecomp launcher: builds the game from your disc and starts it"
+            VALUE "FileDescription", "QilinRecomp launcher: builds the game from your own copy and starts it"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "qilin_launcher"
             VALUE "LegalCopyright", "GPL-3.0-or-later. No game data is included."

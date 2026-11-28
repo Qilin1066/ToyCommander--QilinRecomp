@@ -37,7 +37,7 @@ std::string entry_text(const Kit& kit) {
     text += "Type=Application\n";
     text += "Version=1.0\n";
     text += "Name=" + kit.title + "\n";
-    text += "Comment=Play " + kit.title + " (QilinRecomp), built from your own disc\n";
+    text += "Comment=Play " + kit.title + " (QilinRecomp), built from your own " + kit.input_noun + "\n";
     text += "Exec=" + exec_quoted(show(kit.launcher)) + "\n";
     text += "Path=" + show(kit.top) + "\n";
     text += "Icon=" + show(kit.kit / "icon.png") + "\n";

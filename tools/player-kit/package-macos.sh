@@ -111,11 +111,9 @@ cat > "$contents/Info.plist" <<EOF
 EOF
 plutil -lint "$contents/Info.plist"
 
-# What the launcher needs to know about the game, one name=value a line (as
-# package.sh), and the compiler: Apple's, from the Command Line Tools.
-printf 'game=%s\ntitle=%s\nexe=%s\nboot=%s\nbuild=%s\nproduct=%s\ndisc_version=%s\nrelease=%s\npackage=%s\nrepo=%s\ncompiler=%s\n' \
-    "$game" "$TITLE" "$EXE" "$BOOT" "$BUILD_TITLE" "$PRODUCT" "$DISC_VERSION" "$RELEASE" "$PACKAGE" "Qilin1066/ToyCommander--QilinRecomp" \
-    "/usr/bin/clang++" > "$kit/game.txt"
+# What the launcher needs to know about the game (games.sh), and the
+# compiler: Apple's, from the Command Line Tools.
+write_game_txt "$kit/game.txt" "$EXE" "/usr/bin/clang++"
 fill "$here/README-macos.txt.in" > "$image/README.txt"
 printf '%s\n' "$version" > "$kit/VERSION"
 

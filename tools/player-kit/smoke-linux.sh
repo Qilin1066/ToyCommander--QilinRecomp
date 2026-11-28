@@ -106,6 +106,12 @@ set +e
 code=$?
 set -e
 [ "$code" -eq 3 ] && grep -q '"sha256"' standin.json || { cat qilin.log; fail "qilin info said $code"; }
+# The launcher's identify contract: JSON on standard output, exit 3 (not the supported build).
+set +e
+"$kit/qilin" identify standin.bin --json > identify.json 2> identify.log
+code=$?
+set -e
+[ "$code" -eq 3 ] && grep -q '"ok": false' identify.json || { cat identify.json identify.log; fail "qilin identify said $code"; }
 echo "recompiler: ok"
 
 # Nothing newer than the oldest glibc, and only the system's own libraries.

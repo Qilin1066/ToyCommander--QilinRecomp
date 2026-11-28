@@ -34,10 +34,11 @@ std::expected<void, std::string> move(const fs::path& from, const fs::path& to) 
 }  // namespace
 
 std::expected<UpdateCheck, std::string> check_for_update(const Kit& kit) {
+    if (kit.repo.empty()) return std::unexpected(std::string("This download doesn't say where its updates are published (game.txt has no repo)."));
     const auto body = fetch_text("https://api.github.com/repos/" + kit.repo + "/releases?per_page=100",
                                  {"Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"});
     if (!body) return std::unexpected("Couldn't ask GitHub for updates: " + body.error() + ".");
-    const auto newest = newest_release(*body, kit.game, kit.package, release_asset_suffix());
+    const auto newest = newest_release(*body, kit.release_tag_prefix, kit.release_asset_prefix, release_asset_suffix());
     if (!newest) return std::unexpected("GitHub's list of releases can't be read (" + newest.error() + ").");
     UpdateCheck out;
     if (!*newest) {

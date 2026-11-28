@@ -73,14 +73,9 @@ for d in "$z"/lib/libc/include/*; do
     esac
 done
 
-# What the launcher needs to know about the game, one name=value a line:
-# its data folder's and tags' name, its titles, the disc it builds from
-# (`build` is recomp/src/bootfile.cpp's known build's title), the release's
-# folder name, where releases are published, and the compiler (zig, run as
-# `zig c++`).
-printf 'game=%s\ntitle=%s\nexe=%s\nboot=%s\nbuild=%s\nproduct=%s\ndisc_version=%s\nrelease=%s\npackage=%s\nrepo=%s\ncompiler=%s\ncompiler_args=%s\n' \
-    "$game" "$TITLE" "$exe" "$BOOT" "$BUILD_TITLE" "$PRODUCT" "$DISC_VERSION" "$RELEASE" "$PACKAGE" "Qilin1066/ToyCommander--QilinRecomp" \
-    "toolchain/zig/zig" "c++" > "$pkg/kit/game.txt"
+# What the launcher needs to know about the game (games.sh), and the
+# compiler: the bundled zig, run as `zig c++`.
+write_game_txt "$pkg/kit/game.txt" "$exe" "toolchain/zig/zig" "c++"
 fill "$here/README-linux.txt.in" | sed "s|@EXE_LINUX@|$exe|g" > "$pkg/README.txt"
 printf '%s\n' "$version" > "$pkg/kit/VERSION"
 python3 "$here/launcher/make_icon.py" --png "$pkg/kit/icon.png"   # the menu entry's
