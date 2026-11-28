@@ -128,6 +128,24 @@ code=$?
 set -e
 cat "$scratch/run.txt"
 echo "check-ios-kit: simctl launch ended with $code"
+if ! grep -q '^QILIN_IOS_SELFTEST: passed' "$scratch/run.txt"; then
+    # A crash: the Simulator's report is the Mac's (DiagnosticReports).
+    sleep 5
+    for f in $(ls -t "$HOME"/Library/Logs/DiagnosticReports/"$EXE"*.ips "$HOME"/Library/Logs/DiagnosticReports/*/"$EXE"*.ips 2>/dev/null | head -1); do
+        echo "check-ios-kit: crash report $f"
+        python3 - "$f" <<'PY' || head -c 20000 "$f"
+import json, sys
+text = open(sys.argv[1]).read()
+body = json.loads(text[text.index("\n") + 1:])
+print("exception:", json.dumps(body.get("exception")), "termination:", json.dumps(body.get("termination")))
+images = body.get("usedImages", [])
+thread = body["threads"][body.get("faultingThread", 0)]
+for frame in thread["frames"][:40]:
+    image = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex", -1) < len(images) else "?"
+    print(f'  {image}: {frame.get("symbol", "?")} +{frame.get("symbolLocation", frame.get("imageOffset"))}')
+PY
+    done
+fi
 grep -q '^QILIN_IOS_SELFTEST: no disc: No disc image here yet' "$scratch/run.txt" || fail "the self test didn't reach the no-disc message"
 grep -q '^QILIN_IOS_SELFTEST: drawing with ' "$scratch/run.txt" || fail "the self test didn't make a Vulkan device (MoltenVK)"
 grep -q '^QILIN_IOS_SELFTEST: passed' "$scratch/run.txt" || fail "the self test didn't finish"

@@ -139,7 +139,11 @@ int self_test_display() {
     std::fprintf(stderr, "QILIN_IOS_SELFTEST: drawing with %s\n", display.device_name().c_str());
     static const uint8_t grey[4] = {48, 48, 48, 255};
     for (int frame = 0; frame < 60; ++frame) {
-        if (!display.poll()) break;
+        if (!display.poll()) {
+            std::fprintf(stderr, "QILIN_IOS_SELFTEST: the window was closed at frame %d\n", frame);
+            break;
+        }
+        if (frame < 3 || frame % 20 == 0) std::fprintf(stderr, "QILIN_IOS_SELFTEST: frame %d\n", frame);
         display.present(1, 1, grey, 4.0f / 3.0f, 0);
     }
     std::fprintf(stderr, "QILIN_IOS_SELFTEST: passed\n");
