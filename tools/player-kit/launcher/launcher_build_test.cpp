@@ -1,12 +1,16 @@
 // The launcher's build on Windows, Linux and macOS, with stand-ins for the
-// recompiler, the compiler and the game (tools/check/launcher_stub.cpp): what
-// is compiled again and what comes from the cache, the identity that decides
-// a rebuild, the space check, Unicode and shell metacharacters in every path,
-// the compiler's own leading arguments (zig's "c++"), and the real
-// recompiler's Unicode paths. On Windows also a locked .exe, another CPU and
-// the command line's quoting. No game data.
+// recompiler, the compiler and the game (test_stub.cpp): what is compiled
+// again and what comes from the cache, the identity that decides a rebuild,
+// the space check, Unicode and shell metacharacters in every path, the
+// compiler's own leading arguments (zig's "c++"), game.txt's defaults (Toy
+// Commander's first downloads), and a second kit with everything game.txt
+// can say: a folder as the input, several steps with placeholders, a tool
+// whose path has spaces, lifted files in subfolders of gen, the game's own
+// arguments and the identify contract's three outcomes. Then the project's
+// real recompiler's identify on a Unicode path. On Windows also a locked
+// .exe, another CPU and the command line's quoting. No game data.
 //
-//   qilin_launcher_build_test <launcher_stub> <qilin> <scratch folder>
+//   qilin_launcher_build_test <test_stub> <qilin> <scratch folder>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -28,7 +32,7 @@
 #include <vector>
 
 #include "build.hpp"
-#include "disc.hpp"
+#include "input.hpp"
 #include "kit.hpp"
 #include "platform.hpp"
 #include "process.hpp"
@@ -99,7 +103,7 @@ void copy_program(const fs::path& from, const fs::path& to) {
 
 int main(int argc, char** argv) {
     if (argc != 4) {
-        std::printf("usage: qilin_launcher_build_test <launcher_stub> <qilin> <scratch folder>\n");
+        std::printf("usage: qilin_launcher_build_test <test_stub> <qilin> <scratch folder>\n");
         return 2;
     }
 #if defined(_WIN32)
@@ -145,7 +149,7 @@ int main(int argc, char** argv) {
     put(archive, "fixture");
     put(top / "kit" / "build-flags.txt", "cxxflags = -O2 -I$kit/include\nldflags = -static\nlibs = $kit/lib/libfixture_kit.a\n");
     const fs::path disc = top / fs::path(u8"disc %PATH% & \u4fdd\u5b58.cue");
-    put(disc, "synthetic cue, no game data");
+    put(disc, "right: a synthetic cue, no game data");  // what the stub's identify reads
 
     auto loaded = load_kit(launcher, top / "user");
     CHECK(loaded.has_value());
@@ -156,7 +160,20 @@ int main(int argc, char** argv) {
     const Kit kit = *loaded;
     CHECK(kit.title == "Fixture" && kit.exe == exe && kit.version == "launcher-test");
     CHECK(kit.compiler() == compiler);
-    CHECK(kit.wanted_disc() == "Fixture (World), T-0 version 1.000");
+    CHECK(kit.wanted() == "Fixture (World), T-0 version 1.000");
+    // game.txt's defaults: Toy Commander's first downloads.
+    CHECK(kit.input == InputKind::File && kit.input_noun == "disc");
+    CHECK(kit.input_extensions == std::vector<std::string>({"cue", "gdi", "chd"}));
+    CHECK(kit.identify == "{qilin} identify {input} --json --build {game:build}");
+    CHECK(kit.steps == std::vector<std::string>({"{qilin} lift {input} --out {gen} --files 64"}));
+    CHECK(kit.run_args == "{input}" && kit.compile_memory_mb == 1200 && kit.build_space_mb == 2048 && kit.cache_mb == 2048);
+    CHECK(kit.release_tag_prefix == "fixturegame-v" && kit.release_asset_prefix == "Fixture--QilinRecomp-" && kit.repo.empty());
+    {
+        const auto words = expand_command(kit, kit.steps[0], disc);
+        CHECK(words && *words == std::vector<std::string>({show(kit.qilin()), "lift", show(disc), "--out", show(kit.work / "gen"), "--files", "64"}));
+        const auto id = expand_command(kit, kit.identify, disc);
+        CHECK(id && id->size() == 6 && (*id)[5] == "Fixture (World)");  // {game:build}, spaces and all, one argument
+    }
     const fs::path calls = kit.work / "tool-calls.txt";
     const auto compiles = [&] { return count_lines(calls, "compile"); };
     const auto links = [&] { return count_lines(calls, "link"); };
@@ -168,7 +185,7 @@ int main(int argc, char** argv) {
     } while (0)
 
     BuildOptions options;
-    options.check_disc = false;
+    options.check_input = true;  // the stub's identify says "right"
     options.need_bytes = 0;
     options.native.clear();
     BuildProgress progress;
@@ -287,14 +304,9 @@ int main(int argc, char** argv) {
 
     // The game gets the disc's path intact, and its output goes to the logs.
     {
-        Command c;
-        c.exe = kit.game_exe();
-        c.args = {show(disc)};
-        c.cwd = kit.top;
-        c.out = kit.run_log();
-        c.err = kit.run_errors();
-        c.build_tool = false;
-        auto game = Process::start(c);
+        const auto c = game_command(kit, disc);
+        CHECK(c && c->args == std::vector<std::string>({show(disc)}));
+        auto game = Process::start(*c);
         CHECK(game.has_value());
         CHECK(game && game->wait() == 0);
         const auto launched = read_file(kit.work / "launched.txt");  // the stand-in writes beside itself: the game is in work.
@@ -352,23 +364,163 @@ int main(int argc, char** argv) {
         fs::remove(top / "kit" / "files.txt", ec);
     }
 
-    // The disc check's plain messages for what isn't a disc.
-    CHECK(!check_disc(kit, top / "missing.cue").ok);
-    CHECK(check_disc(kit, top / "missing.cue").message.starts_with("Can't find"));
-    put(top / "notes.txt", "x");
-    CHECK(check_disc(kit, top / "notes.txt").message.starts_with("That's not a disc image"));
-    CHECK(disc_image_name("a.CUE") && disc_image_name("a.gdi") && disc_image_name("a.chd") && !disc_image_name("a.bin"));
-    CHECK(!check_disc(kit, disc).ok);  // a .cue that isn't one
+    // The input check's plain messages for what isn't a disc, and the
+    // identify contract's three outcomes.
+    CHECK(!check_input(kit, top / "missing.cue").ok);
+    CHECK(check_input(kit, top / "missing.cue").message.starts_with("Can't find"));
+    put(top / "notes.txt", "right");
+    CHECK(check_input(kit, top / "notes.txt").message.starts_with("That's not your disc. Choose your disc's .cue file"));
+    CHECK(check_input(kit, top / "kit").message.starts_with("That's a folder"));
+    CHECK(input_name_ok(kit, "a.CUE") && input_name_ok(kit, "a.gdi") && input_name_ok(kit, "a.chd") && !input_name_ok(kit, "a.bin"));
+    {
+        const InputCheck right = check_input(kit, disc);
+        CHECK(right.ok && right.title == "Fixture (World)" && right.id == "T-0" && right.version == "1.000");
+        CHECK(right.message == "This is Fixture (World), T-0 version 1.000: the right one.");
+        const fs::path other = top / fs::path(u8"other \u00e9.gdi");
+        put(other, "wrong");
+        const InputCheck wrong = check_input(kit, other);
+        CHECK(!wrong.ok && wrong.message.starts_with("This is Other Game (Europe).") && wrong.title == "Other Game (Europe)");
+        put(other, "garbage");
+        const InputCheck unreadable = check_input(kit, other);
+        CHECK(!unreadable.ok && unreadable.message == "Can't read it at all.");
+        put(other, "liar");  // ok, but exit 3: a broken tool, said so
+        CHECK(!check_input(kit, other).ok && check_input(kit, other).message.find("disagree") != std::string::npos);
+        // A build stops at the check, before any step.
+        put(other, "wrong");
+        const auto r = build_game(kit, other, progress, cancel, options);
+        CHECK(!r && r.error().starts_with("This is Other Game (Europe)."));
+    }
 
-    // The real recompiler: a Unicode boot file and report path.
+    // A second kit: everything game.txt can say beyond the defaults.
+    {
+        const fs::path top2 = scratch / fs::path(u8"folder kit \u00fc 'x'");
+        fs::remove_all(top2, ec);
+        for (const char* dir : {"kit/lib", "kit/include", "user"}) fs::create_directories(top2 / dir);
+        const fs::path compiler2 = top2 / compiler.lexically_relative(top);
+        fs::create_directories(compiler2.parent_path());
+        const fs::path launcher2 = top2 / ("Play Folder Fixture" + suffix);
+        copy_program(stub, launcher2);
+        copy_program(stub, top2 / "kit" / ("qilin" + suffix));
+        copy_program(stub, top2 / "kit" / ("qilin helper" + suffix));  // a tool whose path has a space
+        copy_program(stub, compiler2);
+        put(top2 / "kit" / "include" / "stub.hpp", "header1");
+        put(top2 / "kit" / "VERSION", "launcher-test\n");
+        put(top2 / "kit" / "lib" / "libfolder_kit.a", "folder");
+        put(top2 / "kit" / "build-flags.txt", "cxxflags = -O2 -I$kit/include\nlibs = $kit/lib/libfolder_kit.a\n");
+        const std::string game_txt =
+            "game=foldergame\ntitle=Folder Fixture\nexe=" + exe + "\nbuild=Folder Fixture (World)\npackage=Folder--QilinRecomp\n"
+            "repo=example/Folder--QilinRecomp\nrelease_tag_prefix=folder-v\n" + compiler_lines +
+            "input=folder\ninput_noun=game folder\n"
+            "input_hint=Choose the folder you extracted the disc into, the one holding default.xbe.\n"
+            "identify={qilin} identify {input} --json\n"
+            "step.1={qilin} lift {input} --out {gen} --files 64\n"
+            "step.2=\"{tool:qilin helper}\" sub {input} --out \"{gen}/sub dir\" \"--note=two words\"\n"
+            "compile_memory_mb=3000\nbuild_space_mb=1\ncache_mb=64\nrun_args=--data {input} --fullscreen\n";
+        put(top2 / "kit" / "game.txt", game_txt);
+        const fs::path data = top2 / fs::path(u8"game data \u4fdd & %PATH% $HOME");
+        fs::create_directories(data / "sys");
+        put(data / "identity.txt", "right");
+
+        auto loaded2 = load_kit(launcher2, top2 / "user");
+        CHECK(loaded2.has_value());
+        if (!loaded2) {
+            std::printf("%s\n", loaded2.error().c_str());
+            return 1;
+        }
+        const Kit kit2 = *loaded2;
+        CHECK(kit2.input == InputKind::Folder && kit2.input_noun == "game folder" && kit2.input_extensions.empty());
+        CHECK(kit2.steps.size() == 2 && kit2.compile_memory_mb == 3000 && kit2.build_space_mb == 1 && kit2.cache_mb == 64);
+        CHECK(kit2.release_tag_prefix == "folder-v" && kit2.release_asset_prefix == "Folder--QilinRecomp-" && kit2.repo == "example/Folder--QilinRecomp");
+        CHECK(kit2.the_input() == "the game folder");
+        {
+            const auto words = expand_command(kit2, kit2.steps[1], data);
+            CHECK(words && *words == std::vector<std::string>({show(kit2.kit_tool("qilin helper")), "sub", show(data), "--out",
+                                                               show(kit2.work / "gen") + "/sub dir", "--note=two words"}));
+        }
+
+        // The identify contract on a folder, and what isn't one.
+        CHECK(check_input(kit2, data).ok);
+        CHECK(check_input(kit2, data / "identity.txt").message.starts_with("That's a file, not a folder. Choose the folder you extracted"));
+        put(data / "identity.txt", "wrong");
+        CHECK(!check_input(kit2, data).ok && check_input(kit2, data).message.starts_with("This is Other Game"));
+        fs::remove(data / "identity.txt");
+        CHECK(!check_input(kit2, data).ok && check_input(kit2, data).message == "Can't read it at all.");
+        put(data / "identity.txt", "right");
+
+        // The build: both steps in order, the subfolder's file compiled to
+        // the same path under obj, then linked; the second time from the cache.
+        BuildOptions options2;
+        options2.native.clear();
+        const fs::path calls2 = kit2.work / "tool-calls.txt";
+        const auto build2 = [&] {
+            const auto r = build_game(kit2, data, progress, cancel, options2);
+            if (!r) std::printf("build (folder kit): %s\n", r.error().c_str());
+            return r.has_value();
+        };
+        CHECK(build2());
+        CHECK(count_lines(calls2, "lift") == 1 && count_lines(calls2, "sub") == 1 && count_lines(calls2, "compile") == 3);
+        CHECK(progress.total == 3 && progress.stage == Stage::Done);
+        CHECK(fs::is_regular_file(kit2.work / "obj" / "sub dir" / "extra.o"));
+        CHECK(fs::is_regular_file(kit2.work / "obj" / "fixture.o"));
+        {
+            std::ifstream f(calls2);
+            std::string first, second;
+            std::getline(f, first);
+            std::getline(f, second);
+            CHECK(first == "lift" && second == "sub");
+        }
+        CHECK(build2());
+        CHECK(count_lines(calls2, "compile") == 3 && progress.cached == 3);
+        // A new helper tool means a new build.
+        const auto before = build_identity(kit2);
+        put(top2 / "kit" / ("qilin helper" + suffix), "x", true);
+        const auto after = build_identity(kit2);
+        CHECK(before && after && *before != *after);
+        // The game gets run_args, the folder's path as one argument.
+        {
+            const auto c = game_command(kit2, data);
+            CHECK(c && c->args == std::vector<std::string>({"--data", show(data), "--fullscreen"}));
+            auto game = Process::start(*c);
+            CHECK(game && game->wait() == 0);
+            const auto launched = read_file(kit2.work / "launched.txt");
+            CHECK(launched && *launched == show(data));
+        }
+        // A step that fails names itself.
+        put(top2 / "kit" / "game.txt", game_txt + "step.2=\"{tool:qilin helper}\" sub {input} --out {gen} \"--note=wrong\"\n");
+        {
+            const auto k = load_kit(launcher2, top2 / "user");
+            CHECK(k.has_value());
+            const auto r = k ? build_game(*k, data, progress, cancel, options2) : std::expected<void, std::string>();
+            CHECK(!r && r.error().find("failed at step 2 of 2") != std::string::npos);
+        }
+        // game.txt's mistakes are said at start-up, not halfway through a build.
+        const auto broken = [&](const std::string& extra, std::string_view says) {
+            put(top2 / "kit" / "game.txt", game_txt + extra);
+            const auto k = load_kit(launcher2, top2 / "user");
+            check(!k && k.error().find(says) != std::string::npos, "game.txt with " + extra + ": " + (k ? std::string("loaded") : k.error()), __LINE__);
+        };
+        broken("step.4=x\n", "step.4 without step.3");
+        broken("step.10=x\n", "step.10");
+        broken("step.2={qilin} {nothing}\n", "unknown placeholder {nothing}");
+        broken("identify={qilin} \"unclosed\n", "unclosed");
+        broken("run_args={game:missing}\n", "unknown placeholder {game:missing}");
+        broken("input=disc\n", "input = disc");
+        broken("compile_memory_mb=lots\n", "compile_memory_mb");
+        put(top2 / "kit" / "game.txt", game_txt);
+    }
+
+    // The real recompiler's identify (the contract every project's qilin
+    // keeps: ADOPTING.md) on a Unicode path: not the supported build, or not
+    // readable at all, said as JSON.
     {
         const fs::path boot = top / fs::path(u8"\u4fdd\u5b58.bin");
-        const fs::path report = top / fs::path(u8"\u4fdd\u5b58.json");
         put(boot, std::string("\x09\x00", 2));
-        const auto code = run(tool(qilin, {"info", show(boot), "--json", show(report)}, top, top / "qilin.log"));
-        CHECK(code && *code == 3);  // not a supported build
-        const auto text = read_file(report);
-        CHECK(text && text->find("\"sha256\"") != std::string::npos);
+        Command c = tool(qilin, {"identify", show(boot), "--json"}, top, top / fs::path(u8"\u4fdd\u5b58.json"));
+        c.err = top / "qilin-errors.txt";
+        const auto code = run(c);
+        CHECK(code && (*code == 2 || *code == 3));
+        const auto text = read_file(c.out);
+        CHECK(text && text->find("\"ok\": false") != std::string::npos && text->find("\"message\": \"") != std::string::npos);
     }
 
     if (failures) {

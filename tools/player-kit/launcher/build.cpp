@@ -1,4 +1,4 @@
-// Building the game from the player's disc (build.hpp).
+// Building the game from the player's data (build.hpp).
 #include "build.hpp"
 
 #include <algorithm>
@@ -12,11 +12,15 @@
 #include <thread>
 #include <vector>
 
-#include "disc.hpp"
+#include "hash.hpp"
+#include "input.hpp"
 #include "kit_text.hpp"
 #include "platform.hpp"
 #include "process.hpp"
-#include "sha256.hpp"
+
+#ifndef QILIN_LAUNCHER_VERSION
+#define QILIN_LAUNCHER_VERSION "unknown"
+#endif
 
 namespace qilin::launcher {
 
@@ -26,8 +30,18 @@ namespace {
 
 constexpr const char* kSeeLog = " The details are in build.log (Show build.log opens it).";
 
+// A game.txt command as a Command: the program first (a relative one is in
+// the kit), run in work/.
+std::expected<Command, std::string> kit_command(const Kit& kit, std::string_view text, const fs::path& input, const fs::path& out) {
+    const auto words = expand_command(kit, text, input);
+    if (!words) return std::unexpected(words.error());
+    fs::path exe = from_utf8(words->front());
+    if (exe.is_relative()) exe = kit.kit / exe;
+    return tool(exe, {words->begin() + 1, words->end()}, kit.work, out);
+}
+
 std::string hash_text(std::string_view text) {
-    return sha256_hex(std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+    return sha256_hex(text);
 }
 
 std::string lower(std::string s) {
@@ -131,6 +145,24 @@ std::expected<std::string, std::string> build_identity(const Kit& kit) {
     };
     for (auto& [rel, path] : files_under(kit.kit / "lib")) parts.emplace_back("lib/" + rel, path);
     for (auto& [rel, path] : files_under(kit.kit / "include")) parts.emplace_back("include/" + rel, path);
+    // The kit's other tools the steps run (game.txt's {tool:NAME}, or a
+    // program named by its path in the kit): a new one means a new build.
+    for (std::size_t i = 0; i < kit.steps.size(); ++i) {
+        const std::string& text = kit.steps[i];
+        std::vector<fs::path> programs;
+        for (std::size_t at = text.find("{tool:"); at != std::string::npos; at = text.find("{tool:", at + 1))
+            if (const std::size_t close = text.find('}', at); close != std::string::npos) programs.push_back(kit.kit_tool(text.substr(at + 6, close - at - 6)));
+        if (const auto words = expand_command(kit, text, "input")) {
+            fs::path exe = from_utf8(words->front());
+            if (exe.is_relative()) exe = kit.kit / exe;
+            const std::string rel = show(exe.lexically_relative(kit.kit));
+            std::error_code ec;
+            if (!rel.empty() && !rel.starts_with("..") && fs::is_regular_file(exe, ec)) programs.push_back(exe);
+        }
+        for (const fs::path& p : programs)
+            if (p != kit.qilin() && std::none_of(parts.begin(), parts.end(), [&](const auto& part) { return part.second == p; }))
+                parts.emplace_back("step." + std::to_string(i + 1) + ":" + show(p.filename()), p);
+    }
 
     // The files' hashes, remembered by path, size and time: hashing the
     // compiler and the library (a few hundred MB) at every start takes
@@ -194,15 +226,20 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
     };
     fs::create_directories(job.logs, ec);
 
+    // Every .cpp under gen, subfolders too (gen/dsp/x.cpp): by its path
+    // relative to gen ('/' separators), its object at the same path under obj,
+    // so two files of one name in different folders can't collide.
     struct Source {
-        std::string name, stem;
+        std::string name, stem;  // "dsp/x.cpp", "dsp/x"
         std::uintmax_t size = 0;
         std::string key;
+        std::size_t index = 0;   // its compiler's own log: logs/compile-<index>.log
     };
     std::vector<Source> sources;
-    for (fs::directory_iterator it(gen, ec), end; !ec && it != end; it.increment(ec)) {
-        if (!it->is_regular_file(ec) || lower(show(it->path().extension())) != ".cpp") continue;
-        sources.push_back({show(it->path().filename()), show(it->path().stem()), it->file_size(ec), {}});
+    for (const auto& [rel, path] : files_under(gen)) {
+        if (lower(show(path.extension())) != ".cpp") continue;
+        std::error_code size_ec;
+        sources.push_back({rel, rel.substr(0, rel.size() - 4), fs::file_size(path, size_ec), {}, sources.size()});
     }
     if (sources.empty()) return std::unexpected("The recompiler wrote no C++ files." + job.see_log);
     // The largest first, so the longest compiles don't start last.
@@ -251,6 +288,7 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
         const fs::path cached = cache / from_utf8(s.key + ".o");
         const fs::path object = obj / from_utf8(s.stem + ".o");
         std::error_code copy;
+        fs::create_directories(object.parent_path(), copy);
         if (job.use_cache && fs::is_regular_file(cached, copy) && fs::copy_file(cached, object, fs::copy_options::overwrite_existing, copy) && !copy) {
             fs::last_write_time(cached, fs::file_time_type::clock::now(), copy);  // the newest stay when the cache is trimmed
             log.line("From the cache: " + s.name);
@@ -264,11 +302,13 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
     // Compile the rest: one worker per core, each taking the next largest.
     if (!misses.empty()) {
         unsigned jobs = job.jobs ? job.jobs : std::max(1u, std::thread::hardware_concurrency());
-        // No more at once than memory allows: about 1.2 GB a compiler at
-        // its peak (a Raspberry Pi with 2 GB compiles one file at a time).
+        // No more at once than memory allows: game.txt's compile_memory_mb a
+        // compiler at its peak (with 1.2 GB, a Raspberry Pi with 2 GB
+        // compiles one file at a time).
         if (!job.jobs) {
             if (const std::uint64_t room = available_memory(); room > 0) {
-                const auto fit = static_cast<unsigned>(std::max<std::uint64_t>(1, room / (1200ull << 20)));
+                const std::uint64_t each = std::max<std::uint64_t>(1, job.memory_mb) << 20;
+                const auto fit = static_cast<unsigned>(std::max<std::uint64_t>(1, room / each));
                 if (fit < jobs) {
                     log.line("Compiling " + std::to_string(fit) + " at a time, not " + std::to_string(jobs) + ": " + show_bytes(room) +
                              " of memory free.");
@@ -290,7 +330,7 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
                 const fs::path object = obj / from_utf8(s.stem + ".o");
                 std::error_code rm;
                 fs::remove(object, rm);
-                Command cc = compiler_tool(job.cxxflags, job.logs / from_utf8(s.stem + ".log"));
+                Command cc = compiler_tool(job.cxxflags, job.logs / ("compile-" + std::to_string(s.index) + ".log"));
                 cc.low_priority = true;
                 cc.args.insert(cc.args.end(), {"-c", job.gen + "/" + s.name, "-o", job.obj + "/" + s.stem + ".o"});
                 const auto code = run(cc);
@@ -329,9 +369,22 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
     return objects;
 }
 
-std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc, BuildProgress& progress,
+std::expected<Command, std::string> game_command(const Kit& kit, const fs::path& input) {
+    auto words = expand_command(kit, "game " + kit.run_args, input);
+    if (!words) return std::unexpected("kit/game.txt's run_args can't be used (" + words.error() + "). Unpack the download again.");
+    Command c;
+    c.exe = kit.game_exe();
+    c.args.assign(words->begin() + 1, words->end());
+    c.cwd = kit.top;
+    c.out = kit.run_log();
+    c.err = kit.run_errors();
+    c.build_tool = false;
+    return c;
+}
+
+std::expected<void, std::string> build_game(const Kit& kit, const fs::path& input, BuildProgress& progress,
                                             const std::atomic<bool>& cancel, const BuildOptions& options) {
-    progress.stage = Stage::CheckingDisc;
+    progress.stage = Stage::Checking;
     progress.done = 0;
     progress.total = 0;
     progress.cached = 0;
@@ -340,8 +393,8 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     fs::create_directories(work / "logs", ec);
     if (ec) return std::unexpected("Can't make the folder " + show(work) + ": " + ec.message() + ".");
     BuildLog log(kit.build_log());
-    log.line(kit.title + " QilinRecomp " + kit.version);
-    log.line("Disc: " + show(disc));
+    log.line(kit.title + " QilinRecomp " + kit.version + " (launcher " QILIN_LAUNCHER_VERSION ")");
+    log.line(capitalised(kit.input_noun) + ": " + show(input));
     const auto failed = [&](std::string message) -> std::unexpected<std::string> {
         log.line("Stopped: " + message);
         return std::unexpected(std::move(message));
@@ -354,9 +407,10 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         return c;
     };
 
-    if (options.check_disc) {
-        const DiscCheck check = check_disc(kit, disc);
+    if (options.check_input) {
+        const InputCheck check = check_input(kit, input);
         if (!check.ok) return failed(check.message);
+        log.line("Identified: " + check.message);
     }
     const auto identity = build_identity(kit);
     if (!identity) return failed(identity.error());
@@ -366,7 +420,8 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     const fs::space_info space = fs::space(work, ec);
     if (!ec) {
         const std::uintmax_t have = size_under(work / "gen") + size_under(work / "obj");
-        const std::uintmax_t need = options.need_bytes > have ? options.need_bytes - have : 0;
+        const std::uintmax_t want = options.need_bytes.value_or(kit.build_space_mb << 20);
+        const std::uintmax_t need = want > have ? want - have : 0;
         if (space.available < need) {
 #if defined(_WIN32)
             std::string where = "drive " + show(work.root_name());
@@ -382,16 +437,30 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     }
     if (cancel) return stopped();
 
-    // Lift the boot file. Files whose text is unchanged are left alone.
+    // The recompiler's steps (game.txt's step.1 to step.9), in order, in
+    // work/. (qilin lift leaves files whose text is unchanged alone, so their
+    // objects come from the cache.)
     progress.stage = Stage::Recompiling;
-    {
-        const Command lift = tool(kit.qilin(), {"lift", show(disc), "--out", show(work / "gen"), "--files", "64"}, work, work / "logs" / "lift.log");
-        const auto code = run(lift);
-        log.tool(lift, lift.out, code ? describe_exit(*code) : code.error());
+    progress.total = static_cast<int>(kit.steps.size());
+    for (std::size_t i = 0; i < kit.steps.size(); ++i) {
+        const auto command = kit_command(kit, kit.steps[i], input, work / "logs" / ("step-" + std::to_string(i + 1) + ".log"));
+        if (!command) return failed("kit/game.txt's step." + std::to_string(i + 1) + " can't be used (" + command.error() + "). Unpack the download again.");
+        const auto code = run(*command);
+        log.tool(*command, command->out, code ? describe_exit(*code) : code.error());
         if (cancel) return stopped();
-        if (!code) return failed("The recompiler didn't start: " + code.error() + ".");
-        if (*code != 0) return failed("Recompiling the disc's " + kit.boot + " failed (" + describe_exit(*code) + ")." + kSeeLog);
+        const std::string which = kit.steps.size() == 1 ? std::string()
+                                                         : " at step " + std::to_string(i + 1) + " of " + std::to_string(kit.steps.size()) + " (" +
+                                                               show(command->exe.filename()) + ")";
+        if (!code) return failed("The recompiler didn't start" + which + ": " + code.error() + ".");
+        if (*code != 0) {
+            const std::string what = kit.steps.size() == 1 && !kit.boot.empty() ? "Recompiling " + kit.the_input() + "'s " + kit.boot
+                                                                                : "Recompiling " + kit.the_input();
+            return failed(what + " failed" + which + " (" + describe_exit(*code) + ")." + kSeeLog);
+        }
+        progress.done = static_cast<int>(i + 1);
     }
+    progress.done = 0;
+    progress.total = 0;
 
     // The kit's flags (build-flags.txt), paths relative to work\ where the
     // kit is beside it (macOS: work/ is in the data folder, the kit in the
@@ -437,6 +506,7 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     job.include = kit.kit / "include";
     job.use_cache = options.use_cache;
     job.jobs = options.jobs;
+    job.memory_mb = kit.compile_memory_mb;
     job.see_log = kSeeLog;
     const auto objects = compile_lifted(job, log, progress, cancel);
     if (!objects) return failed(objects.error());
@@ -473,7 +543,7 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         return failed("Can't replace " + kit.exe + " (" + replaced.error() + "). If the game is still running, close it and try again.");
     }
     if (const auto stamp = write_file(work / "built-with.txt", *identity); !stamp) return failed(stamp.error());
-    trim_cache(kit.cache(), options.cache_bytes);
+    trim_cache(kit.cache(), options.cache_bytes.value_or(kit.cache_mb << 20));
     log.line("Built " + kit.exe + ": " + std::to_string(progress.cached.load()) + " of " + std::to_string(progress.total.load()) +
              " files from the cache.");
     progress.stage = Stage::Done;

@@ -7,13 +7,13 @@
 //      the keychain's signing identities and Xcode's accounts) and a
 //      connected, trusted iPad or iPhone with Developer Mode on (devicectl),
 //      each missing piece with a plain message and what to do;
-//   2. compiles the disc's lifted C++ (work/gen, from the Mac build) for iOS
+//   2. compiles the lifted C++ (work/gen, from the Mac build) for iOS
 //      with `xcrun --sdk iphoneos clang++` and the kit's flags, with the Mac
 //      build's worker pool and an object cache of its own (build-cache-ios),
 //      into work/ios/obj, archived as work/ios/libqilin_lifted.a;
 //   3. builds and signs the app with xcodebuild (the player's team, a bundle
 //      identifier made once per player), installs it with devicectl and copies
-//      the disc image's files into the app's Documents;
+//      the player's data (a disc image's files, or a folder) into the app's Documents;
 //   4. remembers when and with which team, and, for a free team's 7-day
 //      profile, shows until when it works, with "Reinstall on iPad" (sign and
 //      install again, no compiling, no copying).
@@ -104,7 +104,7 @@ private:
     void check(const Kit& kit, bool devices_only);
     void build(const Kit& kit, bool reinstall);
     void draw_checks(const Kit& kit, const Checked& c, const std::string& team, const std::string& device, bool idle);
-    void draw_progress();
+    void draw_progress(const Kit& kit);
 };
 
 }  // namespace qilin::launcher

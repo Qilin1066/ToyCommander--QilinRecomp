@@ -21,6 +21,7 @@
 #include "gdrom.hpp"
 #include "path.hpp"
 #include "hwaccess.hpp"
+#include "identify.hpp"
 #include "layout.hpp"
 #include "lifter.hpp"
 #include "sha256.hpp"
@@ -1036,7 +1037,9 @@ struct FakeDisc {
     // Track 5's file starts 60 sectors after track 3 (20) and track 4 (40).
     static constexpr uint32_t kTrack5File = 45000 + 20 + 40, kTrack5 = kTrack5File + 10;
 
-    FakeDisc() : track(5) {
+    // boot_size: 1ST_READ.BIN's size. 3000 runs it into the audio track (an
+    // error to read); 2048 keeps it in track 3's last sector, readable.
+    explicit FakeDisc(uint32_t boot_size = 3000) : track(5) {
         dir = std::filesystem::temp_directory_path() / std::filesystem::path(u8"qilin_tests_gdrom_保_é");
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
@@ -1068,7 +1071,7 @@ struct FakeDisc {
         std::vector<uint8_t> root, sub;
         record(root, std::string_view("\0", 1), 45017, 2048, true);
         record(root, "\1", 45017, 2048, true);
-        record(root, "1ST_READ.BIN;1", 45019, 3000, false);
+        record(root, "1ST_READ.BIN;1", 45019, boot_size, false);
         record(root, "DATA", 45018, 2048, true);
         root.resize(2048, 0);
         record(sub, std::string_view("\0", 1), 45018, 2048, true);
@@ -1305,6 +1308,67 @@ void test_gdrom() {
 
 // ---------------------------------------------------------------- call footprints
 
+// qilin identify, the launcher's contract (identify.hpp): the synthetic
+// disc as the supported build, as the other game's, as an unknown version,
+// unreadable, missing; and the JSON.
+void test_identify() {
+    std::string boot_sha;
+    {
+        std::vector<uint8_t> boot(2048);
+        for (size_t i = 0; i < boot.size(); ++i) boot[i] = static_cast<uint8_t>(i * 3 + 1);  // FakeDisc's track 3, sector 19
+        boot_sha = sha256_hex(boot);
+    }
+    const KnownBuild builds[] = {
+        {boot_sha, "T-00000", "V1.000", "Fixture (World)"},
+        {"0000000000000000000000000000000000000000000000000000000000000000", "T-99999", "V2.010", "Other Game (Europe)"},
+    };
+    const KnownBuild other_first[] = {
+        {"0000000000000000000000000000000000000000000000000000000000000000", "T-00000", "V1.000", "Fixture (World)"},
+        {boot_sha, "T-99999", "V2.010", "Other Game (Europe)"},
+    };
+    {
+        FakeDisc fake(2048);
+        const Identity right = identify(fake.cue(), "Fixture (World)", builds);
+        CHECK(right.ok && right.code == 0 && right.title == "Fixture (World)" && right.id == "T-00000" && right.version == "1.000");
+        CHECK(right.message == "This is Fixture (World), T-00000 version 1.000: the right disc.");
+        const Identity any = identify(fake.cue(), "", builds);
+        CHECK(any.ok && any.code == 0);
+        // The other game's disc: readable, not the supported build.
+        const Identity other = identify(fake.cue(), "Fixture (World)", other_first);
+        CHECK(!other.ok && other.code == 3 && other.title == "Other Game (Europe)");
+        CHECK(other.message == "This is Other Game (Europe). This download is for Fixture (World), T-00000 version 1.000.");
+        // A version nobody knows: what the bootstrap says, and what's needed.
+        const Identity unknown = identify(fake.cue(), "Other Game (Europe)", std::span(builds + 1, 1));
+        CHECK(!unknown.ok && unknown.code == 3 && unknown.title == "A SYNTHETIC DISC" && unknown.id == "T-00000" && unknown.version == "1.000");
+        CHECK(unknown.message == "This disc isn't a version this download knows. Its bootstrap says it is A SYNTHETIC DISC, product T-00000, "
+                                 "version 1.000. This download is for Other Game (Europe), T-99999 version 2.010.");
+        // The boot file itself (a developer's), and a build the kit names wrongly.
+        const Identity none = identify(fake.dir / "t3.bin", "", builds);
+        CHECK(!none.ok && none.code == 3 && none.message.starts_with("This boot file isn't a version this download knows (SHA-256 "));
+        CHECK(identify(fake.cue(), "No Such Build", builds).code == 2);
+        // The JSON: one object, the message escaped.
+        Identity quoted = right;
+        quoted.message = "a \"quote\"\\ and\na line";
+        CHECK(to_json(quoted) == "{\"ok\": true, \"title\": \"Fixture (World)\", \"id\": \"T-00000\", \"version\": \"1.000\", "
+                                 "\"message\": \"a \\\"quote\\\"\\\\ and\\na line\"}\n");
+        CHECK(to_json(Identity{}).starts_with("{\"ok\": false, "));
+    }
+    {
+        // Unreadable: the boot file runs into an audio track; a damaged
+        // image; a missing file; a folder.
+        FakeDisc fake;
+        const Identity broken = identify(fake.cue(), "Fixture (World)", builds);
+        CHECK(!broken.ok && broken.code == 2 && broken.message.starts_with("Can't read 1ST_READ.BIN from this disc"));
+        std::filesystem::remove(fake.dir / "t5.bin");
+        const Identity damaged = identify(fake.cue(), "Fixture (World)", builds);
+        CHECK(!damaged.ok && damaged.code == 2 && damaged.message.starts_with("Can't read this disc image"));
+        CHECK(identify(fake.dir / "missing.cue", "", builds).code == 2);
+        CHECK(identify(fake.dir, "", builds).code == 2);
+        std::ofstream(fake.dir / "odd.bin", std::ios::binary) << "abc";  // not a boot file (odd length)
+        CHECK(identify(fake.dir / "odd.bin", "", builds).code == 2);
+    }
+}
+
 void test_footprints() {
     const auto bit = [](unsigned n) { return RegSet{1} << n; };
     const auto result = [](RegSet touches, RegSet writes, std::vector<uint32_t> callees) {
@@ -1358,6 +1422,7 @@ int main() {
     test_cfg_long_functions();
     test_fpmode();
     test_gdrom();
+    test_identify();
     test_footprints();
     if (failures) {
         std::println(stderr, "{} check(s) failed", failures);

@@ -1,14 +1,17 @@
-// Play <Title>.exe: the Windows download's launcher, one program for both
-// games (kit\game.txt names the game). It finds the player's disc (chosen or
-// dragged onto the window, remembered in the per-user data folder), builds
-// the game from it the first time and after an update (build.hpp), starts
-// it, and updates the download from GitHub's releases (update.hpp).
+// Play <Title>: the downloads' launcher on Windows, Linux and macOS, one
+// program for every game (kit/game.txt names the game and says what it
+// needs: ADOPTING.md). It finds the player's data, a disc image or a folder
+// (chosen or dragged onto the window, remembered in the per-user data
+// folder), builds the game from it the first time and after an update
+// (build.hpp), starts it, and updates the download from GitHub's releases
+// (update.hpp).
 //
 // Drawn with Dear ImGui over SDL_Renderer, on Vulkan or in software (the
 // project's graphics are Vulkan only).
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
@@ -21,10 +24,10 @@
 #include <vector>
 
 #include "build.hpp"
-#include "disc.hpp"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
+#include "input.hpp"
 #include "kit.hpp"
 #include "kit_text.hpp"
 #include "platform.hpp"
@@ -45,8 +48,8 @@ namespace {
 
 enum class Screen {
     Broken,      // the download itself is incomplete: only a message
-    Starting,    // checking the remembered disc and the build
-    NeedDisc,    // no usable disc yet
+    Starting,    // checking the remembered input and the build
+    NeedDisc,    // no usable disc (or folder) yet
     Building,
     BuildFailed,
     Ready,
@@ -70,6 +73,11 @@ public:
         }
         kit_ = std::move(*loaded);
         SDL_SetWindowTitle(window_, (kit_.title + " QilinRecomp").c_str());
+        // The chooser's filter: game.txt's extensions (kept for the dialog's life).
+        filter_name_ = capitalised(kit_.input_noun) + " (" + list_extensions(kit_.input_extensions) + ")";
+        filter_pattern_.clear();
+        for (const std::string& e : kit_.input_extensions) filter_pattern_ += (filter_pattern_.empty() ? "" : ";") + e;
+        filter_ = {filter_name_.c_str(), filter_pattern_.c_str()};
         if (!claim_folder(kit_)) {
             fail_start("This folder's launcher is already open.");
             return;
@@ -89,8 +97,8 @@ public:
             std::optional<fs::path> disc;
             if (const auto text = read_file(kit_.disc_file()))
                 if (const auto line = trim(*text); !line.empty()) disc = from_utf8(line);
-            DiscCheck check;
-            if (disc) check = check_disc(kit_, *disc);
+            InputCheck check;
+            if (disc) check = check_input(kit_, *disc);
             post([this, built_from = *identity, disc, check, shortcut] {
                 identity_ = built_from;
                 shortcut_ = shortcut;
@@ -134,8 +142,10 @@ public:
 
     void draw();
 
-    // A file dropped onto the window or chosen in the dialog (any thread).
+    // A file or folder dropped onto the window or chosen in the dialog (any thread).
     void offer_disc(fs::path path) {
+        // A folder as some dialogs and drops give it, "C:\Games\X\": without the separator.
+        if (!path.has_filename() && path.has_relative_path()) path = path.parent_path();
         const std::lock_guard lock(mutex_);
         chosen_ = std::move(path);
     }
@@ -173,6 +183,8 @@ private:
     std::string shortcut_error_;
     std::atomic<bool> no_dialog_{false};  // the system has no file dialog: the path is typed or pasted
     char typed_path_[2048] = {};
+    std::string filter_name_, filter_pattern_;  // the file dialog's filter (game.txt's input_extensions)
+    SDL_DialogFileFilter filter_{};
 
     BuildProgress build_;
     std::optional<Process> game_;
@@ -224,7 +236,7 @@ private:
         const Screen before = screen_;
         notice_ = "Checking " + show(disc.filename()) + "...";
         run_task([this, disc, before] {
-            const DiscCheck check = check_disc(kit_, disc);
+            const InputCheck check = check_input(kit_, disc);
             post([this, disc, before, check] {
                 if (!check.ok) {
                     notice_ = check.message;
@@ -278,13 +290,14 @@ private:
 
     void play() {
         if (!disc_) return;
-        Command c;
-        c.exe = kit_.game_exe();
-        c.args = {show(*disc_)};
-        c.cwd = kit_.top;
-        c.out = kit_.run_log();
-        c.err = kit_.run_errors();
-        c.build_tool = false;
+        auto command = game_command(kit_, *disc_);
+        if (!command) {
+            screen_ = Screen::GameFailed;
+            failure_ = command.error();
+            errors_.clear();
+            return;
+        }
+        Command c = std::move(*command);
 #if defined(__APPLE__)
         c.environment = apple_game_environment(kit_);
 #endif
@@ -371,13 +384,17 @@ private:
     }
 
     void choose_disc() {
-        static const SDL_DialogFileFilter filters[] = {
-            {"Dreamcast disc images (.cue, .gdi, .chd)", "cue;gdi;chd"},
-        };
         std::string folder;
         if (disc_) folder = show(disc_->parent_path());
-        SDL_ShowOpenFileDialog(dialog_done, this, window_, filters, 1, folder.empty() ? nullptr : folder.c_str(), false);
+        const char* start = folder.empty() ? nullptr : folder.c_str();
+        if (kit_.input == InputKind::Folder) SDL_ShowOpenFolderDialog(dialog_done, this, window_, start, false);
+        else SDL_ShowOpenFileDialog(dialog_done, this, window_, kit_.input_extensions.empty() ? nullptr : &filter_,
+                                    kit_.input_extensions.empty() ? 0 : 1, start, false);
     }
+    // "Choose your disc", "Choose your game folder"
+    std::string choose_label() const { return "Choose your " + kit_.input_noun; }
+    std::string another_label() const { return "Choose another " + kit_.input_noun; }
+    const char* thing() const { return kit_.input == InputKind::Folder ? "folder" : "file"; }
 
     void draw_disc_prompt();
     void draw_update();
@@ -404,21 +421,21 @@ const ImVec4 kGood(0.55f, 0.9f, 0.55f, 1.0f);
 const ImVec4 kQuiet(0.7f, 0.7f, 0.7f, 1.0f);
 
 void App::draw_disc_prompt() {
-    wrapped("This download builds the game from your own disc: " + kit_.wanted_disc() +
-            ". Choose its .cue file (with the .bin tracks beside it), its .gdi or its .chd.");
+    wrapped("This download builds the game from your own " + kit_.input_noun + ": " + kit_.wanted() + ". " + kit_.input_hint);
     ImGui::Spacing();
-    if (big_button("Choose your disc")) choose_disc();
+    if (big_button(choose_label().c_str())) choose_disc();
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(kQuiet, "or drag the file onto this window.");
+    ImGui::TextColored(kQuiet, "or drag the %s onto this window.", thing());
     if (no_dialog_) {
         // No file dialog on this desktop: the path, typed or pasted.
         ImGui::Spacing();
-        wrapped("This desktop has no file chooser. Type or paste the disc image's full path:");
-        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Use this disc").x - ImGui::GetStyle().FramePadding.x * 4);
+        wrapped(std::string("This desktop has no file chooser. Type or paste the full path of your ") + kit_.input_noun + ":");
+        const std::string use = "Use this " + std::string(thing());
+        ImGui::SetNextItemWidth(-ImGui::CalcTextSize(use.c_str()).x - ImGui::GetStyle().FramePadding.x * 4);
         const bool entered = ImGui::InputText("##path", typed_path_, sizeof typed_path_, ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
-        if ((ImGui::Button("Use this disc") || entered) && typed_path_[0]) {
+        if ((ImGui::Button(use.c_str()) || entered) && typed_path_[0]) {
             std::string typed = std::string(trim(typed_path_));
             if (typed.size() > 1 && (typed.front() == '\'' || typed.front() == '"') && typed.back() == typed.front())
                 typed = typed.substr(1, typed.size() - 2);  // pasted with quotes
@@ -502,7 +519,7 @@ void App::draw() {
             ImGui::Spacing();
             if (big_button("Quit")) quit_ = true;
             break;
-        case Screen::Starting: wrapped("Checking the download and your disc..."); break;
+        case Screen::Starting: wrapped("Checking the download and your " + kit_.input_noun + "..."); break;
         case Screen::NeedDisc:
             if (!notice_.empty()) {
                 coloured(kWarning, notice_);
@@ -520,13 +537,14 @@ void App::draw() {
             std::string label;
             float fraction = 0;
             switch (stage) {
-                case Stage::CheckingDisc:
-                    label = "Checking the disc";
+                case Stage::Checking:
+                    label = "Checking " + kit_.the_input();
                     fraction = 0.01f;
                     break;
                 case Stage::Recompiling:
-                    label = "Recompiling " + kit_.boot + " into C++";
-                    fraction = 0.03f;
+                    label = kit_.boot.empty() ? std::string("Recompiling into C++") : "Recompiling " + kit_.boot + " into C++";
+                    if (total > 1) label += ": step " + std::to_string(std::min(done + 1, total)) + " of " + std::to_string(total);
+                    fraction = 0.01f + 0.06f * (total ? static_cast<float>(done) / static_cast<float>(total) : 0.0f);
                     break;
                 case Stage::Compiling:
                     label = "Compiling " + std::to_string(done) + " of " + std::to_string(total);
@@ -542,7 +560,7 @@ void App::draw() {
                     break;
             }
             ImGui::Spacing();
-            wrapped("Building the game from your disc. This happens once (and after an update): a few minutes, up to 15 on a slower PC.");
+            wrapped("Building the game from your " + kit_.input_noun + ". This happens once (and after an update): a few minutes, up to 15 on a slower PC.");
             ImGui::Spacing();
             ImGui::ProgressBar(fraction, ImVec2(-1, 0), label.c_str());
             ImGui::Spacing();
@@ -562,14 +580,14 @@ void App::draw() {
             break;
         case Screen::Ready: {
             if (!notice_.empty()) coloured(kGood, notice_);
-            if (disc_) ImGui::TextColored(kQuiet, "Disc: %s", show(*disc_).c_str());
+            if (disc_) ImGui::TextColored(kQuiet, "%s: %s", capitalised(kit_.input_noun).c_str(), show(*disc_).c_str());
             ImGui::Spacing();
             ImGui::BeginDisabled(busy_);
             ImGui::PushFont(nullptr, style.FontSizeBase * 1.4f);
             if (big_button("  Play  ")) play();
             ImGui::PopFont();
             ImGui::Spacing();
-            if (ImGui::Button("Choose another disc")) choose_disc();
+            if (ImGui::Button(another_label().c_str())) choose_disc();
             ImGui::SameLine();
             if (ImGui::Button("Build again from scratch")) {
                 notice_.clear();
@@ -591,7 +609,7 @@ void App::draw() {
 #endif
             ImGui::EndDisabled();
             if (!shortcut_error_.empty()) coloured(kWarning, shortcut_error_);
-            ImGui::TextColored(kQuiet, "Or drag another disc image onto this window.");
+            ImGui::TextColored(kQuiet, "Or drag another %s onto this window.", thing());
             break;
         }
         case Screen::Playing: break;
@@ -608,7 +626,7 @@ void App::draw() {
             ImGui::BeginDisabled(busy_);
             if (big_button("Play again")) play();
             ImGui::SameLine();
-            if (big_button("Choose another disc")) choose_disc();
+            if (big_button(another_label().c_str())) choose_disc();
             ImGui::SameLine();
             if (big_button("Quit")) quit_ = true;
             ImGui::EndDisabled();

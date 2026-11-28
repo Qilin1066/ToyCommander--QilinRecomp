@@ -69,13 +69,16 @@ struct Release {
     double asset_size = 0;  // bytes, as GitHub gives it
 };
 
-inline std::expected<std::optional<Release>, std::string> newest_release(std::string_view releases_json, std::string_view game,
-                                                                         std::string_view package,
+// `tag_prefix` and `asset_prefix` are game.txt's release_tag_prefix
+// (`<game>-v` by default) and release_asset_prefix (`<package>-`).
+inline std::expected<std::optional<Release>, std::string> newest_release(std::string_view releases_json, std::string_view tag_prefix,
+                                                                         std::string_view asset_prefix,
                                                                          std::string_view suffix = "windows-x64.zip") {
     auto doc = json::parse(releases_json);
     if (!doc) return std::unexpected(doc.error());
     if (!doc->is_array()) return std::unexpected(std::string("GitHub's answer isn't a list of releases"));
-    const std::string prefix = std::string(game) + "-v";
+    const std::string prefix(tag_prefix);
+    const std::string package(asset_prefix);
     std::optional<Release> best;
     for (const json::Value& r : doc->items) {
         if (!r.is_object() || r.bool_or("draft", true) || r.bool_or("prerelease", true)) continue;
@@ -83,7 +86,7 @@ inline std::expected<std::optional<Release>, std::string> newest_release(std::st
         if (!tag.starts_with(prefix)) continue;
         const auto v = parse_version(tag.substr(prefix.size()), true);
         if (!v || (best && *v <= best->version)) continue;
-        const std::string want = std::string(package) + "-" + std::string(tag.substr(prefix.size())) + "-" + std::string(suffix);
+        const std::string want = package + std::string(tag.substr(prefix.size())) + "-" + std::string(suffix);
         const json::Value* assets = r.find("assets");
         if (!assets || !assets->is_array()) continue;
         for (const json::Value& a : assets->items) {

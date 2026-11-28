@@ -304,7 +304,7 @@ std::string install_failure(const std::string& text, const std::string& device) 
     if (says(text, "not paired") || says(text, "pairing") || says(text, "trust"))
         return "Unlock " + device + " and tap Trust when it asks whether to trust this computer, then try again.";
     if (says(text, "not enough space") || says(text, "insufficient") || says(text, "storage"))
-        return device + " hasn't enough free space for the game and its disc (about 1.5 GB). Free some, then try again.";
+        return device + " hasn't enough free space for the game and its data. Free some, then try again.";
     if (says(text, "unavailable") || says(text, "not connected") || says(text, "disconnected"))
         return device + " isn't connected any more. Plug it in, unlock it, then try again.";
     return "Installing on " + device + " failed.";
@@ -442,9 +442,9 @@ void IosInstall::build(const Kit& kit, bool reinstall) {
     const fs::path archive = lifted_archive(kit);
 
     if (!reinstall || !fs::is_regular_file(archive, ec)) {
-        // The lifted C++ of the Mac build (work/gen), compiled for iOS.
+        // The lifted C++ of the Mac build (work/gen, subfolders too), compiled for iOS.
         bool have_sources = false;
-        for (fs::directory_iterator it(work / "gen", ec), end; !ec && it != end && !have_sources; it.increment(ec))
+        for (fs::recursive_directory_iterator it(work / "gen", ec), end; !ec && it != end && !have_sources; it.increment(ec))
             have_sources = it->path().extension() == ".cpp";
         if (!have_sources)
             return finish("The game's recompiled code isn't there yet: build the game for this Mac first (Back, then Build again from "
@@ -472,6 +472,7 @@ void IosInstall::build(const Kit& kit, bool reinstall) {
         job.environment = env;
         job.target = "target\nios-arm64\nsdk\n" + c.sdk_path + "\n";
         job.include = kit_dir / "include";
+        job.memory_mb = kit.compile_memory_mb;
         job.see_log = kSeeLog;
         const auto objects = compile_lifted(job, log, compile_, cancel_);
         if (!objects) return finish(objects.error(), true, objects.error() != "The build was stopped.");
@@ -549,20 +550,38 @@ void IosInstall::build(const Kit& kit, bool reinstall) {
 
     // A reinstall on the same device keeps its Documents: no copying.
     if (!reinstall || !before || before->device != device.identifier || before->disc.empty()) {
-        // The disc image's files, into the app's Documents, unless already there.
+        // The player's data into the app's Documents, unless already there: a
+        // disc image's files (a .cue's or .gdi's tracks beside it), or a
+        // folder's every file as Documents/<folder>/... (ADOPTING.md: the
+        // iOS runtime finds it there).
         step_ = Step::Copying;
-        const auto image_text = read_file(disc_);
-        const std::string ext = disc_.extension().string();
-        const bool listed = says(ext, ".cue") || says(ext, ".gdi");
-        if (listed && !image_text) return finish("Can't read " + show(disc_) + ".", true, false);
-        const auto names = ios::disc_files(disc_.filename().string(), listed ? *image_text : std::string());
+        std::expected<std::vector<std::string>, std::string> names;
+        if (kit.input == InputKind::Folder) {
+            const std::string top = show(disc_.filename());
+            std::vector<std::string> found;
+            for (fs::recursive_directory_iterator it(disc_, ec), end; !ec && it != end; it.increment(ec)) {
+                if (!it->is_regular_file(ec)) continue;
+                std::string rel = show(it->path().lexically_relative(disc_));
+                std::replace(rel.begin(), rel.end(), '\\', '/');
+                found.push_back(top + "/" + rel);
+            }
+            if (ec) return finish("Can't read the folder " + show(disc_) + ": " + ec.message() + ".", true, false);
+            std::sort(found.begin(), found.end());
+            names = std::move(found);
+        } else {
+            const auto image_text = read_file(disc_);
+            const std::string ext = disc_.extension().string();
+            const bool listed = says(ext, ".cue") || says(ext, ".gdi");
+            if (listed && !image_text) return finish("Can't read " + show(disc_) + ".", true, false);
+            names = ios::disc_files(disc_.filename().string(), listed ? *image_text : std::string());
+        }
         if (!names) return finish(show(disc_.filename()) + " can't be copied: " + names.error() + ".", true, false);
         std::vector<std::pair<std::string, std::uint64_t>> files;
         std::uint64_t total = 0;
         for (const std::string& name : *names) {
             const fs::path local = disc_.parent_path() / from_utf8(name);
             const auto size = fs::file_size(local, ec);
-            if (ec) return finish("The disc's file " + show(local) + " is missing.", true, false);
+            if (ec) return finish("The file " + show(local) + " is missing.", true, false);
             files.emplace_back(name, size);
             total += size;
         }
@@ -595,7 +614,7 @@ void IosInstall::build(const Kit& kit, bool reinstall) {
                 if (cancel_) return finish("The copy was stopped.", true, false);
                 if (!copied.ok()) {
                     std::string why = install_failure(copied.text, device.name);
-                    if (why.starts_with("Installing")) why = "Copying the disc to " + device.name + " failed.";
+                    if (why.starts_with("Installing")) why = "Copying " + kit.the_input() + " to " + device.name + " failed.";
                     return finish(why + kSeeLog, true, true);
                 }
             }
@@ -612,7 +631,7 @@ void IosInstall::build(const Kit& kit, bool reinstall) {
     finish("The game is installed on " + device.name + ".", false, false);
 }
 
-void IosInstall::draw_progress() {
+void IosInstall::draw_progress(const Kit& kit) {
     std::string label;
     float fraction = 0;
     switch (step_.load()) {
@@ -643,7 +662,7 @@ void IosInstall::draw_progress() {
                 name = copying_;
             }
             const std::uint64_t done = copy_done_, total = copy_total_;
-            label = "Copying the disc: " + name + " (" + std::to_string(copy_index_.load()) + " of " + std::to_string(copy_count_.load()) + ", " +
+            label = "Copying " + kit.the_input() + ": " + name + " (" + std::to_string(copy_index_.load()) + " of " + std::to_string(copy_count_.load()) + ", " +
                     show_bytes(done) + " of " + show_bytes(total) + ")";
             fraction = 0.75f + 0.25f * (total ? static_cast<float>(static_cast<double>(done) / static_cast<double>(total)) : 0.0f);
             break;
@@ -767,8 +786,8 @@ bool IosInstall::draw(const Kit& kit) {
     ImGui::PushFont(nullptr, style.FontSizeBase * 1.25f);
     ImGui::TextUnformatted("Play on iPad");
     ImGui::PopFont();
-    ImGui::TextWrapped("This Mac builds the game for your iPad or iPhone, signs it with your own Apple ID, and installs it over the "
-                       "cable with a copy of your disc. Your game files stay on your devices.");
+    ImGui::TextWrapped("%s", ("This Mac builds the game for your iPad or iPhone, signs it with your own Apple ID, and installs it over the "
+                             "cable with a copy of your " + kit.input_noun + ". Your game files stay on your devices.").c_str());
     ImGui::Spacing();
     if (!c.done) {
         ImGui::TextWrapped("Checking Xcode, your Apple ID and your devices...");
@@ -781,7 +800,7 @@ bool IosInstall::draw(const Kit& kit) {
 
     const bool working = task_ == Task::Building || task_ == Task::Reinstalling;
     if (working) {
-        draw_progress();
+        draw_progress(kit);
     } else if (!result.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, failed ? kWarning : kGood);
         ImGui::TextWrapped("%s", result.c_str());

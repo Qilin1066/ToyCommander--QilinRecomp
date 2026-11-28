@@ -2,6 +2,10 @@
 //
 //   qilin disc    <disc image>                the disc's bootstrap, tracks and files (.cue, .gdi or .chd)
 //   qilin extract <disc image> --out <dir>    the disc's files and its bootstrap (IP.BIN), to a folder
+//   qilin identify <disc image or boot file> --json [--build <title>]
+//                                             what it is, for the launcher: one JSON object on
+//                                             stdout (identify.hpp); exit 0 the supported build,
+//                                             3 another, 2 unreadable
 //   qilin info    <boot file>   (any command taking a boot file also takes the disc image) [--json out.json]
 //                                             SHA-256, supported build, load address
 //   qilin insns   <boot file> [-o out.txt]    every word of the boot file, decoded (a linear
@@ -54,6 +58,7 @@
 #include "fpmode.hpp"
 #include "gdrom.hpp"
 #include "hwaccess.hpp"
+#include "identify.hpp"
 #include "layout.hpp"
 #include "lift_output.hpp"
 
@@ -74,6 +79,7 @@ int usage() {
                "qilin " QILIN_VERSION "\n"
                "usage:\n"
                "  qilin disc    <disc image: .cue, .gdi or .chd>\n"
+               "  qilin identify <disc image or boot file> --json [--build <title>]\n"
                "  qilin extract <disc image> --out <dir>\n"
                "  qilin info    <boot file> [--json out.json]\n"
                "  qilin insns   <boot file> [-o out.txt]\n"
@@ -457,7 +463,39 @@ int cmd_hwaccess(const std::string& path, const std::optional<std::string>& json
     return 0;
 }
 
+// The launcher's contract (identify.hpp): JSON whatever happens, and only
+// exit codes 0, 3 and 2.
+int cmd_identify(int argc, char** argv) {
+    std::optional<std::string> path, build;
+    bool json = false;
+    std::string problem;
+    for (int i = 2; i < argc; ++i) {
+        const std::string_view a = argv[i];
+        if (a == "--json") json = true;
+        else if (a == "--build" && i + 1 < argc) build = argv[++i];
+        else if (!a.starts_with("-") && !path) path = std::string(a);
+        else problem = std::format("identify: unexpected argument {}", a);
+    }
+    if (!path) problem = "identify takes one file";
+    if (!json) problem = "identify needs --json";
+    Identity id;
+    if (!problem.empty()) {
+        id.message = problem;
+    } else {
+        try {
+            id = identify(native_path(*path), build.value_or(""));
+        } catch (const std::exception& e) {
+            id = Identity{};
+            id.message = std::format("The recompiler failed: {}.", e.what());
+        }
+    }
+    std::print("{}", to_json(id));
+    std::fflush(stdout);
+    return id.code;
+}
+
 int run(int argc, char** argv) {
+    if (argc >= 2 && std::string_view(argv[1]) == "identify") return cmd_identify(argc, argv);
     std::vector<std::string> pos;
     std::optional<std::string> out, json, out_dir, pc;
     bool list = false, map = false, orphans = true;

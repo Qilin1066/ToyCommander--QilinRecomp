@@ -37,13 +37,9 @@ cmake --install "$build" --component "$game" --prefix "$pkg"
 
 "$here/trim-toolchain.sh" "$LLVM_MINGW_WINDOWS" "$pkg/kit/toolchain"
 cp "$build/qilin_launcher.exe" "$pkg/Play $TITLE.exe"
-# What the launcher needs to know about the game, one name=value a line:
-# its data folder's and tags' name, its titles, the disc it builds from
-# (`build` is recomp/src/bootfile.cpp's known build's title), the release's
-# zip name and where releases are published.
-printf 'game=%s\r\ntitle=%s\r\nexe=%s\r\nboot=%s\r\nbuild=%s\r\nproduct=%s\r\ndisc_version=%s\r\nrelease=%s\r\npackage=%s\r\nrepo=%s\r\n' \
-    "$game" "$TITLE" "$EXE" "$BOOT" "$BUILD_TITLE" "$PRODUCT" "$DISC_VERSION" "$RELEASE" "$PACKAGE" "Qilin1066/ToyCommander--QilinRecomp" \
-    > "$pkg/kit/game.txt"
+# What the launcher needs to know about the game (games.sh), and the
+# compiler: the bundled llvm-mingw.
+GAME_TXT_CRLF=1 write_game_txt "$pkg/kit/game.txt" "$EXE" "toolchain/bin/x86_64-w64-mingw32-clang++.exe"
 fill "$here/README.txt.in" | sed 's/$/\r/' > "$pkg/README.txt"
 printf '%s\n' "$version" > "$pkg/kit/VERSION"
 

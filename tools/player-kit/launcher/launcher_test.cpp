@@ -6,9 +6,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "hash.hpp"
 #include "ios_text.hpp"
 #include "json.hpp"
 #include "kit_text.hpp"
@@ -109,7 +111,7 @@ void test_version() {
       {"tag_name": "toycommander-v0.13.6-rc1", "draft": false, "prerelease": false,
        "assets": [{"name": "ToyCommander--QilinRecomp-0.13.6-rc1-windows-x64.zip", "browser_download_url": "https://example.invalid/rc"}]}
     ])";
-    const auto newest = newest_release(releases, "toycommander", "ToyCommander--QilinRecomp");
+    const auto newest = newest_release(releases, "toycommander-v", "ToyCommander--QilinRecomp-");
     CHECK(newest && *newest);
     if (newest && *newest) {
         const Release& r = **newest;
@@ -120,12 +122,12 @@ void test_version() {
         CHECK(r.version > *parse_version("0.13.0"));
         CHECK(!(r.version > *parse_version("0.13.1")));
     }
-    const auto racer = newest_release(releases, "toyracer", "ToyRacer--QilinRecomp");
+    const auto racer = newest_release(releases, "toyracer-v", "ToyRacer--QilinRecomp-");
     CHECK(racer && *racer && (*racer)->tag == "toyracer-v0.9.0");
-    const auto none = newest_release(releases, "othergame", "Other");
+    const auto none = newest_release(releases, "othergame-v", "Other-");
     CHECK(none && !*none);
-    CHECK(!newest_release("{\"message\": \"Not Found\"}", "toycommander", "x"));  // an error object, not a list
-    CHECK(!newest_release("not json", "toycommander", "x"));
+    CHECK(!newest_release("{\"message\": \"Not Found\"}", "toycommander-v", "x-"));  // an error object, not a list
+    CHECK(!newest_release("not json", "toycommander-v", "x-"));
 }
 
 void test_kit() {
@@ -144,6 +146,57 @@ void test_kit() {
     CHECK(split_flags("", "k").empty());
     CHECK(split_flags("$kit$kit", "$kit").size() == 1 && split_flags("$kit$kit", "$kit")[0] == "$kit$kit");  // no endless replacing
     CHECK(trim("  a b \r\n") == "a b");
+
+    // game.txt's commands: split by the launcher's own rules, no shell.
+    {
+        const auto words = split_command("{qilin} lift  {input} --out \"{gen}/sub dir\" 'it''s' --x=\"a b\"c \"\" C:\\x\\y");
+        CHECK(words.has_value());
+        CHECK(words && words->size() == 9);
+        if (words && words->size() == 9) {
+            CHECK((*words)[0] == "{qilin}" && (*words)[1] == "lift" && (*words)[2] == "{input}" && (*words)[3] == "--out");
+            CHECK((*words)[4] == "{gen}/sub dir" && (*words)[5] == "its" && (*words)[6] == "--x=a bc" && (*words)[7].empty());
+            CHECK((*words)[8] == "C:\\x\\y");  // backslashes stay
+        }
+        CHECK(!split_command("a \"b").has_value());
+        CHECK(!split_command("a 'b").has_value());
+        CHECK(split_command("   ").has_value() && split_command("   ")->empty());
+        CHECK(split_command("say \"don't\"").has_value() && (*split_command("say \"don't\""))[1] == "don't");
+    }
+    {
+        const auto lookup = [](std::string_view name) -> std::optional<std::string> {
+            if (name == "input") return std::string("D:/My Games/\xE4 disc.cue");
+            if (name == "tool:qilin-dsp") return std::string("/kit/qilin-dsp");
+            return std::nullopt;
+        };
+        const auto one = expand_placeholders("--in={input}", lookup);
+        CHECK(one && *one == "--in=D:/My Games/\xE4 disc.cue");  // spaces stay in one argument
+        CHECK(expand_placeholders("{tool:qilin-dsp}", lookup).value_or("") == "/kit/qilin-dsp");
+        CHECK(expand_placeholders("{{literal}}", lookup).value_or("") == "{literal}");
+        CHECK(expand_placeholders("plain", lookup).value_or("") == "plain");
+        CHECK(!expand_placeholders("{nope}", lookup).has_value());
+        CHECK(!expand_placeholders("{input", lookup).has_value());
+        CHECK(!expand_placeholders("a}b", lookup).has_value());
+    }
+    {
+        const auto ext = split_extensions(".CUE; gdi,chd");
+        CHECK(ext.size() == 3 && ext[0] == "cue" && ext[1] == "gdi" && ext[2] == "chd");
+        CHECK(list_extensions(ext) == ".cue, .gdi or .chd");
+        CHECK(list_extensions({"iso"}) == ".iso");
+        CHECK(split_extensions("").empty());
+        CHECK(capitalised("disc") == "Disc" && capitalised("ROM set") == "ROM set" && capitalised("").empty());
+    }
+
+    // The launcher's own SHA-256 (FIPS 180-4's examples), in pieces too.
+    CHECK(sha256_hex(std::string_view()) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(sha256_hex(std::string_view("abc")) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256_hex(std::string_view("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")) ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    {
+        Sha256 h;
+        const std::string a(1000, 'a');
+        for (int i = 0; i < 1000; ++i) h.add(std::string_view(a).substr(0, 1 + i % 7)), h.add(std::string_view(a).substr(0, 999 - i % 7));
+        CHECK(h.hex() == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");  // a million 'a's
+    }
 }
 
 // What "Play on iPad" reads from Apple's tools (ios_text.hpp). The samples

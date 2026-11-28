@@ -20,7 +20,7 @@
 
 #include "kit.hpp"
 #include "process.hpp"
-#include "sha256.hpp"
+#include "hash.hpp"
 
 namespace qilin::launcher {
 
