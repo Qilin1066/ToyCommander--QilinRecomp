@@ -62,7 +62,7 @@ build_app() {  # <kit> <sdk> <destination> <name>
     xcodebuild -project "$work/xcode/QilinGame.xcodeproj" -scheme QilinGame -configuration Release \
         -destination "$destination" -derivedDataPath "$work/derived" \
         CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM= PRODUCT_BUNDLE_IDENTIFIER="io.github.qilin1066.$game-check" \
-        PRODUCT_NAME="$EXE" QILIN_LIFTED_LIB="$work/liblifted.a" QILIN_KIT_LIB="$k/lib/lib${game}_ios_kit.a" build
+        PRODUCT_NAME="$EXE" QILIN_LIFTED_LIB="$work/liblifted.a" QILIN_KIT_LIB="$k/lib/lib${game}_ios_kit.a" QILIN_IOS_KIT="$k" build
     app="$work/derived/Build/Products/Release-$sdk/$EXE.app"
     [ -d "$app" ] || fail "no $app"
     [ -f "$app/$EXE" ] || fail "the app has no program $EXE"

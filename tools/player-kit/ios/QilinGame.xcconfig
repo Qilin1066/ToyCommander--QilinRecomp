@@ -34,6 +34,9 @@ CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -
 // The two libraries, then what they need: the C++ library, iconv (SDL), and
 // the system's frameworks SDL3 and MoltenVK use. -ObjC: every Objective-C
 // class and category in the archives (SDL's are found by name at run time).
+// QILIN_IOS_KIT: the ios-kit folder (the launcher passes its full path,
+// as it builds a copy of xcode/ elsewhere); nothing else here reaches into it.
+QILIN_IOS_KIT = $(PROJECT_DIR)/..
 QILIN_LIFTED_LIB =
-QILIN_KIT_LIB = $(PROJECT_DIR)/../lib/lib$(QILIN_GAME)_ios_kit.a
+QILIN_KIT_LIB = $(QILIN_IOS_KIT)/lib/lib$(QILIN_GAME)_ios_kit.a
 OTHER_LDFLAGS = -ObjC "$(QILIN_LIFTED_LIB)" "$(QILIN_KIT_LIB)" -lc++ -liconv -framework UIKit -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreVideo -framework CoreMedia -framework CoreAudio -framework AudioToolbox -framework AVFoundation -framework CoreMotion -framework GameController -weak_framework CoreHaptics

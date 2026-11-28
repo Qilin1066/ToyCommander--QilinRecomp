@@ -41,10 +41,14 @@ Building and installing
        PRODUCT_NAME=@EXE@ \
        QILIN_LIFTED_LIB=<work>/liblifted.a \
        QILIN_KIT_LIB=$kit/lib/lib@GAME@_ios_kit.a \
+       QILIN_IOS_KIT=$kit \
        build
    The app is <work>/derived/Build/Products/Release-iphoneos/@EXE@.app
    (PRODUCT_NAME.app). `archive` works too (-archivePath <path>), but
    `build` is enough for a development install. Paths may have spaces.
+   The project reaches into the kit only through QILIN_IOS_KIT (its
+   default, the folder above the project, holds only for the kit's own
+   copy); everything else it needs is inside xcode/.
    Optional settings: QILIN_DISPLAY_NAME (the name under the icon and in
    the Files app; default "@TITLE@"), MARKETING_VERSION and
    CURRENT_PROJECT_VERSION (default this kit's version).

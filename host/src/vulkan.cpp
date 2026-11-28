@@ -88,11 +88,33 @@ Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swap
     app.pApplicationName = QILIN_APP_TITLE " (Qilin recompilation)";
     app.apiVersion = VK_API_VERSION_1_3;
     std::vector<const char*> ext(instance_extensions.begin(), instance_extensions.end());
+    // What the instance offers: a missing extension is named, not a bare
+    // VK_ERROR_EXTENSION_NOT_PRESENT.
+    std::vector<VkExtensionProperties> offered;
+    {
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+        offered.resize(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, offered.data());
+        offered.resize(n);
+    }
+    const auto offers = [&](const char* name) {
+        for (const auto& e : offered)
+            if (std::strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    };
+    for (const char* name : ext)
+        if (!offers(name)) die("Vulkan: the instance has no %s, which the window needs", name);
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 #if defined(__APPLE__)
-    // MoltenVK is a portability implementation: it's only listed if asked for.
-    ext.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    // MoltenVK is a portability implementation: through the Vulkan loader
+    // it's only listed if asked for. MoltenVK on its own (iOS, where it's
+    // linked in) may not offer the loader's extension: asked for only if
+    // offered.
+    if (offers(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        ext.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
 #endif
     ici.pApplicationInfo = &app;
     ici.enabledExtensionCount = static_cast<uint32_t>(ext.size());
