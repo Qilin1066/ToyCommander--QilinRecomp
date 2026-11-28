@@ -59,8 +59,8 @@ Next steps: on a real Pi, measure a first build on a Pi 4 (4 GB) and a Pi 5 (wit
 
 Player's friction: once, enable developer options and USB or wireless debugging and accept the computer; the disc image is copied to the device with the app. Nothing expires.
 
-**Blockers to decide on:**
-- **Vulkan 1.3 is on about 26% of active Android devices** (Google's dashboard, November 2025; 61% have only 1.1). Android 13+ devices *should* have 1.3. Requiring 1.3 leaves most phones out; supporting Vulkan 1.1 with the 2022 baseline profile (86% of Vulkan devices) means a renderer path without 1.3's features. The owner's call: it touches the "Vulkan 1.3" requirement.
+**Decided and still to do:**
+- **Vulkan 1.3 only, on Android too** (the owner, 2026-11-28: "No to vulkan 1.1"). That's about 26% of active Android devices (Google's dashboard, November 2025; 61% have only 1.1); Android 13+ devices *should* have 1.3, so the share grows as phones are replaced. "Install on Android" checks the device's Vulkan version over adb before building and says plainly when a phone can't run it.
 - The runtime needs an Android port of its own: touch controls over the picture (plus SDL's controller support), the app lifecycle (pause and resume), and saves and the disc in app storage.
 - Not on Google Play (its code rules); sideloaded only.
 
@@ -80,8 +80,8 @@ Runtime work: SDL3 and MoltenVK (static, App Store–compatible without its priv
 
 ## Order of work (recommended)
 
-1. Linux and macOS downloads (in progress), then the Raspberry Pi measurements.
-2. Android: the owner's decision on Vulkan 1.1 first, since it decides how many devices it's worth it for; then the runtime port, then the launcher's "Install on Android".
+1. Linux and macOS downloads (released in Toy Commander 0.15.0, Toy Racer 0.8.0), then the Raspberry Pi measurements and a first run on a real Mac.
+2. Android (Vulkan 1.3 only): the runtime port, then the launcher's "Install on Android".
 3. iOS/iPadOS: after Android, reusing the touch controls; Mac-only.
 
 ## Sources
