@@ -6,6 +6,8 @@ This is Toy Racer's changelog, kept in ToyCommander--QilinRecomp since the two g
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-28
+
 ### Changed
 - **The download's folder stays tidy**: unzipped over an older version, it removes at its first start what that version left behind (the `.bat` of the first downloads, Ninja, files the new kit no longer has: `kit\files.txt` lists every file a release holds). The disc an older version remembered is kept. Only the launcher's own files are touched.
 - **Only what you need at the top of the folder**: `Play <Title>.exe`, `README.txt`, `LICENSES` and `kit`; the built game and its logs are in `work\`. The executable kept from before a new build is deleted once the new one has run and closed normally.
