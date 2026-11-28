@@ -2,8 +2,10 @@
 #include "qilin/host/ios.hpp"
 
 #include <SDL3/SDL.h>
+#include <execinfo.h>
 #include <sys/mman.h>
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -132,7 +134,25 @@ int run_on_big_stack(int (*body)(void*), void* arg, size_t bytes) {
     return qilin_call_on_stack(arg, body, static_cast<char*>(p) + kGuard + bytes);
 }
 
+namespace {
+// The self test's diagnosis (CI's Simulator keeps no crash report): what
+// ended the program, with a backtrace.
+void say_where(const char* what) {
+    std::fprintf(stderr, "QILIN_IOS_SELFTEST: ended by %s\n", what);
+    void* frames[64];
+    const int n = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, n, 2);
+}
+void on_signal(int sig) {
+    say_where(sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGABRT ? "SIGABRT" : sig == SIGILL ? "SIGILL" : sig == SIGTRAP ? "SIGTRAP" : "a signal");
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+}  // namespace
+
 int self_test_display() {
+    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGTRAP, SIGPIPE}) std::signal(sig, on_signal);
+    std::atexit([] { say_where("exit()"); });
     Display::Options o;
     o.fullscreen = true;
     Display display(o);
