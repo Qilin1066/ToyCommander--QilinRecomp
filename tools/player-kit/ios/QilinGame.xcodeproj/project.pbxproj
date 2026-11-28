@@ -1,0 +1,183 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5A1C00000000000000000101 /* app.c in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C00000000000000000201 /* app.c */; };
+		5A1C00000000000000000102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5A1C00000000000000000202 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		5A1C00000000000000000201 /* app.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = app.c; sourceTree = "<group>"; };
+		5A1C00000000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5A1C00000000000000000203 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5A1C00000000000000000204 /* Game.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Game.xcconfig; sourceTree = "<group>"; };
+		5A1C00000000000000000205 /* QilinGame.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = QilinGame.xcconfig; sourceTree = "<group>"; };
+		5A1C00000000000000000206 /* QilinGame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QilinGame.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5A1C00000000000000000301 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5A1C00000000000000000401 = {
+			isa = PBXGroup;
+			children = (
+				5A1C00000000000000000201 /* app.c */,
+				5A1C00000000000000000202 /* Assets.xcassets */,
+				5A1C00000000000000000203 /* Info.plist */,
+				5A1C00000000000000000204 /* Game.xcconfig */,
+				5A1C00000000000000000205 /* QilinGame.xcconfig */,
+				5A1C00000000000000000402 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5A1C00000000000000000402 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5A1C00000000000000000206 /* QilinGame.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5A1C00000000000000000501 /* QilinGame */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5A1C00000000000000000802 /* Build configuration list for PBXNativeTarget "QilinGame" */;
+			buildPhases = (
+				5A1C00000000000000000302 /* Sources */,
+				5A1C00000000000000000301 /* Frameworks */,
+				5A1C00000000000000000303 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QilinGame;
+			productName = QilinGame;
+			productReference = 5A1C00000000000000000206 /* QilinGame.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5A1C00000000000000000601 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					5A1C00000000000000000501 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = 5A1C00000000000000000801 /* Build configuration list for PBXProject "QilinGame" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 5A1C00000000000000000401;
+			productRefGroup = 5A1C00000000000000000402 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5A1C00000000000000000501 /* QilinGame */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5A1C00000000000000000303 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5A1C00000000000000000102 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5A1C00000000000000000302 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5A1C00000000000000000101 /* app.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		5A1C00000000000000000701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		5A1C00000000000000000702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+			};
+			name = Release;
+		};
+		5A1C00000000000000000703 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C00000000000000000204 /* Game.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		5A1C00000000000000000704 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C00000000000000000204 /* Game.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5A1C00000000000000000801 /* Build configuration list for PBXProject "QilinGame" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A1C00000000000000000701 /* Debug */,
+				5A1C00000000000000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5A1C00000000000000000802 /* Build configuration list for PBXNativeTarget "QilinGame" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A1C00000000000000000703 /* Debug */,
+				5A1C00000000000000000704 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5A1C00000000000000000601 /* Project object */;
+}

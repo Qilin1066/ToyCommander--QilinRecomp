@@ -78,6 +78,7 @@ bool AudioOut::try_open() {
     if (!SDL_SetAudioStreamGain(stream_, gain_) || !SDL_ResumeAudioStreamDevice(stream_)) {
         unavailable("the playback device cannot start"); close(); return false;
     }
+    if (paused_) (void)SDL_PauseAudioStreamDevice(stream_);  // opened while paused: stays quiet
     if (warned_) {
         std::fprintf(stderr, "sound output recovered\n");
         recoveries_.fetch_add(1, std::memory_order_relaxed);
@@ -157,6 +158,15 @@ void AudioOut::set_volume(unsigned percent, bool muted) {
     if (!stream_) return;
     const StreamLock stream_lock(stream_);
     if (!SDL_SetAudioStreamGain(stream_, gain)) mark_failed("cannot change volume");
+}
+
+void AudioOut::set_paused(bool paused) {
+    const std::lock_guard device_lock(device_mutex_);
+    if (paused == paused_) return;
+    paused_ = paused;  // kept for a device opened again meanwhile (try_open)
+    if (!stream_) return;
+    if (!(paused ? SDL_PauseAudioStreamDevice(stream_) : SDL_ResumeAudioStreamDevice(stream_)))
+        mark_failed(paused ? "cannot pause the device" : "cannot resume the device");
 }
 
 AudioOut::Stats AudioOut::take_stats() {

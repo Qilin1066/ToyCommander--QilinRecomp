@@ -11,6 +11,8 @@
 #                       Resources/kit/  qilin, lib/lib<game>_kit.a, include/,
 #                                       build-flags.txt, game.txt, files.txt,
 #                                       VERSION
+#                       Resources/ios-kit/  the iOS kit, for "Play on iPad"
+#                                       (package-ios-kit.sh, README-ios.txt)
 # No compiler is bundled: Apple's SDK may not be redistributed, so the
 # launcher uses Apple's clang from the Command Line Tools (/usr/bin/clang++)
 # and offers Apple's installer where it's missing. Nothing in it is made from
@@ -26,6 +28,9 @@
 #                     SPIRV-Cross-LICENSE, SPIRV-Tools-LICENSE,
 #                     SPIRV-Headers-LICENSE, cereal-LICENSE
 #   ZSTD_LICENSE      zstd v1.5.7's LICENSE file (its BSD licence, for LICENSES/libchdr)
+#   IOS_KIT           the iOS kit, built already (package-ios-kit.sh ... device);
+#                     if unset, it's built here, with MOLTENVK_IOS_LIB
+#   MOLTENVK_IOS_SHA256  MoltenVK-ios.tar's SHA-256 (the iOS kit's MoltenVK)
 #   BUILD_DIR         where to build (default build-player-kit-macos)
 #   CMAKE_EXTRA       more cmake arguments (e.g. -DFETCHCONTENT_SOURCE_DIR_IMGUI=...)
 set -eu
@@ -52,6 +57,14 @@ cmake -S "$root" -B "$build" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTUR
 cmake --build "$build" --target qilin qilin_launcher "${game}_kit" "${game}_kit_link_check" --parallel
 mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources"
 cmake --install "$build" --component "$game" --prefix "$contents/Resources"
+# The iOS kit: built for iPadOS and iOS (a CMake build of its own), as it is.
+ios_kit=${IOS_KIT:-}
+if [ -z "$ios_kit" ]; then
+    ios_kit="$stage/ios-kit"
+    "$here/package-ios-kit.sh" "$game" "$version" "$ios_kit" device
+fi
+[ -f "$ios_kit/lib/lib${game}_ios_kit.a" ] || { echo "no iOS kit in $ios_kit" >&2; exit 1; }
+cp -R "$ios_kit" "$contents/Resources/ios-kit"
 cp "$build/qilin_launcher" "$contents/MacOS/$launcher"
 cp "$moltenvk/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib" "$contents/Frameworks/"
 python3 "$here/launcher/make_icns.py" "$contents/Resources/AppIcon.icns"
@@ -141,6 +154,14 @@ rest of the app. Its licence is LICENSE.txt (Apache-2.0). The library also
 contains SPIRV-Cross and SPIRV-Tools (Apache-2.0), tables from SPIRV-Headers
 and cereal (BSD-3-Clause), at the revisions MoltenVK names in its
 ExternalRevisions folder: their licences are the other files here.
+
+Contents/Resources/ios-kit/lib/lib${game}_ios_kit.a (the iOS kit, for "Play
+on iPad") contains MoltenVK ${MOLTENVK_VERSION} too, built for iPadOS and iOS:
+the static library (MoltenVK.xcframework, ios-arm64) from its release's
+MoltenVK-ios.tar (SHA-256 ${MOLTENVK_IOS_SHA256:?set MOLTENVK_IOS_SHA256}),
+unchanged, with the same contents and licences. The iOS kit's other parts
+(SDL3, Dear ImGui, Vulkan-Headers, volk, libchdr and what it bundles) are
+the ones whose licences are beside this folder.
 EOF
 
 # Every file the release holds (itself too), relative to the app: the

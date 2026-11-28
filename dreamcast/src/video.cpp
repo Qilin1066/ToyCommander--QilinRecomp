@@ -54,6 +54,28 @@ void measure_screen() {
     if (aspect > 0.0f) g_screen_widening.store(std::clamp(aspect * 0.75f, 1.0f, 3.0f), std::memory_order_relaxed);
 }
 
+// iPadOS: the app in the background (the display saw it at its last poll):
+// the game parks here, on the window's thread, with its time stopped and its
+// sound paused, and nothing drawn (the system allows no GPU work there);
+// nothing extra is saved. It goes on where it was once the app is in front
+// again (the display makes its images again at the next present).
+// `time_stopped`: the caller (the settings menu) has stopped the time
+// already, and starts it again itself. Nothing to do elsewhere.
+void park_in_background(bool time_stopped) {
+    if (!g_display->in_background()) return;
+    if (!time_stopped) pause_guest_time(true);
+    sound::set_paused(true);
+    while (g_display->in_background()) {
+        if (!g_display->poll()) {
+            std::fflush(nullptr);
+            std::_Exit(0);
+        }
+        SDL_Delay(50);  // the system suspends the app meanwhile: this only runs on the way in and out
+    }
+    sound::set_paused(false);
+    if (!time_stopped) pause_guest_time(false);
+}
+
 // The registers the renderer reads (the console's names).
 constexpr uint32_t kFbRCtrl = 0x005F8044u, kFbRSof1 = 0x005F8050u, kFbRSize = 0x005F805Cu, kFbWSof1 = 0x005F8060u,
                    kSpgControl = 0x005F80D0u;
@@ -301,6 +323,7 @@ void run_menu() {
             std::fflush(nullptr);
             std::_Exit(0);
         }
+        park_in_background(true);
         g_menu->tick();
         if (g_menu->quit_requested()) {
             rt::log("quit from the settings menu");
@@ -485,6 +508,7 @@ void poll() {
         std::fflush(nullptr);
         std::_Exit(0);
     }
+    park_in_background(false);
 }
 
 }  // namespace dreamcast::video

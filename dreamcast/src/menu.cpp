@@ -39,6 +39,20 @@ void check(VkResult r) {
 
 uint32_t lowest_bit(uint32_t v) { return v & (~v + 1); }
 
+// Where the menu draws: the window less what the system covers (an iPad's
+// rounded corners, the home indicator's strip: SDL's safe area; the whole
+// window on a desktop), in ImGui's coordinates (the window's).
+void usable_area(SDL_Window* window, ImVec2& pos, ImVec2& size) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    pos = vp->WorkPos, size = vp->WorkSize;
+    SDL_Rect safe{};
+    if (!window || !SDL_GetWindowSafeArea(window, &safe) || safe.w <= 0 || safe.h <= 0) return;
+    const float x0 = std::max(pos.x, vp->Pos.x + float(safe.x)), y0 = std::max(pos.y, vp->Pos.y + float(safe.y));
+    const float x1 = std::min(pos.x + size.x, vp->Pos.x + float(safe.x + safe.w));
+    const float y1 = std::min(pos.y + size.y, vp->Pos.y + float(safe.y + safe.h));
+    if (x1 > x0 && y1 > y0) pos = ImVec2(x0, y0), size = ImVec2(x1 - x0, y1 - y0);
+}
+
 }  // namespace
 
 Menu::Menu(host::Display& display, Settings& settings, std::filesystem::path folder)
@@ -54,6 +68,12 @@ Menu::Menu(host::Display& display, Settings& settings, std::filesystem::path fol
     ImGui::StyleColorsDark();
     // 1.25x, as the other recomps have it, times the display's own scale.
     float dpi = SDL_GetWindowDisplayScale(window);
+#if defined(QILIN_IOS)
+    // UIKit's window is in points already: the display's scale is mostly
+    // its pixel density, which ImGui's framebuffer scale covers.
+    if (const float density = SDL_GetWindowPixelDensity(window); density > 0.0f) dpi /= density;
+    if (dpi < 1.0f) dpi = 1.0f;
+#endif
     if (!(dpi > 0.0f)) dpi = 1.0f;
     ImGui::GetStyle().ScaleAllSizes(1.25f * dpi);
     ImGui::GetStyle().FontScaleMain = 1.25f;
@@ -299,8 +319,9 @@ bool Menu::frame_times_shown() const { return s_.performance_overlay; }
 void Menu::draw_frame_times() {
     const host::FrameTimes& t = display_.frame_times();
     const host::FrameTimes::Summary s = t.summary();
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 8.0f, vp->WorkPos.y + 8.0f), ImGuiCond_Always);
+    ImVec2 at, size;
+    usable_area(static_cast<SDL_Window*>(display_.sdl_window()), at, size);
+    ImGui::SetNextWindowPos(ImVec2(at.x + 8.0f, at.y + 8.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::Begin("##frame times", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
@@ -319,9 +340,10 @@ void Menu::draw_frame_times() {
 }
 
 void Menu::draw_hint() {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImVec2 at, size;
+    usable_area(static_cast<SDL_Window*>(display_.sdl_window()), at, size);
     const float pad = 12.0f;
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad), ImGuiCond_Always, ImVec2(0, 1));
+    ImGui::SetNextWindowPos(ImVec2(at.x + pad, at.y + size.y - pad), ImGuiCond_Always, ImVec2(0, 1));
     ImGui::SetNextWindowBgAlpha(0.6f);
     ImGui::Begin("##hint", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
@@ -331,9 +353,10 @@ void Menu::draw_hint() {
 }
 
 void Menu::draw_menu() {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImVec2 at, size;
+    usable_area(static_cast<SDL_Window*>(display_.sdl_window()), at, size);
+    ImGui::SetNextWindowPos(at);
+    ImGui::SetNextWindowSize(size);
     ImGui::SetNextWindowBgAlpha(0.88f);
     ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextUnformatted(QILIN_APP_TITLE " - settings (the game is paused)");
@@ -442,6 +465,7 @@ void Menu::controls_page() {
 }
 
 void Menu::display_page() {
+#if !defined(QILIN_IOS)  // iPadOS: the whole screen, always
     ImGui::SeparatorText("Window");
     bool full = display_.fullscreen();
     if (ImGui::Checkbox("Full screen (F11 or Alt+Enter)", &full)) {
@@ -467,6 +491,7 @@ void Menu::display_page() {
             ImGui::EndCombo();
         }
     }
+#endif
 
     ImGui::SeparatorText("Picture");
     int mode = int(s_.scaling);
@@ -492,6 +517,7 @@ void Menu::display_page() {
     }
     ImGui::Checkbox("Vsync", &s_.vsync);
     ImGui::Checkbox("Frame times (F3)", &s_.performance_overlay);
+#if !defined(QILIN_IOS)  // iPadOS: the display's own refresh, no modes to choose
     ImGui::SeparatorText("Refresh rate");
     const bool was_match = s_.match_refresh, was_vrr = s_.variable_refresh;
     ImGui::Checkbox("Fullscreen at a multiple of 60 Hz (120 Hz on a 144 Hz monitor)", &s_.match_refresh);
@@ -501,6 +527,7 @@ void Menu::display_page() {
         display_.set_fullscreen(true);  // the mode for the new choice
     }
     if (!display_.mode_note().empty()) ImGui::TextWrapped("%s", display_.mode_note().c_str());
+#endif
     if (ImGui::Button("Look at the picture")) peek_ = true;
     ImGui::SameLine();
     ImGui::TextDisabled("(any key or button comes back)");

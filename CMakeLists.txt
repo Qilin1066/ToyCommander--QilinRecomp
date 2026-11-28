@@ -6,6 +6,11 @@ cmake_minimum_required(VERSION 3.25)
 if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15 CACHE STRING "oldest macOS the runtime runs on")
 endif()
+# iPadOS and iOS (-DCMAKE_SYSTEM_NAME=iOS, tools/player-kit/ios.cmake): iOS
+# 16, the oldest the iOS kit is built for (docs/platforms.md, the iPad).
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 16.0 CACHE STRING "oldest iOS the runtime runs on")
+endif()
 # The single source of the version number (see CHANGELOG.md for the scheme).
 project(ToyCommanderQilinRecomp VERSION 0.15.0 LANGUAGES C CXX)
 # Each game is released on its own (tags toycommander-vX.Y.Z and
@@ -44,6 +49,15 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 option(QILIN_WERROR "Treat warnings in our own code as errors" OFF)
+# iPadOS and iOS: the game's runtime only (the iOS kit), for a device or the
+# Simulator. QILIN_IOS is defined for every compile: the host layer's iOS side
+# (host/src/ios.cpp), the disc from the app's Documents (shinobi/src/main.cpp).
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(QILIN_IOS ON)
+    add_compile_definitions(QILIN_IOS=1)
+else()
+    set(QILIN_IOS OFF)
+endif()
 option(QILIN_REQUIRE_LAUNCHER_TESTS "Require the launcher's build test (CI): a native build, not a cross-compile" OFF)
 
 # ---- Warnings for our own targets ----
@@ -281,6 +295,14 @@ if(QILIN_HOST)
     set(SDL_TESTS OFF CACHE BOOL "" FORCE)
     set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
     set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)  # synthetic input: not needed
+    if(QILIN_IOS)
+        # Not used on iPadOS: OpenGL ES (no OpenGL anywhere), the camera, and
+        # HIDAPI, whose Bluetooth controllers would need a Bluetooth
+        # permission; controllers come through Apple's GameController.
+        set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
+        set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
+        set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+    endif()
     FetchContent_Declare(SDL3 GIT_REPOSITORY https://github.com/libsdl-org/SDL GIT_TAG release-3.4.20 GIT_SHALLOW ON)
     FetchContent_Declare(VulkanHeaders GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers
                          GIT_TAG vulkan-sdk-1.4.363.0 GIT_SHALLOW ON)
@@ -302,6 +324,16 @@ if(QILIN_HOST)
     target_include_directories(qilin_volk PUBLIC ${volk_SOURCE_DIR})
     target_link_libraries(qilin_volk PUBLIC Vulkan::Headers ${CMAKE_DL_LIBS})
     target_compile_definitions(qilin_volk PUBLIC VK_NO_PROTOTYPES)
+    if(QILIN_IOS)
+        # MoltenVK is linked in statically (iOS has no dlopen for it), and
+        # its library defines every Vulkan function under its own name: volk's
+        # pointers of the same names go into namespace volk (VOLK_NAMESPACE,
+        # which compiles volk.c as C++), and volk is given MoltenVK's
+        # vkGetInstanceProcAddr (host/src/moltenvk.cpp). The window's
+        # surface is a Metal layer's (VK_EXT_metal_surface).
+        set_source_files_properties(${volk_SOURCE_DIR}/volk.c PROPERTIES LANGUAGE CXX)
+        target_compile_definitions(qilin_volk PUBLIC VOLK_NAMESPACE VK_USE_PLATFORM_METAL_EXT)
+    endif()
 
     # Dear ImGui (MIT) for the settings menu, as the other Qilin recomps draw
     # theirs: the same commit (v1.93.0), its core and its SDL3 and Vulkan
@@ -332,6 +364,9 @@ if(QILIN_HOST)
         target_include_directories(qilin_host_${game} PUBLIC host/include)
         target_compile_definitions(qilin_host_${game} PUBLIC QILIN_APP="${game}" QILIN_APP_TITLE="${title}")
         target_link_libraries(qilin_host_${game} PUBLIC qilin_volk PRIVATE SDL3::SDL3-static qilin_warnings)
+        if(QILIN_IOS)
+            target_sources(qilin_host_${game} PRIVATE host/src/ios.cpp host/src/moltenvk.cpp)
+        endif()
         add_library(dreamcast_menu_${game} STATIC dreamcast/src/settings.cpp dreamcast/src/menu.cpp dreamcast/src/save_history.cpp)
         target_include_directories(dreamcast_menu_${game} PUBLIC dreamcast/src recomp/runtime)
         target_link_libraries(dreamcast_menu_${game} PUBLIC qilin_host_${game} qilin_imgui PRIVATE SDL3::SDL3-static qilin_warnings qilin_file_store)
@@ -342,7 +377,7 @@ if(QILIN_HOST)
     # Vulkan structures are written {sType} with the rest zeroed: that's the idiom, not a mistake.
     # (On the sources, so it comes after -Wextra on the command line.)
     if(NOT MSVC)
-        set_source_files_properties(host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/tests/vktest.cpp
+        set_source_files_properties(host/src/vulkan.cpp host/src/display.cpp host/src/audio.cpp host/src/paths.cpp host/src/ios.cpp host/tests/vktest.cpp
                                     dreamcast/src/renderer.cpp dreamcast/src/menu.cpp dreamcast/tests/render_test.cpp
                                     PROPERTIES COMPILE_OPTIONS -Wno-missing-field-initializers)
     endif()
@@ -428,7 +463,11 @@ if(QILIN_HOST)
 endif()
 
 # The macOS download's parts: the launcher's Apple side, the universal kit.
-if(APPLE)
+# The iOS kit (iPadOS and iOS, a device or the Simulator) is the Mac
+# download's too, but built for iOS: tools/player-kit/ios.cmake.
+if(QILIN_IOS)
+    include(tools/player-kit/ios.cmake)
+elseif(APPLE)
     include(tools/player-kit/macos.cmake)
 endif()
 
@@ -493,14 +532,20 @@ function(qilin_game game title boot version)
         target_link_options(${game}_game INTERFACE -Wl,--stack,16777216)
     endif()
     # The program linked without the lifted code: the library is complete.
-    add_executable(${game}_link_check tools/player-kit/link_check.cpp)
-    target_link_libraries(${game}_link_check PRIVATE ${game}_game)
+    # (iOS: an app, linked by the iOS kit's Xcode project, tools/player-kit/check-ios-kit.sh.)
+    if(NOT QILIN_IOS)
+        add_executable(${game}_link_check tools/player-kit/link_check.cpp)
+        target_link_libraries(${game}_link_check PRIVATE ${game}_game)
+    endif()
 
     if(QILIN_PLAYER_KIT)
         qilin_player_kit(${game})
     endif()
     if(NOT boot)
         return()
+    endif()
+    if(QILIN_IOS)
+        message(FATAL_ERROR "iOS builds make the iOS kit only: the game is linked by its Xcode project (tools/player-kit/ios)")
     endif()
     set(QILIN_LIFT_FILES 24)
     set(gen ${CMAKE_BINARY_DIR}/generated/${game})
@@ -534,6 +579,10 @@ endfunction()
 # Linux: built with the zig the download bundles, so the library's libc++ is
 # the one the player's compiles link with (tools/player-kit/package-linux.sh).
 function(qilin_player_kit game)
+    if(QILIN_IOS)
+        qilin_player_kit_ios(${game})  # tools/player-kit/ios.cmake
+        return()
+    endif()
     if(APPLE)
         qilin_player_kit_macos(${game})  # tools/player-kit/macos.cmake
         return()

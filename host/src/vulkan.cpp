@@ -6,16 +6,35 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(QILIN_IOS)
+#include "qilin/host/ios.hpp"
+#endif
+
 namespace qilin::host {
+
+#if defined(QILIN_IOS)
+PFN_vkGetInstanceProcAddr moltenvk_loader();  // moltenvk.cpp
+#endif
 
 void die(const char* format, ...) {
     std::fputs(QILIN_APP ": ", stderr);
     va_list args;
     va_start(args, format);
+#if defined(QILIN_IOS)
+    // Shown too: nobody sees an app's stderr.
+    va_list again;
+    va_copy(again, args);
+    char text[1024];
+    std::vsnprintf(text, sizeof text, format, again);
+    va_end(again);
+#endif
     std::vfprintf(stderr, format, args);
     va_end(args);
     std::fputc('\n', stderr);
     std::fflush(nullptr);
+#if defined(QILIN_IOS)
+    ios::show_fatal(text);
+#endif
     std::_Exit(70);
 }
 
@@ -55,8 +74,12 @@ void Gpu::prefer(const std::string& name) { g_preferred = name; }
 
 Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swapchain,
                 VkSurfaceKHR (*make_surface)(VkInstance, void*), void* surface_arg, VkSurfaceKHR* surface_out) {
+#if defined(QILIN_IOS)
+    volkInitializeCustom(moltenvk_loader());  // linked in: nothing to look for
+#else
     if (volkInitialize() != VK_SUCCESS)
         die("no Vulkan loader was found: install your GPU's Vulkan 1.3 driver (on macOS, MoltenVK)");
+#endif
     if (volkGetInstanceVersion() < VK_API_VERSION_1_3)
         die("the Vulkan loader is older than 1.3: update your GPU driver");
 
@@ -65,11 +88,33 @@ Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swap
     app.pApplicationName = QILIN_APP_TITLE " (Qilin recompilation)";
     app.apiVersion = VK_API_VERSION_1_3;
     std::vector<const char*> ext(instance_extensions.begin(), instance_extensions.end());
+    // What the instance offers: a missing extension is named, not a bare
+    // VK_ERROR_EXTENSION_NOT_PRESENT.
+    std::vector<VkExtensionProperties> offered;
+    {
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+        offered.resize(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, offered.data());
+        offered.resize(n);
+    }
+    const auto offers = [&](const char* name) {
+        for (const auto& e : offered)
+            if (std::strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    };
+    for (const char* name : ext)
+        if (!offers(name)) die("Vulkan: the instance has no %s, which the window needs", name);
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 #if defined(__APPLE__)
-    // MoltenVK is a portability implementation: it's only listed if asked for.
-    ext.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    // MoltenVK is a portability implementation: through the Vulkan loader
+    // it's only listed if asked for. MoltenVK on its own (iOS, where it's
+    // linked in) may not offer the loader's extension: asked for only if
+    // offered.
+    if (offers(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        ext.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
 #endif
     ici.pApplicationInfo = &app;
     ici.enabledExtensionCount = static_cast<uint32_t>(ext.size());

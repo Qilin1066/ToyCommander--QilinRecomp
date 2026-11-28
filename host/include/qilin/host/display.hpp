@@ -75,6 +75,11 @@ public:
     // Whether the window has the keyboard. While another window has it, the
     // buttons, keys and pads all read as nothing held, and no pad rumbles.
     bool focused() const;
+    // iPadOS and iOS: the app isn't in front (the system's "will enter the
+    // background" until "did enter the foreground", as of the last poll).
+    // Nothing is presented meanwhile (the system allows no GPU work there);
+    // the caller should stop its own drawing too. Always false elsewhere.
+    bool in_background() const;
     // The screen's shape, width over height: the window's drawing area (the
     // desktop's, fullscreen), or the headless target's. 0 while minimised.
     float screen_aspect() const;

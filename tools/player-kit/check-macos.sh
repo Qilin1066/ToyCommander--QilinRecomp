@@ -2,8 +2,9 @@
 # Checks a game's macOS download as a player's Mac would see it (CI's smoke
 # test, on Apple silicon and on Intel):
 #   tools/player-kit/check-macos.sh <toycommander|toyracer> <download.dmg>
-# Mounts the disk image; checks the app's layout, that its programs and
-# libraries are universal, its signature and files.txt; and builds a program
+# Mounts the disk image; checks the app's layout (the iOS kit's too), that
+# its programs and libraries are universal, its signature and files.txt
+# (which lists the iOS kit's files too); and builds a program
 # as the launcher builds the game, with the kit's build-flags.txt and Apple's
 # /usr/bin/clang++ (tools/player-kit/link_check.cpp, the lifted code's
 # stand-in, linked with the kit's library), then runs it.
@@ -22,6 +23,7 @@ trap 'hdiutil detach "$mnt" -force >/dev/null 2>&1 || true; rm -rf "$scratch"' E
 app="$mnt/$TITLE.app"
 contents="$app/Contents"
 kit="$contents/Resources/kit"
+ios_kit="$contents/Resources/ios-kit"
 
 # The layout.
 for f in "$mnt/README.txt" "$contents/Info.plist" "$contents/MacOS/Play $TITLE" "$contents/Frameworks/libMoltenVK.dylib" \
@@ -29,9 +31,16 @@ for f in "$mnt/README.txt" "$contents/Info.plist" "$contents/MacOS/Play $TITLE" 
          "$kit/build-flags.txt" "$kit/game.txt" "$kit/files.txt" "$kit/VERSION" \
          "$contents/Resources/LICENSES/$PACKAGE/LICENSE.txt" "$contents/Resources/LICENSES/SDL3/LICENSE.txt" \
          "$contents/Resources/LICENSES/MoltenVK/LICENSE.txt" "$contents/Resources/LICENSES/MoltenVK/SPIRV-Cross-LICENSE.txt" \
-         "$contents/Resources/LICENSES/MoltenVK/cereal-LICENSE.txt" "$contents/Resources/LICENSES/libchdr/zstd-LICENSE.txt"; do
+         "$contents/Resources/LICENSES/MoltenVK/cereal-LICENSE.txt" "$contents/Resources/LICENSES/libchdr/zstd-LICENSE.txt" \
+         "$ios_kit/lib/lib${game}_ios_kit.a" "$ios_kit/include/guest.hpp" "$ios_kit/build-flags.txt" "$ios_kit/README-ios.txt" \
+         "$ios_kit/VERSION" "$ios_kit/xcode/QilinGame.xcodeproj/project.pbxproj" "$ios_kit/xcode/Info.plist" \
+         "$ios_kit/xcode/Game.xcconfig" "$ios_kit/xcode/Assets.xcassets/AppIcon.appiconset/AppIcon.png"; do
     [ -f "$f" ] || fail "missing: ${f#"$mnt/"}"
 done
+# The iOS kit: arm64 devices (tools/player-kit/check-ios-kit.sh builds an app from it in CI).
+[ "$(lipo -archs "$ios_kit/lib/lib${game}_ios_kit.a")" = arm64 ] || fail "the iOS kit's archive isn't arm64 only"
+grep -qx 'sdk = iphoneos' "$ios_kit/build-flags.txt" || fail "the iOS kit isn't the device's"
+cmp -s "$ios_kit/VERSION" "$kit/VERSION" || fail "the iOS kit is from another version"
 [ -L "$mnt/Applications" ] && [ "$(readlink "$mnt/Applications")" = /Applications ] || fail "no link to /Applications"
 [ -x "$contents/MacOS/Play $TITLE" ] && [ -x "$kit/qilin" ] || fail "the launcher or qilin isn't executable"
 plutil -lint "$contents/Info.plist" >/dev/null
@@ -54,10 +63,10 @@ lipo -info "$kit/lib/lib${game}_kit.a"
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dv "$app" 2>&1 | grep -q 'Signature=adhoc' || fail "the app isn't signed ad hoc"
 
-# files.txt names every file the release holds, and nothing else, in the kit and the licences.
+# files.txt names every file the release holds, and nothing else, in the kits and the licences.
 (cd "$app" && while IFS= read -r f; do [ -f "$f" ] || fail "files.txt names $f, which isn't there"; done < "$kit/files.txt")
-(cd "$app" && find Contents/Resources/kit Contents/Resources/LICENSES -type f | LC_ALL=C sort) > "$scratch/found.txt"
-grep -E '^Contents/Resources/(kit|LICENSES)/' "$kit/files.txt" > "$scratch/listed.txt"
+(cd "$app" && find Contents/Resources/kit Contents/Resources/ios-kit Contents/Resources/LICENSES -type f | LC_ALL=C sort) > "$scratch/found.txt"
+grep -E '^Contents/Resources/(kit|ios-kit|LICENSES)/' "$kit/files.txt" > "$scratch/listed.txt"
 diff "$scratch/listed.txt" "$scratch/found.txt" || fail "files.txt and the app disagree"
 
 "$kit/qilin" --version

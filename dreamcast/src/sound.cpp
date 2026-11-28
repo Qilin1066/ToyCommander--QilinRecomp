@@ -328,6 +328,10 @@ void set_volume(unsigned percent, bool muted) {
     if (g_device) g_device->set_volume(percent, muted);
 }
 
+void set_paused(bool paused) {
+    if (g_device) g_device->set_paused(paused);
+}
+
 void start() {
     const char* headless = std::getenv("QILIN_HEADLESS");
     if (!(headless && *headless && *headless != '0')) g_device = std::make_unique<qilin::host::AudioOut>();
