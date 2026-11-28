@@ -363,9 +363,10 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
                 ++progress.done;
             }
         };
-        std::vector<std::jthread> pool;
+        // std::thread, joined here: the Intel Macs' Apple Clang has no std::jthread.
+        std::vector<std::thread> pool;
         for (unsigned j = 0; j < jobs; ++j) pool.emplace_back(worker);
-        pool.clear();  // joins
+        for (std::thread& t : pool) t.join();
         if (cancel) return stopped();
         if (broken) return failed(error);
     }
