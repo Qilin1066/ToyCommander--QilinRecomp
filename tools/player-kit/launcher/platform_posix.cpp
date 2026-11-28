@@ -100,6 +100,20 @@ std::string release_asset_suffix() {
 
 std::string_view executable_suffix() { return ""; }
 
+std::string host_architecture() {
+#if defined(__APPLE__)
+    // The Mac's, not this process's (which may be Intel code under Rosetta).
+    int arm64 = 0;
+    size_t size = sizeof arm64;
+    if (sysctlbyname("hw.optional.arm64", &arm64, &size, nullptr, 0) == 0 && arm64) return "arm64";
+    return "x86_64";
+#else
+    struct utsname u{};
+    const std::string machine = uname(&u) == 0 ? std::string(u.machine) : std::string();
+    return machine == "aarch64" || machine == "arm64" ? "arm64" : machine;
+#endif
+}
+
 bool claim_folder(const Kit& kit) {
     std::error_code ec;
     const std::string key = fs::absolute(kit.top, ec).string();

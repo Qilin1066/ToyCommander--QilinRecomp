@@ -269,19 +269,32 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         return a.size != b.size ? a.size > b.size : a.name < b.name;
     });
 
-    // The kit's flags (build-flags.txt), paths relative to work\.
+    // The kit's flags (build-flags.txt), paths relative to work\ where the
+    // kit is beside it (macOS: work/ is in the data folder, the kit in the
+    // app, so its whole path; each flag is one argument, spaces and all).
     const auto flag_text = read_file(kit.flags_file());
     if (!flag_text) return failed("This download has no kit\\build-flags.txt. Unpack it again.");
     const auto vars = parse_settings(*flag_text);
+    std::error_code same_ec;
+    const std::string kit_dir = fs::equivalent(kit.kit, work.parent_path() / "kit", same_ec) ? "../kit" : show(kit.kit);
+    // A universal kit (macOS's) adds each processor's own after the shared
+    // ones: `ldflags.arm64` after `ldflags` (host_architecture()).
+    const std::string arch = host_architecture();
     const auto flags_of = [&](std::string_view name) {
-        const auto it = vars.find(name);
-        return it == vars.end() ? std::vector<std::string>{} : split_flags(it->second, "../kit");
+        std::vector<std::string> out;
+        for (const std::string& key : {std::string(name), std::string(name) + "." + arch})
+            if (const auto it = vars.find(key); it != vars.end())
+                for (std::string& f : split_flags(it->second, kit_dir)) out.push_back(std::move(f));
+        return out;
     };
     std::vector<std::string> cxxflags = flags_of("cxxflags");
     // For this computer's processor: build-flags.txt's `native` where the
-    // kit says (-mcpu=native on ARM), else the option's -march=native.
-    if (const auto native = vars.find("native"); native != vars.end() && options.native == BuildOptions{}.native) {
-        for (std::string& f : split_flags(native->second, "../kit")) cxxflags.push_back(std::move(f));
+    // kit says (-mcpu=native on ARM; `native.arm64` in a universal kit),
+    // else the option's -march=native.
+    auto native = vars.find("native." + arch);
+    if (native == vars.end()) native = vars.find("native");
+    if (native != vars.end() && options.native == BuildOptions{}.native) {
+        for (std::string& f : split_flags(native->second, kit_dir)) cxxflags.push_back(std::move(f));
     } else if (!options.native.empty()) {
         cxxflags.push_back(options.native);
     }

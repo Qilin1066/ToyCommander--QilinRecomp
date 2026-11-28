@@ -10,7 +10,18 @@ One launcher program (`tools/player-kit/launcher`), the same logic everywhere; t
 |---|---|---|---|
 | Windows 10/11 x64 | zip, `Play <Title>.exe` | LLVM-MinGW, bundled | unsigned: SmartScreen's "More info, Run anyway" once |
 | Linux x86-64 and ARM64 | `.tar.gz`, `Play <Title>` | zig (MIT), bundled: its own libc++, the system's glibc (2.35 or later) | menu entry from the launcher; needs a Vulkan 1.3 driver |
-| macOS 10.15+, Apple silicon and Intel | `.dmg`, `<Title>.app` (universal) | Apple's clang from the Command Line Tools (free; Apple's SDK may not be redistributed): the launcher offers Apple's installer | MoltenVK (Apache-2.0) inside the app; unsigned: "Open Anyway" in Privacy & Security once (notarisation needs a paid Apple developer account) |
+| macOS 14.5+ (Xcode 16's tools need it; the runtime itself is built for 10.15), Apple silicon and Intel | `.dmg`, `<Title>.app` (universal) | Apple's clang from the Command Line Tools (free; Apple's SDK may not be redistributed): the launcher offers Apple's installer | MoltenVK (Apache-2.0) inside the app; unsigned: "Open Anyway" in Privacy & Security once (notarisation needs a paid Apple developer account) |
+
+### The macOS download
+
+`tools/player-kit/package-macos.sh` (CI: `.github/workflows/player-kit-macos.yml`) builds one universal disk image, `<Package>-X.Y.Z-macos.dmg`: `<Title>.app`, a link to `/Applications` and `README.txt` (from `README-macos.txt.in`).
+
+- **The app.** `Contents/MacOS/Play <Title>` (the launcher), `Contents/Frameworks/libMoltenVK.dylib` (MoltenVK's own release, pinned by SHA-256), `Contents/Resources/AppIcon.icns` (`launcher/make_icns.py`, the `.ico`'s artwork), `Contents/Resources/LICENSES` and `Contents/Resources/kit`: `qilin`, `lib/lib<game>_kit.a` (both universal; the archive merged by Apple's `libtool`, `tools/player-kit/macos.cmake`), `include/`, `build-flags.txt`, `game.txt` (`compiler=/usr/bin/clang++`), `files.txt` (paths relative to the app) and `VERSION`. The build's `work/` is in `~/Library/Application Support/qilin/<game>`, so the app is never written to and its seal stays whole.
+- **Flags.** `build-flags.txt` names each processor's own flags beside the shared ones (`native.arm64 = -arch arm64 -mcpu=native`, `native.x86_64 = -arch x86_64 -march=native`, `ldflags.<arch>`): the launcher takes the Mac's own architecture (`host_architecture()`, Apple silicon even under Rosetta), so the game is built for that Mac only. `$kit` becomes the kit's whole path there (work/ isn't beside it).
+- **Apple's compiler.** Before a build, `launcher/apple_tools.cpp` runs `xcode-select -p` and `clang++ --version`: missing tools get "Install Apple's command line tools" (`xcode-select --install`, Apple's own dialog) and "Check again"; an unagreed licence says so; Apple clang older than 16 says to update macOS's software.
+- **MoltenVK.** volk opens `libvulkan.dylib`, `libvulkan.1.dylib`, then `libMoltenVK.dylib` by name, and SDL3, given no library, takes any `vkGetInstanceProcAddr` already in the process, which in the game is volk's variable. So the launcher starts the game with `DYLD_FALLBACK_LIBRARY_PATH` set to the app's `Frameworks` alone (volk finds the app's MoltenVK, and not a Vulkan SDK's loader) and `SDL_VULKAN_LIBRARY` set to the same file. The launcher's own window needs neither: SDL looks in `@executable_path/../Frameworks` first, and falls back to its software renderer.
+- **Gatekeeper.** Signed ad hoc after assembly (`codesign -s -`: the dylib and `qilin`, then the app); nothing removes quarantine. The README and the release notes give the one-time "Open Anyway" steps.
+- **CI's checks.** `tools/player-kit/check-macos.sh` mounts the image on an Apple silicon and an Intel runner: the layout, `lipo` (universal), `codesign --verify --deep --strict`, `files.txt` against the app, then a stand-in game compiled and linked with the kit's flags by `/usr/bin/clang++` and started (it must load and print its usage).
 
 ### Linux
 

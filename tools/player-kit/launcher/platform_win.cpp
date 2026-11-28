@@ -73,6 +73,7 @@ std::expected<void, std::string> swap_in(const fs::path& target, const fs::path&
 
 std::string release_asset_suffix() { return "windows-x64.zip"; }
 std::string_view executable_suffix() { return ".exe"; }
+std::string host_architecture() { return "x86_64"; }  // the Windows download is x64 only
 
 bool claim_folder(const Kit& kit) {
     std::wstring folder = fs::absolute(kit.top).wstring();
