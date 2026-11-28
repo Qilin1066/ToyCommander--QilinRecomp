@@ -7,7 +7,7 @@
 #include <system_error>
 
 #include "kit_text.hpp"
-#include "process.hpp"
+#include "platform.hpp"
 
 namespace qilin::launcher {
 
@@ -15,10 +15,14 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// A path as files.txt writes it, compared without case (as Windows does).
+// A path as files.txt writes it ('/' separators), compared without case
+// where the system's file names have none (Windows, macOS).
 std::string key(const fs::path& relative) {
-    std::string s = narrow(relative.generic_wstring());
+    const std::u8string text = relative.generic_u8string();
+    std::string s(text.begin(), text.end());
+#if defined(_WIN32) || defined(__APPLE__)
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+#endif
     return s;
 }
 
@@ -59,7 +63,6 @@ void keep_listed(const fs::path& top, const fs::path& folder, const std::set<std
 
 Tidied tidy_folder(const Kit& kit) {
     Tidied out;
-    std::error_code ec;
 
     // kit\ and LICENSES\: exactly what this release holds.
     if (const auto text = read_file(kit.kit / "files.txt")) {
@@ -68,20 +71,26 @@ Tidied tidy_folder(const Kit& kit) {
             const size_t end = std::min(rest.find('\n'), rest.size());
             const std::string_view line = trim(rest.substr(0, end));
             rest.remove_prefix(std::min(end + 1, rest.size()));
-            if (!line.empty()) listed.insert(key(fs::path(widen(line))));
+            if (!line.empty()) listed.insert(key(from_utf8(line)));
         }
         // A list that doesn't name the files the launcher is reading from is
-        // the wrong one (or damaged): then nothing is removed.
-        if (listed.contains("kit/game.txt") && listed.contains("kit/files.txt") && listed.contains("kit/qilin.exe")) {
+        // the wrong one (or damaged): then nothing is removed. Paths are the
+        // download's (macOS: the app's), so the kit is Contents/Resources/kit
+        // there; LICENSES is beside the kit.
+        const fs::path kit_rel = kit.kit.lexically_relative(kit.top);
+        if (listed.contains(key(kit_rel / "game.txt")) && listed.contains(key(kit_rel / "files.txt")) &&
+            listed.contains(key(kit_rel / from_utf8("qilin" + std::string(executable_suffix()))))) {
             keep_listed(kit.top, kit.kit, listed, out);
-            keep_listed(kit.top, kit.top / "LICENSES", listed, out);
+            keep_listed(kit.top, kit.kit.parent_path() / "LICENSES", listed, out);
         }
     }
 
-    // The top: what older downloads kept there.
-    const fs::path old_game = kit.top / widen(kit.exe);
-    for (const fs::path& p : {kit.top / widen("Play " + kit.title + ".bat"), old_game, fs::path(old_game).concat(L".previous"),
-                              fs::path(old_game).concat(L".new"), kit.top / "run.log", kit.top / "run-errors.log"})
+#if defined(_WIN32)
+    std::error_code ec;
+    // The top: what older Windows downloads kept there.
+    const fs::path old_game = kit.top / from_utf8(kit.exe);
+    for (const fs::path& p : {kit.top / from_utf8("Play " + kit.title + ".bat"), old_game, fs::path(old_game).concat(".previous"),
+                              fs::path(old_game).concat(".new"), kit.top / "run.log", kit.top / "run-errors.log"})
         remove_file(p, out);
 
     // work\: Ninja's files, and play.ps1's remembered disc, kept if the
@@ -96,7 +105,8 @@ Tidied tidy_folder(const Kit& kit) {
     }
     for (const char* name : {"disc.txt", "disc.txt.tmp", "build.ninja", ".ninja_log", ".ninja_deps"}) remove_file(kit.work / name, out);
     for (fs::directory_iterator it(kit.work / "obj", ec), end; !ec && it != end; it.increment(ec))
-        if (it->path().extension() == L".d") remove_file(it->path(), out);  // Ninja's dependency files
+        if (it->path().extension() == ".d") remove_file(it->path(), out);  // Ninja's dependency files
+#endif
     return out;
 }
 

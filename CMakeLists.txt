@@ -159,18 +159,32 @@ foreach(part IN ITEMS json version kit)
     add_test(NAME qilin_launcher_${part}_test COMMAND qilin_launcher_test ${part})
 endforeach()
 
-# The launcher's build engine, process handling and disc check (Windows).
-# Its test runs the real build with stand-in children (launcher_stub.cpp).
+# The launcher's build engine, process handling, disc check and updates, on
+# every desktop system: what the system provides is platform_win.cpp,
+# process_win.cpp and shortcut_win.cpp on Windows, the _posix.cpp ones on
+# Linux and macOS. The build test (Windows for now) runs the real build with
+# stand-in children (launcher_stub.cpp).
 if(QILIN_REQUIRE_LAUNCHER_TESTS AND (NOT WIN32 OR CMAKE_CROSSCOMPILING))
     message(FATAL_ERROR "the launcher's tests need a native Windows build")
 endif()
+set(QILIN_LAUNCHER_DIR tools/player-kit/launcher)
 if(WIN32)
-    set(QILIN_LAUNCHER_DIR tools/player-kit/launcher)
-    add_library(qilin_launcher_core STATIC ${QILIN_LAUNCHER_DIR}/process.cpp ${QILIN_LAUNCHER_DIR}/kit.cpp ${QILIN_LAUNCHER_DIR}/disc.cpp
-                                           ${QILIN_LAUNCHER_DIR}/build.cpp ${QILIN_LAUNCHER_DIR}/update.cpp
-                                           ${QILIN_LAUNCHER_DIR}/tidy.cpp ${QILIN_LAUNCHER_DIR}/shortcut.cpp)
-    target_include_directories(qilin_launcher_core PUBLIC ${QILIN_LAUNCHER_DIR})
-    target_link_libraries(qilin_launcher_core PUBLIC qilin_disc winhttp ole32 uuid shell32 PRIVATE qilin_warnings)
+    set(qilin_launcher_system win)
+else()
+    set(qilin_launcher_system posix)
+endif()
+add_library(qilin_launcher_core STATIC ${QILIN_LAUNCHER_DIR}/kit.cpp ${QILIN_LAUNCHER_DIR}/disc.cpp ${QILIN_LAUNCHER_DIR}/build.cpp
+                                       ${QILIN_LAUNCHER_DIR}/update.cpp ${QILIN_LAUNCHER_DIR}/tidy.cpp
+                                       ${QILIN_LAUNCHER_DIR}/platform_${qilin_launcher_system}.cpp
+                                       ${QILIN_LAUNCHER_DIR}/process_${qilin_launcher_system}.cpp
+                                       ${QILIN_LAUNCHER_DIR}/shortcut_${qilin_launcher_system}.cpp)
+target_include_directories(qilin_launcher_core PUBLIC ${QILIN_LAUNCHER_DIR})
+target_link_libraries(qilin_launcher_core PUBLIC qilin_disc PRIVATE qilin_warnings)
+if(WIN32)
+    target_link_libraries(qilin_launcher_core PUBLIC winhttp ole32 uuid shell32)
+endif()
+qilin_tool(qilin_launcher_core)
+if(WIN32)
     if(NOT CMAKE_CROSSCOMPILING)
         add_executable(qilin_launcher_stub tools/check/launcher_stub.cpp)
         target_include_directories(qilin_launcher_stub PRIVATE recomp/runtime)
@@ -366,18 +380,20 @@ if(QILIN_HOST)
     add_test(NAME qilin_audio_callback_test COMMAND qilin_audio_callback_test)
     set_tests_properties(qilin_audio_callback_test PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy;SDL_AUDIO_DEVICE_SAMPLE_FRAMES=128" TIMEOUT 25)
 
-    # The Windows download's launcher, `Play <Title>.exe` in the download
-    # (package.sh): one program for both games, which reads kit\game.txt.
-    # Dear ImGui over SDL_Renderer (its Vulkan or software driver).
+    # The downloads' launcher, `Play <Title>` (Windows: .exe; macOS: the app's
+    # program): one program for both games, which reads kit/game.txt. Dear
+    # ImGui over SDL_Renderer (its Vulkan or software driver).
+    add_library(qilin_imgui_sdlrenderer STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+    target_link_libraries(qilin_imgui_sdlrenderer PUBLIC qilin_imgui)
+    if(MSVC)
+        target_compile_options(qilin_imgui_sdlrenderer PRIVATE /W0)
+    else()
+        target_compile_options(qilin_imgui_sdlrenderer PRIVATE -w)
+    endif()
+    add_executable(qilin_launcher WIN32 tools/player-kit/launcher/main.cpp)
+    target_link_libraries(qilin_launcher PRIVATE qilin_launcher_core qilin_imgui_sdlrenderer qilin_imgui SDL3::SDL3-static Threads::Threads qilin_warnings)
+    qilin_tool(qilin_launcher)
     if(WIN32)
-        add_library(qilin_imgui_sdlrenderer STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
-        target_link_libraries(qilin_imgui_sdlrenderer PUBLIC qilin_imgui)
-        if(MSVC)
-            target_compile_options(qilin_imgui_sdlrenderer PRIVATE /W0)
-        else()
-            target_compile_options(qilin_imgui_sdlrenderer PRIVATE -w)
-        endif()
-        add_executable(qilin_launcher WIN32 tools/player-kit/launcher/main.cpp)
         # Its icon, file details and manifest (launcher.rc), and the same icon
         # for the game, which the player's PC links (the player kit's icon.o).
         # Off only where there's no resource compiler (zig as the compiler).
@@ -392,7 +408,6 @@ if(QILIN_HOST)
         elseif(QILIN_PLAYER_KIT)
             message(FATAL_ERROR "the player kit needs QILIN_WINDOWS_RESOURCES=ON (the game's icon)")
         endif()
-        target_link_libraries(qilin_launcher PRIVATE qilin_launcher_core qilin_imgui_sdlrenderer qilin_imgui SDL3::SDL3-static qilin_warnings)
     endif()
 endif()
 

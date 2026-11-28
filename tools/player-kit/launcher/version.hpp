@@ -59,7 +59,8 @@ inline std::string to_string(const Version& v) {
 // The newest published release of one game in GitHub's releases list (the
 // JSON array https://api.github.com/repos/<owner>/<repo>/releases returns):
 // tags `<game>-vX.Y.Z`, neither drafts nor pre-releases, with the download
-// `<package>-X.Y.Z-windows-x64.zip` attached.
+// `<package>-X.Y.Z-<suffix>` attached (windows-x64.zip, linux-x86_64.tar.gz,
+// linux-arm64.tar.gz, macos.dmg: platform.hpp's release_asset_suffix).
 struct Release {
     Version version;
     std::string tag;
@@ -69,7 +70,8 @@ struct Release {
 };
 
 inline std::expected<std::optional<Release>, std::string> newest_release(std::string_view releases_json, std::string_view game,
-                                                                         std::string_view package) {
+                                                                         std::string_view package,
+                                                                         std::string_view suffix = "windows-x64.zip") {
     auto doc = json::parse(releases_json);
     if (!doc) return std::unexpected(doc.error());
     if (!doc->is_array()) return std::unexpected(std::string("GitHub's answer isn't a list of releases"));
@@ -81,7 +83,7 @@ inline std::expected<std::optional<Release>, std::string> newest_release(std::st
         if (!tag.starts_with(prefix)) continue;
         const auto v = parse_version(tag.substr(prefix.size()), true);
         if (!v || (best && *v <= best->version)) continue;
-        const std::string want = std::string(package) + "-" + std::string(tag.substr(prefix.size())) + "-windows-x64.zip";
+        const std::string want = std::string(package) + "-" + std::string(tag.substr(prefix.size())) + "-" + std::string(suffix);
         const json::Value* assets = r.find("assets");
         if (!assets || !assets->is_array()) continue;
         for (const json::Value& a : assets->items) {

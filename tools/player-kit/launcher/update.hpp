@@ -1,8 +1,8 @@
-// The Update button: GitHub's releases list (WinHTTP, nothing about the
-// player sent but a generic User-Agent), the newest release of this game, its
-// download unpacked by Windows' own tar.exe beside this folder, and kit\ and
-// the launcher swapped for the new ones. Any failure leaves the old version
-// as it was and says what happened.
+// The Update button: GitHub's releases list (nothing about the player sent
+// but a generic program name), the newest release of this game for this
+// system, its download unpacked beside this folder (platform.hpp), and kit/
+// and the launcher swapped for the new ones (macOS: the whole app). Any
+// failure leaves the old version as it was and says what happened.
 #pragma once
 
 #include <atomic>

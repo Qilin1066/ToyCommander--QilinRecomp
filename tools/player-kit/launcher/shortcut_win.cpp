@@ -62,6 +62,8 @@ fs::path target_of(const fs::path& link) {
 
 }  // namespace
 
+const char* shortcut_label() { return "Add a desktop shortcut"; }
+
 fs::path desktop_shortcut(const Kit& kit) {
     PWSTR desktop = nullptr;
     fs::path out;

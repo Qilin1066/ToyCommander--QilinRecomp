@@ -1,23 +1,12 @@
 // The Update button (update.hpp).
 #include "update.hpp"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <winhttp.h>
-
 #include <chrono>
-#include <cwchar>
-#include <fstream>
-#include <functional>
 #include <system_error>
 #include <thread>
 
 #include "kit_text.hpp"
+#include "platform.hpp"
 #include "process.hpp"
 
 namespace qilin::launcher {
@@ -26,121 +15,33 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct Internet {
-    HINTERNET h = nullptr;
-    explicit Internet(HINTERNET v) : h(v) {}
-    Internet(const Internet&) = delete;
-    Internet& operator=(const Internet&) = delete;
-    ~Internet() {
-        if (h) WinHttpCloseHandle(h);
-    }
-};
-
-std::string network_error(DWORD code) {
-    switch (code) {
-        case ERROR_WINHTTP_TIMEOUT: return "the connection timed out";
-        case ERROR_WINHTTP_NAME_NOT_RESOLVED: return "can't find the server (is this PC online?)";
-        case ERROR_WINHTTP_CANNOT_CONNECT: return "can't connect to the server (is this PC online?)";
-        case ERROR_WINHTTP_CONNECTION_ERROR: return "the connection was broken";
-        case ERROR_WINHTTP_SECURE_FAILURE: return "the secure connection failed";
-        default: break;
-    }
-    wchar_t* text = nullptr;
-    const DWORD n = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                   GetModuleHandleW(L"winhttp.dll"), code, 0, reinterpret_cast<wchar_t*>(&text), 0, nullptr);
-    std::string out = n && text ? narrow(std::wstring_view(text, n)) : system_message(code);
-    if (text) LocalFree(text);
-    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ' || out.back() == '.')) out.pop_back();
-    return out;
-}
-
-// An HTTPS GET; the body goes to `sink` piece by piece (false from it stops).
-// Redirects (GitHub's downloads go to its file servers) are followed.
-std::expected<void, std::string> http_get(const std::string& url, const wchar_t* headers, UpdateProgress* progress,
-                                          const std::function<bool(const char*, std::size_t)>& sink) {
-    const std::wstring wide = widen(url);
-    URL_COMPONENTS parts{};
-    parts.dwStructSize = sizeof parts;
-    parts.dwHostNameLength = static_cast<DWORD>(-1);
-    parts.dwUrlPathLength = static_cast<DWORD>(-1);
-    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
-        return std::unexpected("not an https address: " + url);
-    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
-    std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
-    if (parts.lpszExtraInfo) path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
-
-    // Nothing about the player: a generic name, the system's proxy settings.
-    Internet session(WinHttpOpen(L"QilinRecomp-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!session.h)  // before Windows 8.1
-        session.h = WinHttpOpen(L"QilinRecomp-launcher", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session.h) return std::unexpected(network_error(GetLastError()));
-    WinHttpSetTimeouts(session.h, 15000, 15000, 30000, 60000);
-    const Internet connection(WinHttpConnect(session.h, host.c_str(), parts.nPort, 0));
-    if (!connection.h) return std::unexpected(network_error(GetLastError()));
-    const Internet request(WinHttpOpenRequest(connection.h, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                              WINHTTP_FLAG_SECURE));
-    if (!request.h) return std::unexpected(network_error(GetLastError()));
-    if (!WinHttpSendRequest(request.h, headers ? headers : WINHTTP_NO_ADDITIONAL_HEADERS, headers ? static_cast<DWORD>(-1) : 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(request.h, nullptr))
-        return std::unexpected(network_error(GetLastError()));
-
-    DWORD status = 0;
-    DWORD size = sizeof status;
-    if (!WinHttpQueryHeaders(request.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
-                             WINHTTP_NO_HEADER_INDEX))
-        return std::unexpected(network_error(GetLastError()));
-    if (status == 403 || status == 429) return std::unexpected(std::string("GitHub is turning away too many requests just now: try again in an hour"));
-    if (status != 200) return std::unexpected("the server answered " + std::to_string(status));
-    if (progress) {
-        wchar_t length[32] = {};
-        DWORD bytes = sizeof length;
-        if (WinHttpQueryHeaders(request.h, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, length, &bytes, WINHTTP_NO_HEADER_INDEX))
-            progress->total = std::wcstoull(length, nullptr, 10);
-    }
-
-    std::vector<char> buffer(1 << 16);
-    for (;;) {
-        DWORD got = 0;
-        if (!WinHttpReadData(request.h, buffer.data(), static_cast<DWORD>(buffer.size()), &got)) return std::unexpected(network_error(GetLastError()));
-        if (got == 0) break;
-        if (!sink(buffer.data(), got)) return std::unexpected(std::string("stopped"));
-        if (progress) progress->received += got;
-    }
-    return {};
-}
-
-fs::path system_tool(const wchar_t* name) {
-    wchar_t dir[MAX_PATH] = {};
-    const UINT n = GetSystemDirectoryW(dir, MAX_PATH);
-    return fs::path(std::wstring(dir, n < MAX_PATH ? n : 0)) / name;
-}
-
-fs::path with_suffix(fs::path p, const wchar_t* suffix) {
-    p += suffix;
+fs::path with_suffix(fs::path p, std::string_view suffix) {
+    p += from_utf8(suffix);
     return p;
 }
 
 // A name only the launcher makes: it is emptied before each download.
-fs::path staging_folder(const Kit& kit) { return with_suffix(kit.top, L".qilin-update"); }
+fs::path staging_folder(const Kit& kit) { return with_suffix(kit.top, ".qilin-update"); }
+
+// Moves `from` to `to`; on a failure, says so.
+std::expected<void, std::string> move(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    fs::rename(from, to, ec);
+    if (ec) return std::unexpected(ec.message());
+    return {};
+}
 
 }  // namespace
 
 std::expected<UpdateCheck, std::string> check_for_update(const Kit& kit) {
-    std::string body;
-    const auto got = http_get("https://api.github.com/repos/" + kit.repo + "/releases?per_page=100",
-                              L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28", nullptr,
-                              [&](const char* p, std::size_t n) {
-                                  body.append(p, n);
-                                  return body.size() < (64u << 20);
-                              });
-    if (!got) return std::unexpected("Couldn't ask GitHub for updates: " + got.error() + ".");
-    const auto newest = newest_release(body, kit.game, kit.package);
+    const auto body = fetch_text("https://api.github.com/repos/" + kit.repo + "/releases?per_page=100",
+                                 {"Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"});
+    if (!body) return std::unexpected("Couldn't ask GitHub for updates: " + body.error() + ".");
+    const auto newest = newest_release(*body, kit.game, kit.package, release_asset_suffix());
     if (!newest) return std::unexpected("GitHub's list of releases can't be read (" + newest.error() + ").");
     UpdateCheck out;
     if (!*newest) {
-        out.message = "There's no " + kit.title + " release on GitHub yet.";
+        out.message = "There's no " + kit.title + " release for this system on GitHub yet.";
         return out;
     }
     const auto here = parse_version(kit.version);
@@ -168,78 +69,79 @@ std::expected<fs::path, std::string> install_update(const Kit& kit, const Releas
     };
 
     // Download.
-    const fs::path zip = staging / widen(release.asset_name);
-    {
-        std::ofstream out(zip, std::ios::binary | std::ios::trunc);
-        if (!out) return give_up("Can't write " + show(zip) + ".");
-        const auto got = http_get(release.asset_url, nullptr, &progress, [&](const char* p, std::size_t n) {
-            out.write(p, static_cast<std::streamsize>(n));
-            return !cancel && static_cast<bool>(out);
-        });
-        out.close();
+    progress.total = release.asset_size > 0 ? static_cast<std::uint64_t>(release.asset_size) : 0;
+    const fs::path archive = staging / from_utf8(release.asset_name);
+    if (const auto got = download(release.asset_url, archive, progress.received, cancel); !got) {
         if (cancel) return give_up("The update was stopped.");
-        if (!got) return give_up("The download failed: " + got.error() + ".");
-        if (!out) return give_up("Can't write the download (is the drive full?).");
-        if (progress.total && progress.received != progress.total) return give_up("The download was cut short.");
+        return give_up("The download failed: " + got.error() + ".");
     }
+    if (progress.total && progress.received != progress.total) return give_up("The download was cut short.");
 
-    // Unpack with Windows' own tar.exe (Windows 10 1803 and later).
+    // Unpack.
     progress.unpacking = true;
-    const fs::path tar = system_tool(L"tar.exe");
-    if (!fs::is_regular_file(tar, ec)) return give_up("This Windows has no tar.exe to unpack the download (Windows 10 1803 or later has it).");
-    {
-        const auto code = run(tool(tar, {"-xf", show(zip), "-C", show(staging / "unpacked")}, staging, staging / "tar.log"));
-        if (!code || *code != 0) return give_up("Unpacking the download failed (" + (code ? describe_exit(*code) : code.error()) + ").");
+    if (const auto unpacked = unpack(archive, staging / "unpacked", staging / "unpack.log"); !unpacked)
+        return give_up("Unpacking the download failed (" + unpacked.error() + ").");
+    if (cancel) return give_up("The update was stopped.");
+
+#if defined(__APPLE__)
+    // The whole app at once: <Title>.app, beside the one running.
+    const fs::path app = staging / "unpacked" / from_utf8(kit.title + ".app");
+    const auto about_text = read_file(app / "Contents" / "Resources" / "kit" / "game.txt");
+    if (!about_text) return give_up("The download has no " + kit.title + ".app.");
+    const auto about = parse_settings(*about_text);
+    if (const auto it = about.find("game"); it == about.end() || it->second != kit.game) return give_up("The download is for another game.");
+    const fs::path old_app = with_suffix(kit.top, ".old");
+    fs::remove_all(old_app, ec);
+    if (const auto moved = move(kit.top, old_app); !moved) return give_up("Can't move this app aside (" + moved.error() + ").");
+    if (const auto moved = move(app, kit.top); !moved) {
+        (void)move(old_app, kit.top);
+        return give_up("Can't move the new app into place (" + moved.error() + ").");
     }
-    fs::path root = staging / "unpacked" / widen(kit.package);
+    fs::remove_all(staging, ec);
+    return kit.top / "Contents" / "MacOS" / kit.launcher.filename();  // the old app goes at the next start
+#else
+    fs::path root = staging / "unpacked" / from_utf8(kit.package);
     if (!fs::is_directory(root, ec)) return give_up("The download doesn't hold the folder " + kit.package + ".");
     const auto about_text = read_file(root / "kit" / "game.txt");
-    if (!about_text) return give_up("The download has no kit\\game.txt.");
+    if (!about_text) return give_up("The download has no kit/game.txt.");
     const auto about = parse_settings(*about_text);
     const auto value = [&](std::string_view key) {
         const auto it = about.find(key);
         return it == about.end() ? std::string() : it->second;
     };
     if (value("game") != kit.game) return give_up("The download is for another game.");
-    const std::string new_name = "Play " + value("title") + ".exe";
-    const fs::path new_launcher = root / widen(new_name);
+    const std::string new_name = "Play " + value("title") + std::string(executable_suffix());
+    const fs::path new_launcher = root / from_utf8(new_name);
     if (value("title").empty() || !fs::is_regular_file(new_launcher, ec)) return give_up("The download has no " + new_name + ".");
     if (cancel) return give_up("The update was stopped.");
 
-    // Swap kit\ for the new one, then the launcher (a running program can be
-    // renamed, not deleted: the old one is deleted at the next start).
+    // Swap kit/ for the new one, then the launcher (a running program can be
+    // renamed, not always deleted: the old one goes at the next start).
     const fs::path kit_old = kit.top / "kit.old";
     fs::remove_all(kit_old, ec);
     if (ec) return give_up("An earlier update's kit.old folder can't be removed (" + ec.message() + ").");
-    fs::rename(kit.kit, kit_old, ec);
-    if (ec) return give_up("Can't move the kit folder aside (" + ec.message() + "; is a file in it open?).");
-    fs::rename(root / "kit", kit.kit, ec);
-    if (ec) {
-        std::error_code back;
-        fs::rename(kit_old, kit.kit, back);
-        return give_up("Can't move the new kit into place (" + ec.message() + ").");
+    if (const auto moved = move(kit.kit, kit_old); !moved) return give_up("Can't move the kit folder aside (" + moved.error() + "; is a file in it open?).");
+    if (const auto moved = move(root / "kit", kit.kit); !moved) {
+        (void)move(kit_old, kit.kit);
+        return give_up("Can't move the new kit into place (" + moved.error() + ").");
     }
-    fs::path launcher_old = with_suffix(kit.launcher, L".old");
+    fs::path launcher_old = with_suffix(kit.launcher, ".old");
     fs::remove(launcher_old, ec);
     if (fs::exists(launcher_old, ec))
-        launcher_old = with_suffix(kit.launcher, widen("." + std::to_string(GetTickCount64()) + ".old").c_str());
-    const fs::path target = kit.top / widen(new_name);
+        launcher_old = with_suffix(kit.launcher, "." + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".old");
+    const fs::path target = kit.top / from_utf8(new_name);
     const auto restore_kit = [&] {
-        std::error_code back;
-        fs::rename(kit.kit, root / "kit", back);
-        fs::rename(kit_old, kit.kit, back);
+        (void)move(kit.kit, root / "kit");
+        (void)move(kit_old, kit.kit);
     };
-    fs::rename(kit.launcher, launcher_old, ec);
-    if (ec) {
+    if (const auto moved = move(kit.launcher, launcher_old); !moved) {
         restore_kit();
-        return give_up("Can't move this launcher aside (" + ec.message() + ").");
+        return give_up("Can't move this launcher aside (" + moved.error() + ").");
     }
-    fs::rename(new_launcher, target, ec);
-    if (ec) {
-        std::error_code back;
-        fs::rename(launcher_old, kit.launcher, back);
+    if (const auto moved = move(new_launcher, target); !moved) {
+        (void)move(launcher_old, kit.launcher);
         restore_kit();
-        return give_up("Can't move the new launcher into place (" + ec.message() + ").");
+        return give_up("Can't move the new launcher into place (" + moved.error() + ").");
     }
 
     // The rest is only words: the readme and the licences.
@@ -256,6 +158,7 @@ std::expected<fs::path, std::string> install_update(const Kit& kit, const Releas
     fs::remove_all(kit_old, ignore);  // or at the next start
     fs::remove_all(staging, ignore);
     return target;
+#endif
 }
 
 void clean_after_update(const Kit& kit) {
@@ -263,14 +166,18 @@ void clean_after_update(const Kit& kit) {
         for (int attempt = 0; attempt < 20; ++attempt) {
             bool left = false;
             std::error_code ec;
-            for (const fs::path& p : {top / "kit.old", top / "LICENSES.old", staging}) {
+            std::vector<fs::path> leftovers = {top / "kit.old", top / "LICENSES.old", staging};
+#if defined(__APPLE__)
+            leftovers.push_back(with_suffix(top, ".old"));  // the app before an update
+#endif
+            for (const fs::path& p : leftovers) {
                 if (!fs::exists(p, ec)) continue;
                 fs::remove_all(p, ec);
                 if (ec) left = true;
             }
             for (fs::directory_iterator it(top, ec), end; !ec && it != end; it.increment(ec)) {
-                const std::wstring name = it->path().filename().wstring();
-                if (name.starts_with(L"Play ") && name.ends_with(L".old")) {
+                const std::string name = show(it->path().filename());
+                if (name.starts_with("Play ") && name.ends_with(".old")) {
                     std::error_code rm;
                     fs::remove(it->path(), rm);
                     if (rm) left = true;

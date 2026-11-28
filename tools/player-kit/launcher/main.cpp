@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "build.hpp"
 #include "disc.hpp"
@@ -26,6 +27,7 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include "kit.hpp"
 #include "kit_text.hpp"
+#include "platform.hpp"
 #include "process.hpp"
 #include "shortcut.hpp"
 #include "tidy.hpp"
@@ -49,7 +51,7 @@ enum class Screen {
 
 enum class UpdateState { Idle, Checking, Known, Offered, Installing, Failed };
 
-fs::path path_from_utf8(const char* utf8) { return fs::path(widen(utf8)); }
+fs::path path_from_utf8(const char* utf8) { return from_utf8(utf8); }
 
 class App {
 public:
@@ -81,7 +83,7 @@ public:
             }
             std::optional<fs::path> disc;
             if (const auto text = read_file(kit_.disc_file()))
-                if (const auto line = trim(*text); !line.empty()) disc = fs::path(widen(line));
+                if (const auto line = trim(*text); !line.empty()) disc = from_utf8(line);
             DiscCheck check;
             if (disc) check = check_disc(kit_, *disc);
             post([this, built_from = *identity, disc, check, shortcut] {
@@ -154,8 +156,10 @@ private:
     std::string failure_;  // BuildFailed's or GameFailed's text
     std::string errors_;   // GameFailed: the end of run-errors.log
     bool quit_ = false;
-    bool shortcut_ = false;        // a desktop shortcut to this launcher exists
+    bool shortcut_ = false;        // a shortcut (or menu entry) to this launcher exists
     std::string shortcut_error_;
+    std::atomic<bool> no_dialog_{false};  // the system has no file dialog: the path is typed or pasted
+    char typed_path_[2048] = {};
 
     BuildProgress build_;
     std::optional<Process> game_;
@@ -324,15 +328,12 @@ private:
         });
     }
 
-    void open_build_log() {
-        std::string url = "file:///" + show(kit_.build_log());
-        for (char& c : url)
-            if (c == '\\') c = '/';
-        SDL_OpenURL(url.c_str());
-    }
+    void open_build_log() { open_with_system(kit_.build_log()); }
 
     static void dialog_done(void* self, const char* const* files, int) {
-        if (files && files[0]) static_cast<App*>(self)->offer_disc(path_from_utf8(files[0]));
+        auto* app = static_cast<App*>(self);
+        if (files && files[0]) app->offer_disc(path_from_utf8(files[0]));
+        else if (!files) app->no_dialog_ = true;  // no file dialog here (some Linux desktops): a path box instead
     }
 
     void choose_disc() {
@@ -376,6 +377,20 @@ void App::draw_disc_prompt() {
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(kQuiet, "or drag the file onto this window.");
+    if (no_dialog_) {
+        // No file dialog on this desktop: the path, typed or pasted.
+        ImGui::Spacing();
+        wrapped("This desktop has no file chooser. Type or paste the disc image's full path:");
+        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Use this disc").x - ImGui::GetStyle().FramePadding.x * 4);
+        const bool entered = ImGui::InputText("##path", typed_path_, sizeof typed_path_, ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if ((ImGui::Button("Use this disc") || entered) && typed_path_[0]) {
+            std::string typed = std::string(trim(typed_path_));
+            if (typed.size() > 1 && (typed.front() == '\'' || typed.front() == '"') && typed.back() == typed.front())
+                typed = typed.substr(1, typed.size() - 2);  // pasted with quotes
+            offer_disc(from_utf8(typed));
+        }
+    }
 }
 
 void App::draw_update() {
@@ -520,9 +535,9 @@ void App::draw() {
                 notice_.clear();
                 start_build(false);
             }
-            if (!shortcut_) {
+            if (!shortcut_ && shortcut_label()) {
                 ImGui::SameLine();
-                if (ImGui::Button("Add a desktop shortcut")) {
+                if (ImGui::Button(shortcut_label())) {
                     const auto made = make_desktop_shortcut(kit_);
                     shortcut_ = made.has_value();
                     shortcut_error_ = made ? std::string() : "The shortcut couldn't be made: " + made.error() + ".";
@@ -605,14 +620,24 @@ int main(int, char**) {
     style.FrameRounding = 4;
     style.ScaleAllSizes(scale);
     style.FontScaleDpi = scale;
-    // Segoe UI, Windows' own, reads better than the built-in pixel font.
+    // The system's own interface font reads better than the built-in pixel
+    // font: Segoe UI (Windows), the system font (macOS), DejaVu or Noto Sans
+    // (Linux, where most desktops have one of them).
+    std::vector<std::string> fonts;
+#if defined(_WIN32)
+    for (const char* name : {"SystemRoot", "windir"})  // SDL's lookup minds the case
+        if (const char* windows = SDL_getenv(name)) fonts.push_back(std::string(windows) + "\\Fonts\\segoeui.ttf");
+#elif defined(__APPLE__)
+    fonts = {"/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial Unicode.ttf"};
+#else
+    fonts = {"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+             "/usr/share/fonts/google-noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"};
+#endif
     bool font = false;
-    for (const char* name : {"SystemRoot", "windir"}) {  // SDL's lookup minds the case
-        const char* windows = SDL_getenv(name);
-        if (font || !windows) continue;
-        const std::string segoe = std::string(windows) + "\\Fonts\\segoeui.ttf";
+    for (const std::string& f : fonts) {
         std::error_code ec;
-        if (fs::is_regular_file(path_from_utf8(segoe.c_str()), ec)) font = io.Fonts->AddFontFromFileTTF(segoe.c_str(), 19.0f) != nullptr;
+        if (!font && fs::is_regular_file(path_from_utf8(f.c_str()), ec)) font = io.Fonts->AddFontFromFileTTF(f.c_str(), 19.0f) != nullptr;
     }
     if (!font) {
         io.Fonts->AddFontDefault();

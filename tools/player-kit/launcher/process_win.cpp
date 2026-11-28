@@ -1,4 +1,4 @@
-// Running programs without console windows (process.hpp).
+// Running programs without console windows, on Windows (process.hpp).
 #include "process.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cwchar>
 #include <memory>
 #include <type_traits>
 
@@ -64,6 +65,12 @@ std::wstring quote_argument(std::wstring_view arg) {
     }
     out += L'"';
     return out;
+}
+
+std::string describe_command(const Command& command) {
+    std::string text = narrow(quote_argument(command.exe.filename().wstring()));
+    for (const std::string& a : command.args) text += " " + narrow(quote_argument(widen(a)));
+    return text;
 }
 
 std::string describe_exit(unsigned long code) {
@@ -156,10 +163,27 @@ std::expected<Process, std::string> Process::start(const Command& command) {
     DWORD flags = CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
     if (command.build_tool) flags |= CREATE_SUSPENDED;
     if (command.low_priority) flags |= BELOW_NORMAL_PRIORITY_CLASS;
+    // The launcher's environment, with the command's own variables set.
+    std::wstring block;
+    if (!command.environment.empty()) {
+        const wchar_t* own = GetEnvironmentStringsW();
+        for (const wchar_t* p = own; p && *p; p += std::wcslen(p) + 1) {
+            const std::wstring_view entry(p);
+            bool replaced = false;
+            for (const auto& [name, value] : command.environment) {
+                const std::wstring key = widen(name) + L"=";
+                if (entry.size() >= key.size() && _wcsnicmp(entry.data(), key.c_str(), key.size()) == 0) replaced = true;
+            }
+            if (!replaced) block.append(entry).push_back(L'\0');
+        }
+        if (own) FreeEnvironmentStringsW(const_cast<wchar_t*>(own));
+        for (const auto& [name, value] : command.environment) block.append(widen(name + "=" + value)).push_back(L'\0');
+        block.push_back(L'\0');
+    }
     PROCESS_INFORMATION pi{};
     const std::wstring cwd = command.cwd.wstring();
-    if (!CreateProcessW(command.exe.c_str(), line.data(), nullptr, nullptr, TRUE, flags, nullptr, cwd.empty() ? nullptr : cwd.c_str(),
-                        &si.StartupInfo, &pi))
+    if (!CreateProcessW(command.exe.c_str(), line.data(), nullptr, nullptr, TRUE, flags, block.empty() ? nullptr : block.data(),
+                        cwd.empty() ? nullptr : cwd.c_str(), &si.StartupInfo, &pi))
         return std::unexpected("can't start " + narrow(command.exe.filename().wstring()) + ": " + system_message(GetLastError()));
     if (command.build_tool) {
         if (const HANDLE job = build_job()) AssignProcessToJobObject(job, pi.hProcess);
@@ -168,6 +192,8 @@ std::expected<Process, std::string> Process::start(const Command& command) {
     CloseHandle(pi.hThread);
     return Process(pi.hProcess);
 }
+
+Process::Process(Process&& other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
 
 Process& Process::operator=(Process&& other) noexcept {
     if (this != &other) {
@@ -182,7 +208,7 @@ Process::~Process() {
     if (handle_) CloseHandle(handle_);
 }
 
-bool Process::running() const { return handle_ && WaitForSingleObject(handle_, 0) == WAIT_TIMEOUT; }
+bool Process::running() { return handle_ && WaitForSingleObject(handle_, 0) == WAIT_TIMEOUT; }
 
 unsigned long Process::wait() {
     if (!handle_) return 0xFFFFFFFFul;
@@ -190,6 +216,10 @@ unsigned long Process::wait() {
     DWORD code = 0;
     if (!GetExitCodeProcess(handle_, &code)) code = 0xFFFFFFFFul;
     return code;
+}
+
+void Process::terminate() {
+    if (handle_) TerminateProcess(handle_, 1);
 }
 
 std::expected<unsigned long, std::string> run(const Command& command) {
