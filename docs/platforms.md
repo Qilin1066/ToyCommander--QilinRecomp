@@ -61,6 +61,8 @@ Player's friction: once, enable developer options and USB or wireless debugging 
 
 **Decided and still to do:**
 - **Vulkan 1.3 only, on Android too** (the owner, 2026-11-28: "No to vulkan 1.1"). That's about 26% of active Android devices (Google's dashboard, November 2025; 61% have only 1.1); Android 13+ devices *should* have 1.3, so the share grows as phones are replaced. "Install on Android" checks the device's Vulkan version over adb before building and says plainly when a phone can't run it.
+- **The devices the owner wants most (2026-11-28): the NVIDIA Shield TV, Android tablets, perhaps Fire TV sticks.** The Shield TV has Vulkan 1.1 only, even on its last update (Android 11; NVIDIA's own page lists 1.1, and device reports show 1.1.178), so it can't run the game while Vulkan 1.3 is required; the owner chose to keep 1.3 knowing that. Fire TV: Amazon's new sticks run Vega OS (not Android) and can't sideload; the older Fire OS ones are low-power with Vulkan 1.1 at best. Tablets: those with recent chips (roughly Android 13 or later) have 1.3. Should 1.1 be wanted later, the renderer uses only two 1.3 features (dynamic rendering, synchronization2), in a few places: a contained change.
+- **Android TV boxes with Vulkan 1.3** still matter: the app gets a TV launcher entry and banner (Leanback), and controller-first menus, so a TV box with 1.3 works as well as a tablet.
 - The runtime needs an Android port of its own: touch controls over the picture (plus SDL's controller support), the app lifecycle (pause and resume), and saves and the disc in app storage.
 - Not on Google Play (its code rules); sideloaded only.
 
