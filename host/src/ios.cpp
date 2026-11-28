@@ -78,9 +78,10 @@ void start() {
     if (!SDL_Init(SDL_INIT_VIDEO)) die("SDL can't start: %s", SDL_GetError());
     const std::filesystem::path data = user_folder();
     const char* log = std::getenv("QILIN_LOG");
-    if (self_test() || (log && std::strcmp(log, "console") == 0)) return;
+    if (log && std::strcmp(log, "console") == 0) return;
     // Nobody sees an app's stderr: it goes to the data folder, which the
-    // Files app shows, for a report.
+    // Files app shows, for a report. (The self test's too: CI reads it from
+    // the Simulator's app container.)
     const std::string file = (data / "log.txt").string();
     if (std::freopen(file.c_str(), "w", stderr)) std::setvbuf(stderr, nullptr, _IONBF, 0);
 }

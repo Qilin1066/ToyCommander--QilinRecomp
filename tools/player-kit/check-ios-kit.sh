@@ -106,28 +106,25 @@ xcrun simctl boot "$udid" 2>/dev/null || true
 xcrun simctl bootstatus "$udid" -b
 bundle="io.github.qilin1066.$game-check"
 xcrun simctl install "$udid" "$app"
-# The self test: started with no disc in its Documents, logging to the
-# console; it ends by itself (exit 0) or the check stops it after 3 minutes.
-SIMCTL_CHILD_QILIN_IOS_SELFTEST=1 xcrun simctl launch --console --terminate-running-process "$udid" "$bundle" \
-    > "$scratch/run.txt" 2>&1 &
-launched=$!
+# The self test: started with no disc in its Documents. It logs to its data
+# folder's log.txt (Documents/qilin/<game>), read here from the app's
+# container (a console attached by simctl was found to end before the app);
+# it ends by itself, or the check stops it after 3 minutes.
+SIMCTL_CHILD_QILIN_IOS_SELFTEST=1 xcrun simctl launch --terminate-running-process "$udid" "$bundle"
+container=$(xcrun simctl get_app_container "$udid" "$bundle" data)
+log="$container/Documents/qilin/$game/log.txt"
+echo "check-ios-kit: the self test's log is $log"
 waited=0
-while kill -0 "$launched" 2>/dev/null; do
-    if [ "$waited" -ge 180 ]; then
-        kill "$launched" 2>/dev/null || true
-        xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-        cat "$scratch/run.txt"
-        fail "the self test didn't end within 3 minutes"
-    fi
+until [ -f "$log" ] && grep -qE '^QILIN_IOS_SELFTEST: (passed|ended by)' "$log"; do
+    [ "$waited" -ge 180 ] && break
     sleep 2
     waited=$((waited + 2))
 done
-set +e
-wait "$launched"
-code=$?
-set -e
+sleep 2
+xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
+[ -f "$log" ] || fail "the self test wrote no log"
+cp "$log" "$scratch/run.txt"
 cat "$scratch/run.txt"
-echo "check-ios-kit: simctl launch ended with $code"
 if ! grep -q '^QILIN_IOS_SELFTEST: passed' "$scratch/run.txt"; then
     # A crash: the Simulator's report is the Mac's (DiagnosticReports).
     sleep 5
@@ -145,6 +142,7 @@ for frame in thread["frames"][:40]:
     print(f'  {image}: {frame.get("symbol", "?")} +{frame.get("symbolLocation", frame.get("imageOffset"))}')
 PY
     done
+    xcrun simctl spawn "$udid" log show --last 5m --style compact --predicate "process == \"$EXE\"" 2>/dev/null | tail -60 || true
 fi
 grep -q '^QILIN_IOS_SELFTEST: no disc: No disc image here yet' "$scratch/run.txt" || fail "the self test didn't reach the no-disc message"
 grep -q '^QILIN_IOS_SELFTEST: drawing with ' "$scratch/run.txt" || fail "the self test didn't make a Vulkan device (MoltenVK)"
