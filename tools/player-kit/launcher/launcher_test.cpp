@@ -217,7 +217,7 @@ void test_ios() {
          "connectionProperties": {"authenticationType": "manualPairing", "isMobileDeviceOnly": false, "pairingState": "paired",
                                   "potentialHostnames": ["00008103-000A.coredevice.local"], "transportType": "wired", "tunnelState": "disconnected"},
          "deviceProperties": {"bootedFromSnapshot": true, "developerModeStatus": "enabled", "ddiServicesAvailable": false,
-                              "name": "Thomas's iPad", "osBuildUpdate": "22B83", "osVersionNumber": "18.1"},
+                              "name": "Player's iPad", "osBuildUpdate": "22B83", "osVersionNumber": "18.1"},
          "hardwareProperties": {"deviceType": "iPad", "marketingName": "iPad Air (5th generation)", "platform": "iOS",
                                 "productType": "iPad13,16", "reality": "physical", "udid": "00008103-000A11112222333E"},
          "tags": [], "visibilityClass": "default"},
@@ -243,7 +243,7 @@ void test_ios() {
     if (list && list->size() == 4) {
         const Device& ready = (*list)[0];  // the ready one first
         CHECK(ready.identifier == "AAAA1111-0000-0000-0000-000000000001");
-        CHECK(ready.name == "Thomas's iPad" && ready.model == "iPad Air (5th generation)" && ready.os_version == "18.1");
+        CHECK(ready.name == "Player's iPad" && ready.model == "iPad Air (5th generation)" && ready.os_version == "18.1");
         CHECK(ready.udid == "00008103-000A11112222333E" && ready.device_type == "iPad");
         CHECK(ready.ready() && ready.paired() && ready.reachable() && ready.developer_mode_on() && ready.os_major() == 18);
         // Then the reachable ones by name, then the rest.
@@ -511,7 +511,7 @@ void test_ios() {
         i.short_lived = true;
         i.team = "TEAM123456";
         i.device = "AAAA1111-0000-0000-0000-000000000001";
-        i.device_name = "Thomas's iPad";
+        i.device_name = "Player's iPad";
         i.bundle_id = "io.github.qilinrecomp.toycommander.r0a1b2c3d";
         i.app = "/Users/x/Library/Application Support/qilin/toycommander/work/ios/DerivedData/Build/Products/Release-iphoneos/QilinGame.app";
         i.disc = "/Users/x/Discs/Toy Commander (USA).cue";

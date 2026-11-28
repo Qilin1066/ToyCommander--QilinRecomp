@@ -356,7 +356,7 @@ inline std::expected<Profile, std::string> parse_profile(std::string_view xml) {
 struct Device {
     std::string identifier;    // CoreDevice's identifier: what --device takes
     std::string udid;          // hardwareProperties.udid: what xcodebuild's -destination id= takes
-    std::string name;          // "Thomas's iPad"
+    std::string name;          // "Player's iPad"
     std::string model;         // marketingName ("iPad Air (5th generation)"), else productType ("iPad13,16")
     std::string device_type;   // "iPad", "iPhone"
     std::string os_version;    // "18.1"

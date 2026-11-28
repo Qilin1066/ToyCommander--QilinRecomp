@@ -168,6 +168,8 @@ The `<system>` part is fixed by the launcher (`platform_*.cpp`'s `release_asset_
 
 ## Changes that need the projects
 
+- Launcher 3: nothing for projects to do; copy the folder again. The iPad tests' sample device is "Player's iPad" (it named a person before).
+
 - Launcher 2: two new, optional `game.txt` keys, `old_files` and `old_input_file`, for the files a project's downloads before the launcher left behind (its old `.bat`, its own remembered-data file). Without them nothing changes; with them, unzipping the new download over an old one leaves no clutter and keeps the player's choice.
 
 - Launcher 1 (the first game-neutral copy): projects need `qilin identify` (the defaults run it), `repo` in `game.txt` (it used to default to Toy Commander's repository), and `launcher.cmake` in place of their own launcher targets. The test stub moved from `tools/check/launcher_stub.cpp` to `test_stub.cpp` here.
