@@ -2,9 +2,11 @@
 # the app): included from CMakeLists.txt on Apple systems.
 
 # The launcher's macOS part: Apple's compiler checked before a build, and the
-# game started so that it finds the app's MoltenVK (apple_tools.hpp).
+# game started so that it finds the app's MoltenVK (apple_tools.hpp); and
+# "Play on iPad", where the app carries an iOS kit (ios_install.hpp).
 if(TARGET qilin_launcher)
-    target_sources(qilin_launcher PRIVATE ${CMAKE_SOURCE_DIR}/tools/player-kit/launcher/apple_tools.cpp)
+    target_sources(qilin_launcher PRIVATE ${CMAKE_SOURCE_DIR}/tools/player-kit/launcher/apple_tools.cpp
+                                          ${CMAKE_SOURCE_DIR}/tools/player-kit/launcher/ios_install.cpp)
 endif()
 
 # A game's macOS player kit (called by qilin_player_kit): everything but the

@@ -58,37 +58,30 @@ std::uintmax_t size_under(const fs::path& root) {
     return total;
 }
 
-// work\build.log: what every tool printed, one tool after another.
-class Log {
-public:
-    explicit Log(const fs::path& path) : file_(path, std::ios::binary | std::ios::trunc) {}
-    void line(std::string_view text) {
-        const std::lock_guard lock(mutex_);
-        file_ << text << "\r\n";
-        file_.flush();
-    }
-    // A tool's command and output (its own log file, then removed).
-    void tool(const Command& command, const fs::path& output, std::string_view result) {
-        const std::string text = "> " + describe_command(command);
-        const auto printed = read_file(output);
-        std::error_code ec;
-        fs::remove(output, ec);
-        const std::lock_guard lock(mutex_);
-        file_ << text << "\r\n";
-        if (printed && !printed->empty()) {
-            file_ << *printed;
-            if (printed->back() != '\n') file_ << "\r\n";
-        }
-        if (!result.empty()) file_ << "(" << result << ")\r\n";
-        file_.flush();
-    }
-
-private:
-    std::mutex mutex_;
-    std::ofstream file_;
-};
-
 std::string unique_suffix() { return std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())); }
+
+}  // namespace
+
+void BuildLog::line(std::string_view text) {
+    const std::lock_guard lock(mutex_);
+    file_ << text << "\r\n";
+    file_.flush();
+}
+
+void BuildLog::tool(const Command& command, const fs::path& output, std::string_view result) {
+    const std::string text = "> " + describe_command(command);
+    const auto printed = read_file(output);
+    std::error_code ec;
+    fs::remove(output, ec);
+    const std::lock_guard lock(mutex_);
+    file_ << text << "\r\n";
+    if (printed && !printed->empty()) {
+        file_ << *printed;
+        if (printed->back() != '\n') file_ << "\r\n";
+    }
+    if (!result.empty()) file_ << "(" << result << ")\r\n";
+    file_.flush();
+}
 
 // The newest `keep` bytes of cached objects stay; the rest (and any
 // half-written leftovers) go.
@@ -118,8 +111,6 @@ void trim_cache(const fs::path& cache, std::uintmax_t keep) {
         if (total > keep) fs::remove(e.path, ec);
     }
 }
-
-}  // namespace
 
 std::string show_bytes(std::uintmax_t bytes) {
     char text[32];
@@ -189,6 +180,155 @@ bool up_to_date(const Kit& kit, const std::string& identity) {
     return fs::is_regular_file(kit.game_exe(), ec) && built_with(kit) == identity;
 }
 
+std::expected<std::vector<std::string>, std::string> compile_lifted(const CompileJob& job, BuildLog& log, BuildProgress& progress,
+                                                                   const std::atomic<bool>& cancel) {
+    std::error_code ec;
+    const fs::path& work = job.cwd;
+    const fs::path gen = work / from_utf8(job.gen);
+    const fs::path obj = work / from_utf8(job.obj);
+    const auto compiler_tool = [&](const std::vector<std::string>& args, const fs::path& out) {
+        Command c = tool(job.compiler, job.compiler_args, work, out);
+        c.args.insert(c.args.end(), args.begin(), args.end());
+        c.environment = job.environment;
+        return c;
+    };
+    fs::create_directories(job.logs, ec);
+
+    struct Source {
+        std::string name, stem;
+        std::uintmax_t size = 0;
+        std::string key;
+    };
+    std::vector<Source> sources;
+    for (fs::directory_iterator it(gen, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec) || lower(show(it->path().extension())) != ".cpp") continue;
+        sources.push_back({show(it->path().filename()), show(it->path().stem()), it->file_size(ec), {}});
+    }
+    if (sources.empty()) return std::unexpected("The recompiler wrote no C++ files." + job.see_log);
+    // The largest first, so the longest compiles don't start last.
+    std::sort(sources.begin(), sources.end(), [](const Source& a, const Source& b) {
+        return a.size != b.size ? a.size > b.size : a.name < b.name;
+    });
+
+    // The cache key: each source's text and everything else that decides its
+    // object: the target (this computer's CPU, or another system's), the
+    // flags, the compiler, the lifted headers and the kit's headers.
+    std::string common = job.target + "flags\n";
+    for (const std::string& f : job.cxxflags) common += f + "\n";
+    {
+        const Command version = compiler_tool({"--version"}, job.logs / "compiler-version.txt");
+        const auto code = run(version);
+        const auto text = read_file(version.out);
+        log.tool(version, version.out, code ? describe_exit(*code) : code.error());
+        if (!code || *code != 0 || !text)
+            return std::unexpected("The compiler doesn't start (" + (code ? describe_exit(*code) : code.error()) + ")." + job.see_log);
+        common += "compiler\n" + *text + "\n";
+    }
+    for (const auto& [rel, path] : files_under(gen)) {
+        const std::string ext = lower(show(path.extension()));
+        if (ext != ".hpp" && ext != ".h") continue;
+        const auto h = sha256_file(path);
+        if (!h) return std::unexpected("Can't read " + show(gen / from_utf8(rel)) + ".");
+        common += "gen/" + rel + ":" + *h + "\n";
+    }
+    for (const auto& [rel, path] : files_under(job.include)) {
+        const auto h = sha256_file(path);
+        if (!h) return std::unexpected("This download is incomplete: " + h.error() + ". Unpack it again.");
+        common += "include/" + rel + ":" + *h + "\n";
+    }
+    const std::string common_key = hash_text(common);
+
+    progress.total = static_cast<int>(sources.size());
+    progress.stage = Stage::Compiling;
+    const fs::path& cache = job.cache;
+    fs::create_directories(obj, ec);
+    fs::create_directories(cache, ec);
+    std::vector<const Source*> misses;
+    for (Source& s : sources) {
+        const auto text = read_file(gen / from_utf8(s.name));
+        if (!text) return std::unexpected("Can't read " + show(gen / from_utf8(s.name)) + ".");
+        s.key = hash_text(common_key + "\n" + *text);
+        const fs::path cached = cache / from_utf8(s.key + ".o");
+        const fs::path object = obj / from_utf8(s.stem + ".o");
+        std::error_code copy;
+        if (job.use_cache && fs::is_regular_file(cached, copy) && fs::copy_file(cached, object, fs::copy_options::overwrite_existing, copy) && !copy) {
+            fs::last_write_time(cached, fs::file_time_type::clock::now(), copy);  // the newest stay when the cache is trimmed
+            log.line("From the cache: " + s.name);
+            ++progress.cached;
+            ++progress.done;
+        } else {
+            misses.push_back(&s);
+        }
+    }
+
+    // Compile the rest: one worker per core, each taking the next largest.
+    if (!misses.empty()) {
+        unsigned jobs = job.jobs ? job.jobs : std::max(1u, std::thread::hardware_concurrency());
+        // No more at once than memory allows: about 1.2 GB a compiler at
+        // its peak (a Raspberry Pi with 2 GB compiles one file at a time).
+        if (!job.jobs) {
+            if (const std::uint64_t room = available_memory(); room > 0) {
+                const auto fit = static_cast<unsigned>(std::max<std::uint64_t>(1, room / (1200ull << 20)));
+                if (fit < jobs) {
+                    log.line("Compiling " + std::to_string(fit) + " at a time, not " + std::to_string(jobs) + ": " + show_bytes(room) +
+                             " of memory free.");
+                    jobs = fit;
+                }
+            }
+        }
+        jobs = static_cast<unsigned>(std::min<std::size_t>(jobs, misses.size()));
+        std::atomic<std::size_t> next{0};
+        std::atomic<bool> broken{false};
+        std::mutex error_mutex;
+        std::string error;
+        const auto worker = [&] {
+            for (;;) {
+                if (broken || cancel) return;
+                const std::size_t i = next++;
+                if (i >= misses.size()) return;
+                const Source& s = *misses[i];
+                const fs::path object = obj / from_utf8(s.stem + ".o");
+                std::error_code rm;
+                fs::remove(object, rm);
+                Command cc = compiler_tool(job.cxxflags, job.logs / from_utf8(s.stem + ".log"));
+                cc.low_priority = true;
+                cc.args.insert(cc.args.end(), {"-c", job.gen + "/" + s.name, "-o", job.obj + "/" + s.stem + ".o"});
+                const auto code = run(cc);
+                log.tool(cc, cc.out, code ? describe_exit(*code) : code.error());
+                if (!code || *code != 0) {
+                    if (cancel) return;
+                    const std::lock_guard lock(error_mutex);
+                    if (!broken.exchange(true))
+                        error = "Compiling " + s.name + " failed (" + (code ? describe_exit(*code) : code.error()) + ")." + job.see_log;
+                    return;
+                }
+                // Into the cache: written beside, then renamed, so a half-written object is never taken.
+                std::error_code keep;
+                const fs::path cached = cache / from_utf8(s.key + ".o");
+                fs::path temporary = cached;
+                temporary += from_utf8("." + unique_suffix() + ".tmp");
+                if (fs::copy_file(object, temporary, fs::copy_options::overwrite_existing, keep) && !keep) {
+                    fs::rename(temporary, cached, keep);
+                    if (keep) fs::remove(temporary, keep);
+                }
+                ++progress.done;
+            }
+        };
+        // std::thread, joined here: the Intel Macs' Apple Clang has no std::jthread.
+        std::vector<std::thread> pool;
+        for (unsigned j = 0; j < jobs; ++j) pool.emplace_back(worker);
+        for (std::thread& t : pool) t.join();
+        if (cancel) return std::unexpected(std::string("The build was stopped."));
+        if (broken) return std::unexpected(error);
+    }
+    if (cancel) return std::unexpected(std::string("The build was stopped."));
+
+    std::vector<std::string> objects;
+    for (const Source& s : sources) objects.push_back(job.obj + "/" + s.stem + ".o");
+    std::sort(objects.begin(), objects.end());
+    return objects;
+}
+
 std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc, BuildProgress& progress,
                                             const std::atomic<bool>& cancel, const BuildOptions& options) {
     progress.stage = Stage::CheckingDisc;
@@ -199,7 +339,7 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     const fs::path& work = kit.work;
     fs::create_directories(work / "logs", ec);
     if (ec) return std::unexpected("Can't make the folder " + show(work) + ": " + ec.message() + ".");
-    Log log(kit.build_log());
+    BuildLog log(kit.build_log());
     log.line(kit.title + " QilinRecomp " + kit.version);
     log.line("Disc: " + show(disc));
     const auto failed = [&](std::string message) -> std::unexpected<std::string> {
@@ -253,22 +393,6 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         if (*code != 0) return failed("Recompiling the disc's " + kit.boot + " failed (" + describe_exit(*code) + ")." + kSeeLog);
     }
 
-    struct Source {
-        std::string name, stem;
-        std::uintmax_t size = 0;
-        std::string key;
-    };
-    std::vector<Source> sources;
-    for (fs::directory_iterator it(work / "gen", ec), end; !ec && it != end; it.increment(ec)) {
-        if (!it->is_regular_file(ec) || lower(show(it->path().extension())) != ".cpp") continue;
-        sources.push_back({show(it->path().filename()), show(it->path().stem()), it->file_size(ec), {}});
-    }
-    if (sources.empty()) return failed(std::string("The recompiler wrote no C++ files.") + kSeeLog);
-    // The largest first, so the longest compiles don't start last.
-    std::sort(sources.begin(), sources.end(), [](const Source& a, const Source& b) {
-        return a.size != b.size ? a.size > b.size : a.name < b.name;
-    });
-
     // The kit's flags (build-flags.txt), paths relative to work\ where the
     // kit is beside it (macOS: work/ is in the data folder, the kit in the
     // app, so its whole path; each flag is one argument, spaces and all).
@@ -302,117 +426,20 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     const std::vector<std::string> ldflags = flags_of("ldflags");
     const std::vector<std::string> libs = flags_of("libs");
 
-    // The cache key: each source's text and everything else that decides its
-    // object: the lifted headers, the kit's headers, the flags, the compiler
-    // and the CPU.
-    std::string common = "cpu\n" + cpu_identity() + "\nflags\n";
-    for (const std::string& f : cxxflags) common += f + "\n";
-    {
-        const Command version = compiler_tool({"--version"}, work / "logs" / "compiler-version.txt");
-        const auto code = run(version);
-        const auto text = read_file(version.out);
-        log.tool(version, version.out, code ? describe_exit(*code) : code.error());
-        if (!code || *code != 0 || !text)
-            return failed("The compiler doesn't start (" + (code ? describe_exit(*code) : code.error()) + ")." + kSeeLog);
-        common += "compiler\n" + *text + "\n";
-    }
-    for (const auto& [rel, path] : files_under(work / "gen")) {
-        const std::string ext = lower(show(path.extension()));
-        if (ext != ".hpp" && ext != ".h") continue;
-        const auto h = sha256_file(path);
-        if (!h) return failed("Can't read " + show(work / "gen" / from_utf8(rel)) + ".");
-        common += "gen/" + rel + ":" + *h + "\n";
-    }
-    for (const auto& [rel, path] : files_under(kit.kit / "include")) {
-        const auto h = sha256_file(path);
-        if (!h) return failed("This download is incomplete: " + h.error() + ". Unpack it again.");
-        common += "include/" + rel + ":" + *h + "\n";
-    }
-    const std::string common_key = hash_text(common);
-
-    progress.total = static_cast<int>(sources.size());
-    progress.stage = Stage::Compiling;
-    const fs::path cache = kit.cache();
-    fs::create_directories(work / "obj", ec);
-    fs::create_directories(cache, ec);
-    std::vector<const Source*> misses;
-    for (Source& s : sources) {
-        const auto text = read_file(work / "gen" / from_utf8(s.name));
-        if (!text) return failed("Can't read " + show(work / "gen" / from_utf8(s.name)) + ".");
-        s.key = hash_text(common_key + "\n" + *text);
-        const fs::path cached = cache / from_utf8(s.key + ".o");
-        const fs::path object = work / "obj" / from_utf8(s.stem + ".o");
-        std::error_code copy;
-        if (options.use_cache && fs::is_regular_file(cached, copy) && fs::copy_file(cached, object, fs::copy_options::overwrite_existing, copy) && !copy) {
-            fs::last_write_time(cached, fs::file_time_type::clock::now(), copy);  // the newest stay when the cache is trimmed
-            log.line("From the cache: " + s.name);
-            ++progress.cached;
-            ++progress.done;
-        } else {
-            misses.push_back(&s);
-        }
-    }
-
-    // Compile the rest: one worker per core, each taking the next largest.
-    if (!misses.empty()) {
-        unsigned jobs = options.jobs ? options.jobs : std::max(1u, std::thread::hardware_concurrency());
-        // No more at once than memory allows: about 1.2 GB a compiler at
-        // its peak (a Raspberry Pi with 2 GB compiles one file at a time).
-        if (!options.jobs) {
-            if (const std::uint64_t room = available_memory(); room > 0) {
-                const auto fit = static_cast<unsigned>(std::max<std::uint64_t>(1, room / (1200ull << 20)));
-                if (fit < jobs) {
-                    log.line("Compiling " + std::to_string(fit) + " at a time, not " + std::to_string(jobs) + ": " + show_bytes(room) +
-                             " of memory free.");
-                    jobs = fit;
-                }
-            }
-        }
-        jobs = static_cast<unsigned>(std::min<std::size_t>(jobs, misses.size()));
-        std::atomic<std::size_t> next{0};
-        std::atomic<bool> broken{false};
-        std::mutex error_mutex;
-        std::string error;
-        const auto worker = [&] {
-            for (;;) {
-                if (broken || cancel) return;
-                const std::size_t i = next++;
-                if (i >= misses.size()) return;
-                const Source& s = *misses[i];
-                const fs::path object = work / "obj" / from_utf8(s.stem + ".o");
-                std::error_code rm;
-                fs::remove(object, rm);
-                Command cc = compiler_tool(cxxflags, work / "logs" / from_utf8(s.stem + ".log"));
-                cc.low_priority = true;
-                cc.args.insert(cc.args.end(), {"-c", "gen/" + s.name, "-o", "obj/" + s.stem + ".o"});
-                const auto code = run(cc);
-                log.tool(cc, cc.out, code ? describe_exit(*code) : code.error());
-                if (!code || *code != 0) {
-                    if (cancel) return;
-                    const std::lock_guard lock(error_mutex);
-                    if (!broken.exchange(true))
-                        error = "Compiling " + s.name + " failed (" + (code ? describe_exit(*code) : code.error()) + ")." + kSeeLog;
-                    return;
-                }
-                // Into the cache: written beside, then renamed, so a half-written object is never taken.
-                std::error_code keep;
-                const fs::path cached = cache / from_utf8(s.key + ".o");
-                fs::path temporary = cached;
-                temporary += from_utf8("." + unique_suffix() + ".tmp");
-                if (fs::copy_file(object, temporary, fs::copy_options::overwrite_existing, keep) && !keep) {
-                    fs::rename(temporary, cached, keep);
-                    if (keep) fs::remove(temporary, keep);
-                }
-                ++progress.done;
-            }
-        };
-        // std::thread, joined here: the Intel Macs' Apple Clang has no std::jthread.
-        std::vector<std::thread> pool;
-        for (unsigned j = 0; j < jobs; ++j) pool.emplace_back(worker);
-        for (std::thread& t : pool) t.join();
-        if (cancel) return stopped();
-        if (broken) return failed(error);
-    }
+    CompileJob job;
+    job.cwd = work;
+    job.logs = work / "logs";
+    job.cache = kit.cache();
+    job.compiler = kit.compiler();
+    job.compiler_args = kit.compiler_args;
+    job.cxxflags = cxxflags;
+    job.target = "cpu\n" + cpu_identity() + "\n";
+    job.include = kit.kit / "include";
+    job.use_cache = options.use_cache;
+    job.jobs = options.jobs;
+    job.see_log = kSeeLog;
+    const auto objects = compile_lifted(job, log, progress, cancel);
+    if (!objects) return failed(objects.error());
     if (cancel) return stopped();
 
     // Link.
@@ -420,13 +447,10 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     const fs::path linked = work / "obj" / from_utf8(kit.exe);  // moved to work/<exe> below
     fs::remove(linked, ec);
     {
-        std::vector<std::string> objects;
-        for (const Source& s : sources) objects.push_back("obj/" + s.stem + ".o");
-        std::sort(objects.begin(), objects.end());
         Command link = compiler_tool(ldflags, work / "logs" / "link.log");
         link.args.push_back("-o");
         link.args.push_back("obj/" + kit.exe);
-        link.args.insert(link.args.end(), objects.begin(), objects.end());
+        link.args.insert(link.args.end(), objects->begin(), objects->end());
         link.args.insert(link.args.end(), libs.begin(), libs.end());
         const auto code = run(link);
         log.tool(link, link.out, code ? describe_exit(*code) : code.error());
@@ -449,8 +473,8 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         return failed("Can't replace " + kit.exe + " (" + replaced.error() + "). If the game is still running, close it and try again.");
     }
     if (const auto stamp = write_file(work / "built-with.txt", *identity); !stamp) return failed(stamp.error());
-    trim_cache(cache, options.cache_bytes);
-    log.line("Built " + kit.exe + ": " + std::to_string(progress.cached.load()) + " of " + std::to_string(sources.size()) +
+    trim_cache(kit.cache(), options.cache_bytes);
+    log.line("Built " + kit.exe + ": " + std::to_string(progress.cached.load()) + " of " + std::to_string(progress.total.load()) +
              " files from the cache.");
     progress.stage = Stage::Done;
     return {};

@@ -35,6 +35,7 @@
 #include "vulkan_check.hpp"
 #if defined(__APPLE__)
 #include "apple_tools.hpp"  // Apple's compiler, checked before a build; the app's MoltenVK for the game
+#include "ios_install.hpp"  // "Play on iPad", where the app has an iOS kit
 #endif
 
 namespace fs = std::filesystem;
@@ -139,7 +140,12 @@ public:
         chosen_ = std::move(path);
     }
 
-    bool busy() const { return busy_ || screen_ == Screen::Playing; }
+    bool busy() const {
+#if defined(__APPLE__)
+        if (ios_.busy()) return true;
+#endif
+        return busy_ || screen_ == Screen::Playing;
+    }
     bool playing() const { return screen_ == Screen::Playing; }
     bool want_quit() const { return quit_; }
 
@@ -148,6 +154,9 @@ public:
         cancel_ = true;
         stop_build_tools();
         if (worker_.joinable()) worker_.join();
+#if defined(__APPLE__)
+        ios_.stop();
+#endif
     }
 
 private:
@@ -181,6 +190,7 @@ private:
     std::thread worker_;
 #if defined(__APPLE__)
     AppleTools apple_tools_;
+    IosInstall ios_;
 #endif
 
     void fail_start(std::string why) {
@@ -203,6 +213,9 @@ private:
     }
 
     bool can_take_disc() const {
+#if defined(__APPLE__)
+        if (ios_.busy()) return false;
+#endif
         return !busy_ && (screen_ == Screen::NeedDisc || screen_ == Screen::Ready || screen_ == Screen::BuildFailed ||
                           screen_ == Screen::GameFailed);
     }
@@ -477,7 +490,7 @@ void App::draw() {
     ImGui::Separator();
     ImGui::Spacing();
 #if defined(__APPLE__)
-    if (screen_ != Screen::Broken && apple_tools_.draw(kit_)) {
+    if ((screen_ != Screen::Broken && apple_tools_.draw(kit_)) || (screen_ == Screen::Ready && ios_.draw(kit_))) {
         ImGui::End();
         return;
     }
@@ -570,6 +583,12 @@ void App::draw() {
                     shortcut_error_ = made ? std::string() : "The shortcut couldn't be made: " + made.error() + ".";
                 }
             }
+#if defined(__APPLE__)
+            if (disc_ && IosInstall::available(kit_)) {
+                ImGui::SameLine();
+                if (ImGui::Button("Play on iPad")) ios_.open(kit_, *disc_);
+            }
+#endif
             ImGui::EndDisabled();
             if (!shortcut_error_.empty()) coloured(kWarning, shortcut_error_);
             ImGui::TextColored(kQuiet, "Or drag another disc image onto this window.");
