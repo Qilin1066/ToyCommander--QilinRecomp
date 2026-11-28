@@ -17,6 +17,12 @@ namespace qilin::launcher {
 // A UTF-8 path as the system's path, and back (kit.hpp's show()).
 std::filesystem::path from_utf8(std::string_view utf8);
 
+// `path`, usable past Windows' 260-character limit even where long paths
+// aren't switched on: absolute, with Windows' \\?\ prefix when it's long.
+// Unchanged on Linux and macOS. Only for the launcher's own file operations,
+// never for paths handed to other programs.
+std::filesystem::path long_path(const std::filesystem::path& path);
+
 // An environment variable ("" if unset).
 std::string environment(const char* name);
 

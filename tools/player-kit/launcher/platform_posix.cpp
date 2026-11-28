@@ -36,6 +36,8 @@ fs::path from_utf8(std::string_view utf8) { return fs::path(std::string(utf8)); 
 
 std::string show(const fs::path& path) { return path.string(); }
 
+fs::path long_path(const fs::path& path) { return path; }  // no such limit here
+
 std::string environment(const char* name) {
     const char* v = std::getenv(name);
     return v ? std::string(v) : std::string();

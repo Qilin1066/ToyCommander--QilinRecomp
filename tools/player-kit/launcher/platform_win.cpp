@@ -30,6 +30,16 @@ fs::path from_utf8(std::string_view utf8) { return fs::path(widen(utf8)); }
 
 std::string show(const fs::path& path) { return narrow(path.wstring()); }
 
+fs::path long_path(const fs::path& path) {
+    std::error_code ec;
+    const std::wstring text = fs::absolute(path, ec).lexically_normal().make_preferred().wstring();
+    if (ec || text.starts_with(L"\\\\?\\")) return path;  // already prefixed (or can't be made absolute)
+    // Always prefixed, not only when long: a short folder can still hold a
+    // file whose whole path passes the limit.
+    if (text.starts_with(L"\\\\")) return fs::path(L"\\\\?\\UNC\\" + text.substr(2));  // \\server\share\...
+    return fs::path(L"\\\\?\\" + text);
+}
+
 std::string environment(const char* name) {
     const std::wstring wide_name = widen(name);
     const DWORD n = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);

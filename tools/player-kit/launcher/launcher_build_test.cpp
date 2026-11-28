@@ -545,6 +545,30 @@ int main(int argc, char** argv) {
         CHECK(text && text->find("\"ok\": false") != std::string::npos && text->find("\"message\": \"") != std::string::npos);
     }
 
+    // The object cache in a data folder whose files' paths pass Windows' 260
+    // characters (long paths off, as by default): written, renamed and
+    // trimmed all the same.
+    {
+        fs::path deep = scratch / "long cache";
+        while (deep.native().size() < 230) deep /= "a rather long folder name";
+        const fs::path cache = long_path(deep);
+        std::error_code err;
+        fs::create_directories(cache, err);
+        CHECK(!err);
+        const std::string key(64, 'c');
+        const fs::path cached = cache / (key + ".o");
+        fs::path temporary = cached;
+        temporary += ".12345.tmp";
+        CHECK(deep.native().size() + key.size() + 13 > 260);
+        put(temporary, "object");
+        CHECK(fs::exists(temporary, err));
+        fs::rename(temporary, cached, err);
+        CHECK(!err && fs::is_regular_file(cached, err));
+        trim_cache(deep, 0);  // keep nothing: the long-named object goes
+        CHECK(!fs::exists(cached, err));
+        fs::remove_all(long_path(scratch / "long cache"), err);
+    }
+
     if (failures) {
         std::printf("%d failed\n", failures);
         return 1;

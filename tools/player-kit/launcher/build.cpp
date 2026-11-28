@@ -99,7 +99,8 @@ void BuildLog::tool(const Command& command, const fs::path& output, std::string_
 
 // The newest `keep` bytes of cached objects stay; the rest (and any
 // half-written leftovers) go.
-void trim_cache(const fs::path& cache, std::uintmax_t keep) {
+void trim_cache(const fs::path& cache_folder, std::uintmax_t keep) {
+    const fs::path cache = long_path(cache_folder);
     struct Entry {
         fs::path path;
         fs::file_time_type time;
@@ -277,7 +278,9 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
 
     progress.total = static_cast<int>(sources.size());
     progress.stage = Stage::Compiling;
-    const fs::path& cache = job.cache;
+    // The cache is in the data folder, whose path the player doesn't choose:
+    // past Windows' 260-character limit it still works (platform.hpp).
+    const fs::path cache = long_path(job.cache);
     fs::create_directories(obj, ec);
     fs::create_directories(cache, ec);
     std::vector<const Source*> misses;
@@ -343,13 +346,21 @@ std::expected<std::vector<std::string>, std::string> compile_lifted(const Compil
                     return;
                 }
                 // Into the cache: written beside, then renamed, so a half-written object is never taken.
+                // A failure costs only a recompile next time, but is logged: a cache that never fills
+                // otherwise just looks like slow builds.
                 std::error_code keep;
                 const fs::path cached = cache / from_utf8(s.key + ".o");
                 fs::path temporary = cached;
                 temporary += from_utf8("." + unique_suffix() + ".tmp");
                 if (fs::copy_file(object, temporary, fs::copy_options::overwrite_existing, keep) && !keep) {
                     fs::rename(temporary, cached, keep);
-                    if (keep) fs::remove(temporary, keep);
+                    if (keep) {
+                        log.line("Not cached (" + keep.message() + "): " + s.name);
+                        std::error_code rm2;
+                        fs::remove(temporary, rm2);
+                    }
+                } else {
+                    log.line("Not cached (" + keep.message() + "): " + s.name);
                 }
                 ++progress.done;
             }

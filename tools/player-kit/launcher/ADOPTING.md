@@ -168,6 +168,8 @@ The `<system>` part is fixed by the launcher (`platform_*.cpp`'s `release_asset_
 
 ## Changes that need the projects
 
+- Launcher 4: nothing for projects to do; copy the folder again. The object cache works past Windows' 260-character path limit (the data folder's path isn't the player's choice), and a file that can't be cached is logged in build.log instead of silently recompiled every time.
+
 - Launcher 3: nothing for projects to do; copy the folder again. The iPad tests' sample device is "Player's iPad" (it named a person before).
 
 - Launcher 2: two new, optional `game.txt` keys, `old_files` and `old_input_file`, for the files a project's downloads before the launcher left behind (its old `.bat`, its own remembered-data file). Without them nothing changes; with them, unzipping the new download over an old one leaves no clutter and keeps the player's choice.
