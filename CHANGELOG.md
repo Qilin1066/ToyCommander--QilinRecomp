@@ -6,6 +6,11 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-28
+
+### Added
+- **Play on iPad**, in the Mac download: with Xcode (free, from the App Store) and your Apple ID (a free one works), the Mac app builds Toy Commander for your iPad from your disc, installs it and copies the disc over; on the iPad it finds the disc itself and plays with a controller (Xbox, PlayStation or MFi). With a free Apple ID the iPad app works for 7 days at a time: the Mac app shows until when, and reinstalls it in one click. Not yet tried on a real iPad.
+
 ## [0.15.0] - 2026-11-28
 
 ### Added
