@@ -1,0 +1,219 @@
+name: macOS downloads
+
+# Builds each game's macOS download (tools/player-kit/package-macos.sh): one
+# universal disk image, <Game>--QilinRecomp-X.Y.Z-macos.dmg, for Apple silicon
+# and Intel Macs. On every push, as artifacts to check, each one checked on
+# both kinds of Mac (tools/player-kit/check-macos.sh); on a game's version tag
+# (toycommander-vX.Y.Z or toyracer-vX.Y.Z), attached to that tag's GitHub
+# Release. No game data is used or included: players lift the boot file from
+# their own disc dump, and compile it with Apple's clang (the Command Line
+# Tools), which the launcher offers to install.
+on:
+  push:
+    tags: ['toycommander-v*', 'toyracer-v*']
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to create the release and attach the download
+
+env:
+  # MoltenVK (Apache-2.0, KhronosGroup): its macOS release, pinned and checked.
+  MOLTENVK_VERSION: v1.4.2
+  MOLTENVK_SHA256: f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e
+  # The licences of what its library contains, at the revisions MoltenVK
+  # v1.4.2 names (its ExternalRevisions folder).
+  SPIRV_CROSS_REV: 6c09849fe88c48eaed08413aa022aaa136a3a057
+  SPIRV_CROSS_LICENSE_SHA256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+  SPIRV_TOOLS_REV: 0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55
+  SPIRV_TOOLS_LICENSE_SHA256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+  SPIRV_HEADERS_REV: 29981f65241605e08b0ede4cfeb999fe3b723c6a
+  SPIRV_HEADERS_LICENSE_SHA256: ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613
+  CEREAL_REV: a56bad8bbb770ee266e930c95d37fff2a5be7fea
+  CEREAL_LICENSE_SHA256: 58604a126af6a671ea390ee3d5b3e42228aa59b2858fb7af1d5b20b31739ccbb
+  ZSTD_LICENSE_SHA256: 7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8   # zstd v1.5.7 LICENSE (BSD), for libchdr's bundled decompressor
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+    runs-on: macos-15   # Apple silicon, Xcode 16
+    steps:
+      # A tag builds only its own game's download (a job's own if can't read the matrix).
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v5
+        if: env.BUILD == 'yes'
+        with:
+          fetch-depth: 0   # the tags, for the version of an untagged build
+      - name: Compiler messages as annotations
+        if: env.BUILD == 'yes'
+        run: echo "::add-matcher::.github/matchers/compilers.json"
+      - name: Get MoltenVK and the licences (pinned, checked)
+        if: env.BUILD == 'yes'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/tools/moltenvk" "$RUNNER_TEMP/tools/notices" && cd "$RUNNER_TEMP/tools"
+          curl -sSfL -o MoltenVK-macos.tar "https://github.com/KhronosGroup/MoltenVK/releases/download/$MOLTENVK_VERSION/MoltenVK-macos.tar"
+          echo "$MOLTENVK_SHA256  MoltenVK-macos.tar" | shasum -a 256 -c
+          tar xf MoltenVK-macos.tar -C moltenvk MoltenVK/LICENSE MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib
+          get() {  # <name> <url> <sha256>
+            curl -sSfL -o "notices/$1-LICENSE" "$2"
+            echo "$3  notices/$1-LICENSE" | shasum -a 256 -c
+          }
+          raw=https://raw.githubusercontent.com
+          get SPIRV-Cross "$raw/KhronosGroup/SPIRV-Cross/$SPIRV_CROSS_REV/LICENSE" "$SPIRV_CROSS_LICENSE_SHA256"
+          get SPIRV-Tools "$raw/KhronosGroup/SPIRV-Tools/$SPIRV_TOOLS_REV/LICENSE" "$SPIRV_TOOLS_LICENSE_SHA256"
+          get SPIRV-Headers "$raw/KhronosGroup/SPIRV-Headers/$SPIRV_HEADERS_REV/LICENSE" "$SPIRV_HEADERS_LICENSE_SHA256"
+          get cereal "$raw/USCiLab/cereal/$CEREAL_REV/LICENSE" "$CEREAL_LICENSE_SHA256"
+          curl -sSfL -o zstd-LICENSE "$raw/facebook/zstd/v1.5.7/LICENSE"
+          echo "$ZSTD_LICENSE_SHA256  zstd-LICENSE" | shasum -a 256 -c
+          echo "MOLTENVK=$PWD/moltenvk" >> "$GITHUB_ENV"
+          echo "MOLTENVK_NOTICES=$PWD/notices" >> "$GITHUB_ENV"
+          echo "ZSTD_LICENSE=$PWD/zstd-LICENSE" >> "$GITHUB_ENV"
+      - name: Package
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/$GAME-v* ]]; then version="${GITHUB_REF_NAME#$GAME-v}"
+          else version="$(git describe --tags --always --match "$GAME-v*")"; version="${version#$GAME-v}"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          clang++ --version
+          tools/player-kit/package-macos.sh "$GAME" "$version" "$PWD/$PACKAGE-$version-macos.dmg"
+      - name: Check (Apple silicon)
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+          PACKAGE: ${{ matrix.package }}
+        run: tools/player-kit/check-macos.sh "$GAME" "$PWD/$PACKAGE-$VERSION-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          name: ${{ matrix.package }}-${{ env.VERSION }}-macos
+          path: ${{ matrix.package }}-${{ env.VERSION }}-macos.dmg
+          retention-days: 14
+
+  # The same download on an Intel Mac: the x86_64 half, and Apple clang's
+  # -march=native there.
+  check-intel:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+    runs-on: macos-15-intel
+    steps:
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v5
+        if: env.BUILD == 'yes'
+      - uses: actions/download-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          pattern: ${{ matrix.package }}-*-macos
+          merge-multiple: true
+      - name: Which download
+        if: env.BUILD == 'yes'
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -- "$PACKAGE"-*-macos.dmg
+          [ $# = 1 ] && [ -f "$1" ] || { echo "expected one $PACKAGE dmg, found: $*" >&2; exit 1; }
+          version="${1#"$PACKAGE"-}"; version="${version%-macos.dmg}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Check (Intel)
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          clang++ --version
+          tools/player-kit/check-macos.sh "$GAME" "$PWD/$PACKAGE-$VERSION-macos.dmg"
+
+  # On a game's tag: attached to its release, after both checks.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [package, check-intel]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+            title: Toy Commander
+            disc: the USA release (MK-57020, version 1.022)
+            changelog: CHANGELOG.md
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+            title: Toy Racer
+            disc: the European release (MK-5114950, version 1.050)
+            changelog: toyracer/CHANGELOG.md
+    runs-on: ubuntu-24.04
+    steps:
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/download-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          pattern: ${{ matrix.package }}-*-macos
+          merge-multiple: true
+      - name: Which download
+        if: env.BUILD == 'yes'
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -- "$PACKAGE"-*-macos.dmg
+          [ $# = 1 ] && [ -f "$1" ] || { echo "expected one $PACKAGE dmg, found: $*" >&2; exit 1; }
+          version="${1#"$PACKAGE"-}"; version="${version%-macos.dmg}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Attach to the release
+        if: env.BUILD == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PACKAGE: ${{ matrix.package }}
+          TITLE: ${{ matrix.title }}
+          DISC: ${{ matrix.disc }}
+          CHANGELOG: ${{ matrix.changelog }}
+        run: |
+          dmg="$PACKAGE-$VERSION-macos.dmg"
+          mac="On a Mac (macOS 14.5 or newer, Apple silicon or Intel): download $dmg, open it and drag $TITLE.app onto Applications, then open it. The app isn't signed by an Apple developer account, so the first time macOS stops it: open System Settings, Privacy & Security, click Open Anyway beside \"$TITLE was blocked\" and confirm; macOS asks only once. The game is compiled with Apple's own compiler: if the Mac doesn't have Apple's command line tools yet, the app offers Apple's installer."
+          attach() {
+            # The Windows and Linux workflows attach theirs to the same release:
+            # whichever comes first creates it.
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "$dmg" --clobber || return 1
+              # Another workflow wrote the notes: add the Mac's steps once.
+              body=$(gh release view "$GITHUB_REF_NAME" --json body --jq .body) || return 1
+              case "$body" in
+                *"Open Anyway"*) ;;
+                *) gh release edit "$GITHUB_REF_NAME" --notes "$body"$'\n\n'"$mac" || return 1 ;;
+              esac
+            else
+              gh release create "$GITHUB_REF_NAME" "$dmg" --title "$TITLE QilinRecomp $VERSION" \
+                --notes "$mac You need your own disc, $DISC, as a .cue with its .bin tracks, a .gdi or a .chd: choose it in the app (or drag it onto the window), and the first start builds the game from it in a few minutes. Changes: $CHANGELOG."
+            fi
+          }
+          # One retry: another workflow may have created the release meanwhile.
+          attach || { sleep 20; attach; }

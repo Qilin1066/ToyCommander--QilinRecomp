@@ -32,6 +32,9 @@
 #include "shortcut.hpp"
 #include "tidy.hpp"
 #include "update.hpp"
+#if defined(__APPLE__)
+#include "apple_tools.hpp"  // Apple's compiler, checked before a build; the app's MoltenVK for the game
+#endif
 
 namespace fs = std::filesystem;
 using namespace qilin::launcher;
@@ -175,6 +178,9 @@ private:
     std::atomic<bool> busy_{false};
     std::atomic<bool> cancel_{false};
     std::thread worker_;
+#if defined(__APPLE__)
+    AppleTools apple_tools_;
+#endif
 
     void fail_start(std::string why) {
         screen_ = Screen::Broken;
@@ -225,6 +231,9 @@ private:
 
     void start_build(bool use_cache) {
         if (!disc_) return;
+#if defined(__APPLE__)
+        if (!apple_tools_.ready(kit_, [this, use_cache] { start_build(use_cache); })) return;
+#endif
         screen_ = Screen::Building;
         cancel_ = false;
         run_task([this, disc = *disc_, use_cache] {
@@ -254,6 +263,9 @@ private:
         c.out = kit_.run_log();
         c.err = kit_.run_errors();
         c.build_tool = false;
+#if defined(__APPLE__)
+        c.environment = apple_game_environment(kit_);
+#endif
         auto started = Process::start(c);
         if (!started) {
             screen_ = Screen::GameFailed;
@@ -455,6 +467,12 @@ void App::draw() {
     }
     ImGui::Separator();
     ImGui::Spacing();
+#if defined(__APPLE__)
+    if (screen_ != Screen::Broken && apple_tools_.draw(kit_)) {
+        ImGui::End();
+        return;
+    }
+#endif
 
     switch (screen_) {
         case Screen::Broken:
@@ -590,12 +608,19 @@ int main(int, char**) {
     float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     if (!(scale > 0.5f)) scale = 1.0f;
     const int width = static_cast<int>(780 * scale), height = static_cast<int>(500 * scale);
+#if defined(__APPLE__)
+    // Retina: the window's size in points, drawn at its pixels (Dear ImGui
+    // takes the framebuffer's scale from SDL and renders its fonts at it).
+    const SDL_WindowFlags density = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#else
+    const SDL_WindowFlags density = 0;
+#endif
     // The Vulkan renderer needs a Vulkan window; without a Vulkan loader the
     // window can't be one, and the software renderer draws instead.
-    SDL_Window* window = SDL_CreateWindow("QilinRecomp", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = SDL_CreateWindow("QilinRecomp", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | density);
     if (!window) {
         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
-        window = SDL_CreateWindow("QilinRecomp", width, height, SDL_WINDOW_RESIZABLE);
+        window = SDL_CreateWindow("QilinRecomp", width, height, SDL_WINDOW_RESIZABLE | density);
     }
     SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
     if (!renderer) {

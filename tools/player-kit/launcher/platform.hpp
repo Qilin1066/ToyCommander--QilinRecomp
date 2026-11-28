@@ -37,6 +37,10 @@ std::expected<void, std::string> swap_in(const std::filesystem::path& target, co
 std::string release_asset_suffix();
 // What executables end with here (".exe" or "").
 std::string_view executable_suffix();
+// The computer's processor architecture as build-flags.txt names it, "arm64"
+// or "x86_64": a universal kit (macOS's) has flags for each. A Mac with Apple
+// silicon is "arm64" even while this program runs under Rosetta.
+std::string host_architecture();
 
 // HTTPS, sending only a generic program name: a short answer as text...
 std::expected<std::string, std::string> fetch_text(const std::string& url, const std::vector<std::string>& headers);

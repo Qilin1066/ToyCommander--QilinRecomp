@@ -411,6 +411,11 @@ if(QILIN_HOST)
     endif()
 endif()
 
+# The macOS download's parts: the launcher's Apple side, the universal kit.
+if(APPLE)
+    include(tools/player-kit/macos.cmake)
+endif()
+
 # ---- The games: each built only from the player's own boot file ----
 # cmake -DQILIN_TOYCOMMANDER_BOOT=<extracted disc>/files/1GUTH.BIN and/or
 # -DQILIN_TOYRACER_BOOT=<extracted disc>/files/1TOYRACE.BIN (or the disc's
@@ -511,6 +516,10 @@ endfunction()
 # compiles and links the code it lifts from its own disc). Cross-compiled on
 # Linux with llvm-mingw (tools/player-kit/package.sh).
 function(qilin_player_kit game)
+    if(APPLE)
+        qilin_player_kit_macos(${game})  # tools/player-kit/macos.cmake
+        return()
+    endif()
     if(NOT TARGET SDL3-static)
         message(FATAL_ERROR "the player kit needs SDL3 built statically (QILIN_HOST=ON)")
     endif()
