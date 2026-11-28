@@ -47,44 +47,33 @@ The Linux ARM64 download, built on the Pi itself.
 
 Next steps: on a real Pi, measure a first build on a Pi 4 (4 GB) and a Pi 5 (with zig's own first libc++ build), the peak memory of the largest generated file and the start-up's hashing of the kit (the 170 MB zig program is hashed into the build's identity at every start), then tune the per-compiler allowance; and confirm the Vulkan check's messages, the file chooser and the menu entry on labwc.
 
-## Android
+## Android: not pursued
 
-**On the device: not workable.** Since Android 10 an app can't run programs or map code from files it writes (`execve` and executable mappings of app-writable files are blocked). A compiler packaged as a native library in the app could still run *(unconfirmed on Android 15/16)*, and loading a generated `.so` after making it read-only works in practice, but Google Play forbids executing code it didn't deliver, and the trick is fragile.
+The owner, 2026-11-28: "Forget android, those users can sort installation out themselves". No Android build or installer is made here. What was found, for whoever takes it up: an app can't compile and run code on the device (Android 10's execute restrictions); the workable route is a computer building the APK (a fixed template plus the player's native library, signed with a local key) and installing it over adb, which is exempt from Google's coming developer verification. Vulkan 1.3 only (the owner's decision) leaves out the NVIDIA Shield TV (Vulkan 1.1) and Fire TV sticks (Vega OS, or Vulkan 1.1 at best); recent tablets have 1.3. The renderer uses only two 1.3 features (dynamic rendering, synchronization2), in a few places, should a 1.1 path ever be wanted.
 
-**The route: the desktop launcher builds the Android app and installs it over USB or Wi-Fi.**
+## iPad (and iPhone)
 
-1. The launcher compiles the game for `aarch64-linux-android` with a bundled LLVM (Apache-2.0) and Android's C library headers and stubs built from AOSP (BSD/Apache). Not the NDK: its licence forbids redistribution *(arguable for its open-source parts)*, and zig has no Android C library.
-2. The rest of the app never changes between players: the manifest, SDL3's Java side (`SDLActivity`, whose SDL version must match the native library's exactly) and the runtime. CI builds that as an APK template; the launcher adds the player's `libmain.so` (16 KB page aligned), signs the APK with a key made on the player's PC (Android doesn't check certificate authorities; v2/v3 signatures), and installs it with adb built from AOSP's source (Apache-2.0).
-3. adb installs are exempt from Google's developer verification (from 2026-09 in some countries, worldwide in 2027), which will otherwise make sideloaded apps wait 24 hours.
-
-Player's friction: once, enable developer options and USB or wireless debugging and accept the computer; the disc image is copied to the device with the app. Nothing expires.
-
-**Decided and still to do:**
-- **Vulkan 1.3 only, on Android too** (the owner, 2026-11-28: "No to vulkan 1.1"). That's about 26% of active Android devices (Google's dashboard, November 2025; 61% have only 1.1); Android 13+ devices *should* have 1.3, so the share grows as phones are replaced. "Install on Android" checks the device's Vulkan version over adb before building and says plainly when a phone can't run it.
-- **The devices the owner wants most (2026-11-28): the NVIDIA Shield TV, Android tablets, perhaps Fire TV sticks.** The Shield TV has Vulkan 1.1 only, even on its last update (Android 11; NVIDIA's own page lists 1.1, and device reports show 1.1.178), so it can't run the game while Vulkan 1.3 is required; the owner chose to keep 1.3 knowing that. Fire TV: Amazon's new sticks run Vega OS (not Android) and can't sideload; the older Fire OS ones are low-power with Vulkan 1.1 at best. Tablets: those with recent chips (roughly Android 13 or later) have 1.3. Should 1.1 be wanted later, the renderer uses only two 1.3 features (dynamic rendering, synchronization2), in a few places: a contained change.
-- **Android TV boxes with Vulkan 1.3** still matter: the app gets a TV launcher entry and banner (Leanback), and controller-first menus, so a TV box with 1.3 works as well as a tablet.
-- The runtime needs an Android port of its own: touch controls over the picture (plus SDL's controller support), the app lifecycle (pause and resume), and saves and the disc in app storage.
-- Not on Google Play (its code rules); sideloaded only.
-
-## iPhone and iPad
+The owner, 2026-11-28: the iPad is wanted.
 
 **On the device: impossible.** App Review guideline 2.5.2 forbids apps executing code that changes their features, and iOS doesn't let apps run generated code.
 
-**The route: a Mac.** The macOS launcher gets "Install on iPhone or iPad": it builds the game for iOS with Xcode's iOS SDK (`xcodebuild -allowProvisioningUpdates`) and installs it on the connected device (`xcrun devicectl device install app`).
+**The route: a Mac, from the Mac download's own app.** Its launcher gets "Play on iPad":
 
-Player's friction:
-- **Once:** full Xcode (several GB; the Command Line Tools have no iOS SDK), an Apple ID added in Xcode's settings, Developer Mode on the device.
-- **With a free Apple ID:** the app stops opening after 7 days until it's installed again (the launcher can do that in one click), at most 3 such apps on a device. A paid developer account ($99 a year) makes it a year.
+1. **Checks.** Full Xcode (the Command Line Tools have no iOS SDK: `xcrun --sdk iphoneos --show-sdk-path`), an Apple ID signed in to Xcode (its development team, from the signing certificates or Xcode's settings), and an iPad connected and trusted, with Developer Mode on (`xcrun devicectl list devices`). Each missing piece gets a plain message and what to do (App Store link for Xcode; Xcode, Settings, Accounts; the iPad's Settings, Privacy & Security, Developer Mode).
+2. **Build.** The disc's recompiled code is the same C++ as for the Mac (`work/gen`): the launcher compiles it for iPadOS (`xcrun --sdk iphoneos clang++ -target arm64-apple-ios…`) with its usual pool and a cache of its own, into one static library. The iOS kit (in the app's `Contents/Resources/ios-kit`) holds the runtime built for iPadOS (static, with SDL3 and MoltenVK), `build-flags.txt`, and a small Xcode project that links the two. `xcodebuild -allowProvisioningUpdates` builds and signs it with the player's team and a bundle identifier made once per player.
+3. **Install.** `xcrun devicectl device install app`, then the disc image copied into the app's Documents (`devicectl device copy to`): a `.chd` is one file, which is easiest; a `.cue` goes with its tracks.
+4. **Seven days.** With a free Apple ID the app stops opening after 7 days. The launcher shows when, and "Reinstall on iPad" signs and installs again without rebuilding. A paid developer account ($99 a year) makes it a year. Free accounts: at most 3 such apps on a device (both games count).
 
-Windows and Linux players: no sanctioned route. Compiling for iOS needs Apple's iOS SDK, which Xcode's licence ties to Apple hardware *(unconfirmed)*; AltStore and SideStore only re-sign an app someone has built. The EU's alternative marketplaces, web distribution and TestFlight all mean distributing the built game, which is the one thing this project can't do.
+**The game on iPadOS** (the runtime port): SDL3 for iOS (UIKit) and MoltenVK linked in statically (App Store–compatible build, no private API; Apple GPUs from the A12/M1 on have what Vulkan 1.3 through MoltenVK needs *(to confirm)*); the disc found in Documents (or chosen from the Files app); saves and settings in Documents, so the Files app and backups see them; the game paused when the app goes to the background and resumed after; controllers through SDL (Xbox, PlayStation and MFi pads all work on iPadOS): controller first. Touch controls on screen come second.
 
-Runtime work: SDL3 and MoltenVK (static, App Store–compatible without its private-API option) on iOS, touch controls, the disc and saves in the app's Documents (reachable from the Files app).
+**What can't be checked without hardware:** CI's Macs build the iOS kit, compile and link the game for the device (unsigned) and run it in the iPad Simulator; signing, installing and playing on a real iPad need the owner's Mac and iPad.
 
-## Order of work (recommended)
+Windows and Linux players: no sanctioned route. Compiling for iOS needs Apple's iOS SDK, which comes only with Xcode on a Mac; AltStore and SideStore only re-sign an app someone has built. The EU's alternative marketplaces, web distribution and TestFlight all mean distributing the built game, which is the one thing this project can't do.
+
+## Order of work
 
 1. Linux and macOS downloads (released in Toy Commander 0.15.0, Toy Racer 0.8.0), then the Raspberry Pi measurements and a first run on a real Mac.
-2. Android (Vulkan 1.3 only): the runtime port, then the launcher's "Install on Android".
-3. iOS/iPadOS: after Android, reusing the touch controls; Mac-only.
+2. iPad: the runtime port and the iOS kit (CI: device build and Simulator), then the Mac launcher's "Play on iPad"; then a first install on the owner's iPad; then touch controls.
 
 ## Sources
 
