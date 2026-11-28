@@ -141,7 +141,7 @@ std::expected<std::string, std::string> build_identity(const Kit& kit) {
     std::vector<std::pair<std::string, fs::path>> parts = {
         {"qilin.exe", kit.qilin()},
         {"game.txt", kit.kit / "game.txt"},
-        {"kit.ninja", kit.kit / "kit.ninja"},
+        {"build-flags.txt", kit.flags_file()},
         {"compiler", kit.compiler()},
         {"launcher", kit.launcher},
     };
@@ -235,10 +235,10 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         return a.size != b.size ? a.size > b.size : a.name < b.name;
     });
 
-    // The kit's flags (kit.ninja), paths relative to work\.
-    const auto ninja = read_file(kit.kit / "kit.ninja");
-    if (!ninja) return failed("This download has no kit\\kit.ninja. Unpack it again.");
-    const auto vars = parse_settings(*ninja);
+    // The kit's flags (build-flags.txt), paths relative to work\.
+    const auto flag_text = read_file(kit.flags_file());
+    if (!flag_text) return failed("This download has no kit\\build-flags.txt. Unpack it again.");
+    const auto vars = parse_settings(*flag_text);
     const auto flags_of = [&](std::string_view name) {
         const auto it = vars.find(name);
         return it == vars.end() ? std::vector<std::string>{} : split_flags(it->second, "../kit");
@@ -351,7 +351,7 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
 
     // Link.
     progress.stage = Stage::Linking;
-    const fs::path linked = work / widen(kit.exe);
+    const fs::path linked = work / "obj" / widen(kit.exe);  // moved to work\<Game>.exe below
     fs::remove(linked, ec);
     {
         std::vector<std::string> objects;
@@ -359,7 +359,7 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
         std::sort(objects.begin(), objects.end());
         Command link = tool(kit.compiler(), ldflags, work, work / "logs" / "link.log");
         link.args.push_back("-o");
-        link.args.push_back(kit.exe);
+        link.args.push_back("obj/" + kit.exe);
         link.args.insert(link.args.end(), objects.begin(), objects.end());
         link.args.insert(link.args.end(), libs.begin(), libs.end());
         const auto code = run(link);
@@ -375,8 +375,9 @@ std::expected<void, std::string> build_game(const Kit& kit, const fs::path& disc
     staged += L".new";
     fs::path previous = game;
     previous += L".previous";
-    fs::copy_file(linked, staged, fs::copy_options::overwrite_existing, ec);
-    if (ec) return failed("Can't copy the game into " + show(kit.top) + ": " + ec.message() + ".");
+    fs::remove(staged, ec);
+    fs::rename(linked, staged, ec);
+    if (ec) return failed("Can't move the game into " + show(work) + ": " + ec.message() + ".");
     const bool replaced = fs::exists(game, ec)
                               ? ReplaceFileW(game.c_str(), staged.c_str(), previous.c_str(), REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr) != 0
                               : MoveFileExW(staged.c_str(), game.c_str(), MOVEFILE_WRITE_THROUGH) != 0;

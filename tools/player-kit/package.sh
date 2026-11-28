@@ -4,8 +4,9 @@
 #
 # Cross-compiles on Linux with llvm-mingw, then lays out:
 #   <Package>/Play <Title>.exe, README.txt, LICENSES/
-#   <Package>/kit/  qilin.exe, lib/lib<game>_kit.a, include/, kit.ninja,
-#                   game.txt, toolchain/ (llvm-mingw, trimmed), VERSION
+#   <Package>/kit/  qilin.exe, lib/lib<game>_kit.a, lib/icon.o, include/,
+#                   build-flags.txt, game.txt, files.txt, VERSION,
+#                   toolchain/ (llvm-mingw, trimmed)
 # Nothing in it is made from the game: the player's PC lifts the boot file
 # from their own disc dump and compiles that code with the bundled compiler
 # (Play <Title>.exe, the launcher: tools/player-kit/launcher, the same
@@ -70,6 +71,11 @@ sed -n '/This is free and unencumbered/,/unlicense.org/p' "$chdr"/deps/miniz-*/m
 sed -n '/^This software is available as a choice/,$p' "$chdr/include/dr_libs/dr_flac.h" > "$lic/libchdr/dr_flac-LICENSE.txt"
 for f in miniz dr_flac; do [ -s "$lic/libchdr/$f-LICENSE.txt" ] || { echo "no licence text found for $f" >&2; exit 1; }; done
 cp "${ZSTD_LICENSE:?set ZSTD_LICENSE to zstd v1.5.7 LICENSE file}" "$lic/libchdr/zstd-LICENSE.txt"
+
+# Every file the release holds (itself too): the launcher removes anything
+# else from kit\ and LICENSES\, which an older version unpacked over this
+# one left behind (tools/player-kit/launcher/tidy.hpp).
+(cd "$pkg" && { find . -type f | sed 's|^\./||'; echo kit/files.txt; } | LC_ALL=C sort -u | sed 's/$/\r/' > kit/files.txt)
 
 rm -f "$out"
 (cd "$stage" && zip -q -r -9 "$out" "$PACKAGE")

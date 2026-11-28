@@ -2,8 +2,8 @@
 // platform headers), tested by launcher_test.cpp.
 //
 //   kit\game.txt   name=value a line (package.sh writes it): the game's names
-//   kit\kit.ninja  `name = value` lines with $kit for the kit's folder
-//                  (CMake writes it): cxxflags, ldflags, libs
+//   kit\build-flags.txt  `name = value` lines with $kit for the kit's
+//                  folder (CMake writes it): cxxflags, ldflags, libs
 #pragma once
 
 #include <map>

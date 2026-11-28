@@ -24,6 +24,7 @@
 #include "disc.hpp"
 #include "kit.hpp"
 #include "process.hpp"
+#include "tidy.hpp"
 
 namespace fs = std::filesystem;
 using namespace qilin::launcher;
@@ -102,7 +103,7 @@ int main(int argc, char**) {
         "package=Fixture--QilinRecomp\r\n");
     const fs::path archive = top / "kit" / "lib" / "libfixture_kit.a";
     put(archive, "fixture");
-    put(top / "kit" / "kit.ninja", "cxxflags = -O2 -I$kit/include\nldflags = -static\nlibs = $kit/lib/libfixture_kit.a\n");
+    put(top / "kit" / "build-flags.txt", "cxxflags = -O2 -I$kit/include\nldflags = -static\nlibs = $kit/lib/libfixture_kit.a\n");
     const fs::path disc = top / L"disc %PATH% & \x4fdd\x5b58.cue";
     put(disc, "synthetic cue, no game data");
 
@@ -198,7 +199,7 @@ int main(int argc, char**) {
     CHECK(build());
     CHECK_CALLS(8, -1);
     options.use_cache = true;
-    CHECK(fs::is_regular_file(top / "Fixture.exe.previous"));
+    CHECK(fs::is_regular_file(kit.work / "Fixture.exe.previous"));
 
     // A running (locked) game: the build fails, and the old .exe and its
     // record stay as they were.
@@ -237,15 +238,60 @@ int main(int argc, char**) {
         c.exe = kit.game_exe();
         c.args = {show(disc)};
         c.cwd = kit.top;
-        c.out = kit.top / "run.log";
-        c.err = kit.top / "run-errors.log";
+        c.out = kit.run_log();
+        c.err = kit.run_errors();
         c.build_tool = false;
         auto game = Process::start(c);
         CHECK(game.has_value());
         CHECK(game && game->wait() == 0);
-        const auto launched = read_file(kit.top / "launched.txt");
+        const auto launched = read_file(kit.work / "launched.txt");  // the stand-in writes beside itself: the game is in work\.
         CHECK(launched && *launched == show(disc));
-        CHECK(fs::exists(kit.top / "run-errors.log"));
+        CHECK(fs::exists(kit.run_errors()));
+    }
+
+    // Tidying: what older downloads left behind goes; the release's files,
+    // the game, the build and anything of the player's stay.
+    {
+        put(top / "kit" / "files.txt",
+            "kit/game.txt\r\nkit/files.txt\r\nkit/qilin.exe\r\nkit/VERSION\r\nkit/build-flags.txt\r\nkit/lib/libfixture_kit.a\r\n"
+            "kit/include/stub.hpp\r\nkit/toolchain/bin/x86_64-w64-mingw32-clang++.exe\r\nLICENSES/a/LICENSE.txt\r\n");
+        fs::create_directories(top / "LICENSES" / "a");
+        fs::create_directories(top / "LICENSES" / "ninja");
+        fs::create_directories(top / "kit" / "gone" / "deeper");
+        put(top / "LICENSES" / "a" / "LICENSE.txt", "kept");
+        put(top / "LICENSES" / "ninja" / "COPYING", "old");
+        put(top / "kit" / "play.ps1", "old");
+        put(top / "kit" / "ninja.exe", "old");
+        put(top / "kit" / "gone" / "deeper" / "x.txt", "old");
+        put(top / "Play Fixture.bat", "old");
+        put(top / "Fixture.exe", "old");
+        put(top / "run.log", "old");
+        put(top / "mine.txt", "the player's");
+        put(kit.work / "build.ninja", "old");
+        put(kit.work / ".ninja_log", "old");
+        put(kit.work / "obj" / "lifted_000.o.d", "old");
+        put(kit.work / "disc.txt", "\xEF\xBB\xBF" + show(disc) + "\r\n");  // play.ps1's remembered disc
+        fs::remove(kit.disc_file(), ec);
+        const Tidied t = tidy_folder(kit);
+        CHECK(t.problems.empty());
+        for (const fs::path& p : {top / "LICENSES" / "ninja", top / "kit" / "play.ps1", top / "kit" / "ninja.exe", top / "kit" / "gone",
+                                  top / "Play Fixture.bat", top / "Fixture.exe", top / "run.log", kit.work / "build.ninja",
+                                  kit.work / ".ninja_log", kit.work / "obj" / "lifted_000.o.d", kit.work / "disc.txt"})
+            check(!fs::exists(p, ec), "left behind: " + show(p), __LINE__);
+        for (const fs::path& p : {top / "kit" / "game.txt", top / "kit" / "qilin.exe", top / "kit" / "lib" / "libfixture_kit.a",
+                                  top / "LICENSES" / "a" / "LICENSE.txt", launcher, disc, top / "mine.txt", kit.game_exe(),
+                                  kit.work / "built-with.txt"})
+            check(fs::exists(p, ec), "removed: " + show(p), __LINE__);
+        const auto remembered = read_file(kit.disc_file());
+        CHECK(remembered && *remembered == show(disc));
+        CHECK(up_to_date(kit, *build_identity(kit)));
+        // A list that doesn't name the kit's own files is the wrong one: nothing goes.
+        put(top / "kit" / "files.txt", "README.txt\r\n");
+        put(top / "kit" / "stray.txt", "x");
+        (void)tidy_folder(kit);
+        CHECK(fs::exists(top / "kit" / "stray.txt"));
+        fs::remove(top / "kit" / "stray.txt", ec);
+        fs::remove(top / "kit" / "files.txt", ec);
     }
 
     // The disc check's plain messages for what isn't a disc.

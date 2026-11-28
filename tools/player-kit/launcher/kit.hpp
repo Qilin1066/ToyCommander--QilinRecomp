@@ -1,10 +1,13 @@
 // The download's layout, as the launcher finds it (package.sh lays it out):
 //
 //   <folder>\Play <Title>.exe      this launcher
-//   <folder>\kit\                  game.txt, VERSION, kit.ninja, qilin.exe,
+//   <folder>\README.txt, LICENSES\
+//   <folder>\kit\                  game.txt, VERSION, files.txt (every file the
+//                                  release holds), build-flags.txt, qilin.exe,
 //                                  lib\, include\, toolchain\
-//   <folder>\work\                 the build: gen\, obj\, build.log, built-with.txt
-//   <folder>\<Game>.exe            the game, once built
+//   <folder>\work\                 made here: the game (<Game>.exe), its logs
+//                                  (run.log, run-errors.log) and the build
+//                                  (gen\, obj\, logs\, build.log, built-with.txt)
 //
 // and the per-user data folder the game uses too (host/src/paths.cpp):
 // %LOCALAPPDATA%\qilin\<game>\ (or QILIN_SAVE_DIR), where the launcher keeps
@@ -37,7 +40,10 @@ struct Kit {
     std::string repo;          // Qilin1066/ToyCommander--QilinRecomp
     std::string version;       // kit\VERSION
 
-    std::filesystem::path game_exe() const;
+    std::filesystem::path game_exe() const;  // work\<Game>.exe
+    std::filesystem::path flags_file() const { return kit / "build-flags.txt"; }
+    std::filesystem::path run_log() const { return work / "run.log"; }
+    std::filesystem::path run_errors() const { return work / "run-errors.log"; }
     std::filesystem::path compiler() const;  // the bundled clang++
     std::filesystem::path qilin() const;
     std::filesystem::path build_log() const { return work / "build.log"; }

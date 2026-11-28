@@ -1,9 +1,10 @@
-// Building the game from the player's disc, as play.ps1 did, without
-// Ninja: `qilin lift` writes the lifted C++ to work\gen, the bundled clang++
+// Building the game from the player's disc: `qilin lift` writes the lifted
+// C++ (64 files of about equal size) to work\gen, the bundled clang++
 // compiles each file (a pool of worker threads, the largest files first;
 // objects come from the per-user cache when their inputs are unchanged), and
 // the objects are linked with the kit's prebuilt library into the game's .exe,
-// staged and swapped in. Every tool's output goes to work\build.log.
+// staged and swapped in as work\<Game>.exe. Every tool's output goes to
+// work\build.log.
 #pragma once
 
 #include <atomic>

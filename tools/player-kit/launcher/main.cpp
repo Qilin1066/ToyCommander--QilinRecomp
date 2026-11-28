@@ -27,6 +27,8 @@
 #include "kit.hpp"
 #include "kit_text.hpp"
 #include "process.hpp"
+#include "shortcut.hpp"
+#include "tidy.hpp"
 #include "update.hpp"
 
 namespace fs = std::filesystem;
@@ -69,6 +71,9 @@ public:
         screen_ = Screen::Starting;
         // The remembered disc, and whether the game is built from this kit.
         run_task([this] {
+            // What older downloads unpacked over this one left behind.
+            (void)tidy_folder(kit_);
+            const bool shortcut = has_desktop_shortcut(kit_);
             auto identity = build_identity(kit_);
             if (!identity) {
                 post([this, why = identity.error()] { fail_start(why); });
@@ -79,8 +84,9 @@ public:
                 if (const auto line = trim(*text); !line.empty()) disc = fs::path(widen(line));
             DiscCheck check;
             if (disc) check = check_disc(kit_, *disc);
-            post([this, built_from = *identity, disc, check] {
+            post([this, built_from = *identity, disc, check, shortcut] {
                 identity_ = built_from;
+                shortcut_ = shortcut;
                 if (!disc) {
                     screen_ = Screen::NeedDisc;
                     return;
@@ -148,6 +154,8 @@ private:
     std::string failure_;  // BuildFailed's or GameFailed's text
     std::string errors_;   // GameFailed: the end of run-errors.log
     bool quit_ = false;
+    bool shortcut_ = false;        // a desktop shortcut to this launcher exists
+    std::string shortcut_error_;
 
     BuildProgress build_;
     std::optional<Process> game_;
@@ -239,8 +247,8 @@ private:
         c.exe = kit_.game_exe();
         c.args = {show(*disc_)};
         c.cwd = kit_.top;
-        c.out = kit_.top / "run.log";
-        c.err = kit_.top / "run-errors.log";
+        c.out = kit_.run_log();
+        c.err = kit_.run_errors();
         c.build_tool = false;
         auto started = Process::start(c);
         if (!started) {
@@ -259,6 +267,9 @@ private:
         const unsigned long code = game_->wait();
         game_.reset();
         if (code == 0) {
+            // The new build runs: the one kept in case it didn't can go.
+            std::error_code ec;
+            fs::remove(fs::path(kit_.game_exe()).concat(L".previous"), ec);
             quit_ = true;
             return;
         }
@@ -266,7 +277,7 @@ private:
         SDL_RaiseWindow(window_);
         screen_ = Screen::GameFailed;
         failure_ = "The game stopped with " + describe_exit(code) + ".";
-        errors_ = tail(kit_.top / "run-errors.log", 20);
+        errors_ = tail(kit_.run_errors(), 20);
     }
 
     void check_updates() {
@@ -509,7 +520,16 @@ void App::draw() {
                 notice_.clear();
                 start_build(false);
             }
+            if (!shortcut_) {
+                ImGui::SameLine();
+                if (ImGui::Button("Add a desktop shortcut")) {
+                    const auto made = make_desktop_shortcut(kit_);
+                    shortcut_ = made.has_value();
+                    shortcut_error_ = made ? std::string() : "The shortcut couldn't be made: " + made.error() + ".";
+                }
+            }
             ImGui::EndDisabled();
+            if (!shortcut_error_.empty()) coloured(kWarning, shortcut_error_);
             ImGui::TextColored(kQuiet, "Or drag another disc image onto this window.");
             break;
         }

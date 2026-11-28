@@ -1,0 +1,3 @@
+// The game's icon (the launcher's, make_icon.py): compiled into kit\lib\icon.o
+// and linked into the game on the player's PC (build-flags.txt's libs).
+1 ICON "launcher/launcher.ico"

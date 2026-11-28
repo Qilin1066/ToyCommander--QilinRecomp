@@ -44,7 +44,7 @@ bool plain_name(std::string_view s) {
 
 }  // namespace
 
-fs::path Kit::game_exe() const { return top / widen(exe); }
+fs::path Kit::game_exe() const { return work / widen(exe); }
 fs::path Kit::compiler() const { return kit / "toolchain" / "bin" / "x86_64-w64-mingw32-clang++.exe"; }
 fs::path Kit::qilin() const { return kit / "qilin.exe"; }
 
