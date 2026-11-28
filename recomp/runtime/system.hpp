@@ -61,6 +61,9 @@ void backtrace(std::FILE* out, const Context& c, uint32_t stack_top, unsigned mo
 // a game's program ends; any thread may call it.
 [[noreturn]] void end(int code);
 [[noreturn]] void fatal(const char* format, ...) QILIN_PRINTF(1, 2);  // the message, then end(3)
+// Also given fatal's message, before it ends the program: where nobody sees
+// stderr (an iPad app), the host shows it.
+void on_fatal(void (*show)(const char* message));
 void log(const char* format, ...) QILIN_PRINTF(1, 2);
 
 }  // namespace qilin::rt

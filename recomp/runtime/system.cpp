@@ -155,13 +155,30 @@ void backtrace(std::FILE* out, const Context& c, uint32_t stack_top, unsigned mo
     }
 }
 
+namespace {
+void (*g_show_fatal)(const char*) = nullptr;
+}
+
+void on_fatal(void (*show)(const char* message)) { g_show_fatal = show; }
+
 void fatal(const char* format, ...) {
     va_list args;
     va_start(args, format);
+    char text[1024] = "";
+    if (g_show_fatal) {
+        va_list again;
+        va_copy(again, args);
+        std::vsnprintf(text, sizeof text, format, again);
+        va_end(again);
+    }
     std::fputs("qilin_run: ", stderr);
     std::vfprintf(stderr, format, args);
     std::fputc('\n', stderr);
     va_end(args);
+    if (g_show_fatal) {
+        std::fflush(nullptr);
+        g_show_fatal(text);
+    }
     end(3);
 }
 

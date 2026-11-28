@@ -9,9 +9,9 @@ namespace qilin::host {
 
 // The game's data folder, as the other Qilin recomps keep theirs:
 // qilin/<the game> in the platform's per-user application data (Windows:
-// %LOCALAPPDATA%; macOS: ~/Library/Application Support; elsewhere
-// $XDG_DATA_HOME or ~/.local/share), or QILIN_SAVE_DIR if set. Created
-// if missing.
+// %LOCALAPPDATA%; macOS: ~/Library/Application Support; iPadOS and iOS: the
+// app's Documents, which the Files app shows; elsewhere $XDG_DATA_HOME or
+// ~/.local/share), or QILIN_SAVE_DIR if set. Created if missing.
 std::filesystem::path user_folder();
 
 }  // namespace qilin::host

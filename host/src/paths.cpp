@@ -6,6 +6,9 @@
 #include <system_error>
 
 #include "qilin/host/vulkan.hpp"
+#if defined(QILIN_IOS)
+#include "qilin/host/ios.hpp"
+#endif
 
 namespace qilin::host {
 
@@ -13,6 +16,10 @@ namespace {
 std::filesystem::path user_data_base() {
 #if defined(_WIN32)
     if (const wchar_t* p = _wgetenv(L"LOCALAPPDATA"); p && *p) return p;
+#elif defined(QILIN_IOS)
+    // The app's Documents, which the Files app shows (UIFileSharingEnabled):
+    // the player can copy saves and texture packs in and out.
+    return ios::documents();
 #elif defined(__APPLE__)
     if (const char* p = std::getenv("HOME"); p && *p) return std::filesystem::path(p) / "Library" / "Application Support";
 #else

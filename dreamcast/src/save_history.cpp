@@ -26,6 +26,9 @@
 
 #include "system.hpp"
 #include "qilin/host/file_store.hpp"
+#if defined(QILIN_IOS)
+#include "qilin/host/ios.hpp"
+#endif
 
 namespace dreamcast {
 namespace fs = std::filesystem;
@@ -236,7 +239,13 @@ void set_command_line(int argc, char** argv) {
 
 void restart_program() {
     std::fflush(nullptr);
-#if defined(_WIN32)
+#if defined(QILIN_IOS)
+    // An app can't start itself again: the restore is done when the player
+    // opens it again (the request is written already).
+    qilin::host::ios::tell(QILIN_APP_TITLE, "The save is restored when the game starts again. It closes now: open it again from the Home Screen.");
+    std::fflush(nullptr);
+    std::_Exit(0);  // guest threads are parked on host threads: no static destructors
+#elif defined(_WIN32)
     // The command line exactly as this process got it: arguments with spaces
     // (disc folders often have them) stay quoted as the player quoted them.
     STARTUPINFOW si{};

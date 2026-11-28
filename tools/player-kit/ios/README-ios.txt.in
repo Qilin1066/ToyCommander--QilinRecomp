@@ -1,0 +1,66 @@
+@TITLE@ iOS kit (iPadOS and iOS, arm64 devices, iOS 16 or newer)
+=================================================================
+
+What the Mac app's "Play on iPad" builds the game's iPad (or iPhone) app
+from. $kit below is this folder (Contents/Resources/ios-kit). The app's own
+copy is read-only (sealed with the app): build in a folder of your own.
+
+What's here
+-----------
+lib/lib@GAME@_ios_kit.a  Everything but the lifted code, one static archive
+                         for arm64 devices (iphoneos SDK): the game's
+                         library and runtime, SDL3, Dear ImGui, volk,
+                         libchdr (with LZMA, miniz, zstd's decompressor,
+                         dr_flac) and MoltenVK (its release's static
+                         library, App Store build: no private API).
+include/                 The runtime's headers, which the lifted code
+                         includes (as the desktop kit's include/).
+build-flags.txt          `name = value` lines, $kit this folder:
+                           sdk = iphoneos
+                           cxxflags = what each lifted .cpp is compiled with
+                         There is no native line: the code runs on every
+                         arm64 iPad and iPhone with iOS 16 or newer.
+xcode/                   The app's Xcode project: QilinGame.xcodeproj
+                         (scheme QilinGame), Info.plist, Game.xcconfig (this
+                         game's defaults), QilinGame.xcconfig (the build
+                         settings), app.c, Assets.xcassets (the icon).
+VERSION                  The release this kit is from.
+
+Building and installing
+-----------------------
+1. Compile each lifted .cpp (qilin lift's output, as for the Mac):
+     xcrun --sdk iphoneos clang++ <cxxflags, $kit replaced> -c <file>.cpp -o <file>.o
+2. Put them in one static library:
+     xcrun --sdk iphoneos libtool -static -o <work>/liblifted.a <the .o files>
+3. Copy $kit/xcode to a folder you can write to, <work>/xcode, and build:
+     xcodebuild -project <work>/xcode/QilinGame.xcodeproj -scheme QilinGame \
+       -configuration Release -destination generic/platform=iOS \
+       -derivedDataPath <work>/derived -allowProvisioningUpdates \
+       DEVELOPMENT_TEAM=<the player's team ID> \
+       PRODUCT_BUNDLE_IDENTIFIER=<an identifier made once per player> \
+       PRODUCT_NAME=@EXE@ \
+       QILIN_LIFTED_LIB=<work>/liblifted.a \
+       QILIN_KIT_LIB=$kit/lib/lib@GAME@_ios_kit.a \
+       build
+   The app is <work>/derived/Build/Products/Release-iphoneos/@EXE@.app
+   (PRODUCT_NAME.app). `archive` works too (-archivePath <path>), but
+   `build` is enough for a development install. Paths may have spaces.
+   Optional settings: QILIN_DISPLAY_NAME (the name under the icon and in
+   the Files app; default "@TITLE@"), MARKETING_VERSION and
+   CURRENT_PROJECT_VERSION (default this kit's version).
+4. Install it: xcrun devicectl device install app --device <device> <the .app>
+5. Copy the player's disc image into the app's Documents folder (devicectl
+   device copy to, the app's data container, destination Documents/): one
+   image only, a .chd (one file), or a .cue with its .bin tracks, or a .gdi
+   with its tracks, all side by side. With none, or more than one, the game
+   says so and waits ("Check again"). The player can also copy it with the
+   Files app: On My iPad, @TITLE@.
+
+On the iPad
+-----------
+Documents/qilin/@GAME@ is the game's data folder (settings, the memory card,
+the saves' history, texture packs) and log.txt, the log of the last start
+(the launch environment's QILIN_LOG=console keeps it on stderr instead).
+The game is played with a controller (MFi, Xbox, PlayStation); Back and
+Start together (or Esc on a keyboard) open the settings. It pauses when the
+app goes to the background.

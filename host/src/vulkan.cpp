@@ -6,16 +6,35 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(QILIN_IOS)
+#include "qilin/host/ios.hpp"
+#endif
+
 namespace qilin::host {
+
+#if defined(QILIN_IOS)
+PFN_vkGetInstanceProcAddr moltenvk_loader();  // moltenvk.cpp
+#endif
 
 void die(const char* format, ...) {
     std::fputs(QILIN_APP ": ", stderr);
     va_list args;
     va_start(args, format);
+#if defined(QILIN_IOS)
+    // Shown too: nobody sees an app's stderr.
+    va_list again;
+    va_copy(again, args);
+    char text[1024];
+    std::vsnprintf(text, sizeof text, format, again);
+    va_end(again);
+#endif
     std::vfprintf(stderr, format, args);
     va_end(args);
     std::fputc('\n', stderr);
     std::fflush(nullptr);
+#if defined(QILIN_IOS)
+    ios::show_fatal(text);
+#endif
     std::_Exit(70);
 }
 
@@ -55,8 +74,12 @@ void Gpu::prefer(const std::string& name) { g_preferred = name; }
 
 Gpu Gpu::create(std::span<const char* const> instance_extensions, bool want_swapchain,
                 VkSurfaceKHR (*make_surface)(VkInstance, void*), void* surface_arg, VkSurfaceKHR* surface_out) {
+#if defined(QILIN_IOS)
+    volkInitializeCustom(moltenvk_loader());  // linked in: nothing to look for
+#else
     if (volkInitialize() != VK_SUCCESS)
         die("no Vulkan loader was found: install your GPU's Vulkan 1.3 driver (on macOS, MoltenVK)");
+#endif
     if (volkGetInstanceVersion() < VK_API_VERSION_1_3)
         die("the Vulkan loader is older than 1.3: update your GPU driver");
 

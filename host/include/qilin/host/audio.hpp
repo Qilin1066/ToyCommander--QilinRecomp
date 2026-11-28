@@ -106,6 +106,10 @@ public:
 
     void set_volume(unsigned percent, bool muted = false);
 
+    // The device stopped (true) or playing again: for an app sent to the
+    // background (iPadOS). A device opened again meanwhile stays as asked.
+    void set_paused(bool paused);
+
     double target_ms() const { const std::lock_guard lock(device_mutex_); return target_ms_; }
 
     // Since the last call (any thread): how much was queued on average and at
@@ -126,7 +130,7 @@ private:
     void unavailable(const char* reason);
     void mark_failed(const char* reason);
     mutable std::mutex device_mutex_;  // pointer/lifecycle, then SDL stream lock
-    bool audio_initialized_ = false, warned_ = false;
+    bool audio_initialized_ = false, warned_ = false, paused_ = false;
     std::chrono::steady_clock::time_point retry_at_{};
     std::atomic<bool> failed_{false};
     std::atomic<uint32_t> open_failures_{0}, recoveries_{0};

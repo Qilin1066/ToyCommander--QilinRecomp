@@ -2,7 +2,9 @@ name: macOS downloads
 
 # Builds each game's macOS download (tools/player-kit/package-macos.sh): one
 # universal disk image, <Game>--QilinRecomp-X.Y.Z-macos.dmg, for Apple silicon
-# and Intel Macs. On every push, as artifacts to check, each one checked on
+# and Intel Macs, whose app carries the iOS kit for "Play on iPad"
+# (tools/player-kit/package-ios-kit.sh; checked by check-ios-kit.sh: an app
+# linked from it for a device, and for the Simulator, run there). On every push, as artifacts to check, each one checked on
 # both kinds of Mac (tools/player-kit/check-macos.sh); on a game's version tag
 # (toycommander-vX.Y.Z or toyracer-vX.Y.Z), attached to that tag's GitHub
 # Release. No game data is used or included: players lift the boot file from
@@ -21,6 +23,11 @@ env:
   # MoltenVK (Apache-2.0, KhronosGroup): its macOS release, pinned and checked.
   MOLTENVK_VERSION: v1.4.2
   MOLTENVK_SHA256: f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e
+  # The same release for iPadOS and iOS: MoltenVK-ios.tar's static library
+  # (ios-arm64) goes into the iOS kit; MoltenVK-all.tar's Simulator one
+  # (ios-arm64_x86_64-simulator) only into CI's Simulator check.
+  MOLTENVK_IOS_SHA256: b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1
+  MOLTENVK_ALL_SHA256: 562a15a29bc358446a56a4091c5f7e08f604184187c1d34f712148b61ef17276
   # The licences of what its library contains, at the revisions MoltenVK
   # v1.4.2 names (its ExternalRevisions folder).
   SPIRV_CROSS_REV: 6c09849fe88c48eaed08413aa022aaa136a3a057
@@ -34,7 +41,72 @@ env:
   ZSTD_LICENSE_SHA256: 7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8   # zstd v1.5.7 LICENSE (BSD), for libchdr's bundled decompressor
 
 jobs:
+  # The iOS kit (iPadOS and iOS): built for a device, which the download
+  # carries, and for the Simulator; an app linked from each by the kit's
+  # Xcode project (unsigned), and the Simulator's run there in its self test.
+  ios-kit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+    runs-on: macos-15   # Apple silicon, Xcode 16 with the iOS SDK and Simulator
+    steps:
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v5
+        if: env.BUILD == 'yes'
+        with:
+          fetch-depth: 0   # the tags, for the version of an untagged build
+      - name: Compiler messages as annotations
+        if: env.BUILD == 'yes'
+        run: echo "::add-matcher::.github/matchers/compilers.json"
+      - name: Get MoltenVK for iOS and the Simulator (pinned, checked)
+        if: env.BUILD == 'yes'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/tools/moltenvk-ios" "$RUNNER_TEMP/tools/moltenvk-all" && cd "$RUNNER_TEMP/tools"
+          base="https://github.com/KhronosGroup/MoltenVK/releases/download/$MOLTENVK_VERSION"
+          curl -sSfL -o MoltenVK-ios.tar "$base/MoltenVK-ios.tar"
+          echo "$MOLTENVK_IOS_SHA256  MoltenVK-ios.tar" | shasum -a 256 -c
+          tar xf MoltenVK-ios.tar -C moltenvk-ios MoltenVK/MoltenVK/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a
+          curl -sSfL -o MoltenVK-all.tar "$base/MoltenVK-all.tar"
+          echo "$MOLTENVK_ALL_SHA256  MoltenVK-all.tar" | shasum -a 256 -c
+          tar xf MoltenVK-all.tar -C moltenvk-all MoltenVK/MoltenVK/static/MoltenVK.xcframework/ios-arm64_x86_64-simulator/libMoltenVK.a
+          rm MoltenVK-ios.tar MoltenVK-all.tar
+          echo "MOLTENVK_IOS_LIB=$PWD/moltenvk-ios/MoltenVK/MoltenVK/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a" >> "$GITHUB_ENV"
+          echo "MOLTENVK_SIMULATOR_LIB=$PWD/moltenvk-all/MoltenVK/MoltenVK/static/MoltenVK.xcframework/ios-arm64_x86_64-simulator/libMoltenVK.a" >> "$GITHUB_ENV"
+      - name: Build the iOS kit (device and Simulator)
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/$GAME-v* ]]; then version="${GITHUB_REF_NAME#$GAME-v}"
+          else version="$(git describe --tags --always --match "$GAME-v*")"; version="${version#$GAME-v}"; fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          tools/player-kit/package-ios-kit.sh "$GAME" "$version" "$PWD/ios-kit" device
+          tools/player-kit/package-ios-kit.sh "$GAME" "$version" "$PWD/ios-kit-simulator" simulator
+      - name: Check (an app for a device and for the Simulator, run there)
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+        run: tools/player-kit/check-ios-kit.sh "$GAME" "$PWD/ios-kit" "$PWD/ios-kit-simulator"
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          name: ${{ matrix.package }}-ios-kit
+          path: ios-kit
+          retention-days: 14
+
   package:
+    needs: ios-kit
     strategy:
       fail-fast: false
       matrix:
@@ -80,12 +152,18 @@ jobs:
           echo "MOLTENVK=$PWD/moltenvk" >> "$GITHUB_ENV"
           echo "MOLTENVK_NOTICES=$PWD/notices" >> "$GITHUB_ENV"
           echo "ZSTD_LICENSE=$PWD/zstd-LICENSE" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          name: ${{ matrix.package }}-ios-kit
+          path: ${{ runner.temp }}/ios-kit
       - name: Package
         if: env.BUILD == 'yes'
         env:
           GAME: ${{ matrix.game }}
           PACKAGE: ${{ matrix.package }}
         run: |
+          export IOS_KIT="$RUNNER_TEMP/ios-kit"
           if [[ "$GITHUB_REF" == refs/tags/$GAME-v* ]]; then version="${GITHUB_REF_NAME#$GAME-v}"
           else version="$(git describe --tags --always --match "$GAME-v*")"; version="${version#$GAME-v}"; fi
           echo "VERSION=$version" >> "$GITHUB_ENV"

@@ -26,12 +26,29 @@ namespace qilin::host {
 namespace {
 constexpr VkFormat kFrameFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
+#if !defined(QILIN_IOS)
 VkSurfaceKHR make_sdl_surface(VkInstance instance, void* window) {
     VkSurfaceKHR s = VK_NULL_HANDLE;
     if (!SDL_Vulkan_CreateSurface(static_cast<SDL_Window*>(window), instance, nullptr, &s))
         die("cannot create a Vulkan surface for the window: %s", SDL_GetError());
     return s;
 }
+#else
+// iPadOS and iOS: the window is a Metal one, and its surface is made from its
+// layer here, so SDL never looks for a Vulkan library of its own (MoltenVK
+// is linked in, and SDL's search would find volk's names first).
+SDL_MetalView g_metal_view = nullptr;
+VkSurfaceKHR make_metal_surface(VkInstance instance, void* window) {
+    g_metal_view = SDL_Metal_CreateView(static_cast<SDL_Window*>(window));
+    if (!g_metal_view) die("cannot make a Metal view for the window: %s", SDL_GetError());
+    VkMetalSurfaceCreateInfoEXT ci{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+    ci.pLayer = static_cast<const CAMetalLayer*>(SDL_Metal_GetLayer(g_metal_view));
+    if (!ci.pLayer) die("the window's Metal view has no layer: %s", SDL_GetError());
+    VkSurfaceKHR s = VK_NULL_HANDLE;
+    check(vkCreateMetalSurfaceEXT(instance, &ci, nullptr, &s), "vkCreateMetalSurfaceEXT");
+    return s;
+}
+#endif
 
 void need_format(const Gpu& gpu, VkFormat f, VkFormatFeatureFlags want, const char* what) {
     VkFormatProperties p;
@@ -116,6 +133,9 @@ struct Display::Impl {
     Image target;     // headless: what's presented
     bool need_rebuild = false;
     bool vsync_built = true;  // the present mode the swapchain has
+    // iPadOS: the app isn't in front (in the background, or another app's
+    // or the system's view over it). Nothing is drawn or submitted then.
+    bool background = false;
     // With vsync and VK_KHR_present_wait: each present has an id, and the next
     // frame waits until the one before is on screen, so at most one waits in
     // the queue (a frame less latency than a full FIFO queue). 0: none yet on
@@ -499,17 +519,30 @@ Display::Display(const Options& options) : impl_(std::make_unique<Impl>()) {
         SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, options.height);
         SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(on));
         SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(on));
+#if defined(QILIN_IOS)
+        // The whole screen, always (the status bar hidden with it), its
+        // surface from a Metal layer (make_metal_surface).
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, true);
+#else
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, options.fullscreen);
+#endif
         d.window = SDL_CreateWindowWithProperties(props);
         SDL_DestroyProperties(props);
         if (!d.window) die("can't open a window: %s", SDL_GetError());
+#if defined(QILIN_IOS)
+        static const char* const ext[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME};
+        d.gpu = Gpu::create(ext, true, make_metal_surface, d.window, &d.surface);
+#else
         Uint32 n = 0;
         const char* const* ext = SDL_Vulkan_GetInstanceExtensions(&n);
         if (!ext) die("SDL has no Vulkan surface support here: %s", SDL_GetError());
         d.gpu = Gpu::create(std::span(ext, n), true, make_sdl_surface, d.window, &d.surface);
+#endif
     }
     need_format(d.gpu, kFrameFormat, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT,
                 "frames");
@@ -555,6 +588,10 @@ Display::~Display() {
         if (d.swapchain) vkDestroySwapchainKHR(d.gpu.device, d.swapchain, nullptr);
     }
     if (d.surface) vkDestroySurfaceKHR(d.gpu.instance, d.surface, nullptr);
+#if defined(QILIN_IOS)
+    if (g_metal_view) SDL_Metal_DestroyView(g_metal_view);
+    g_metal_view = nullptr;
+#endif
     d.gpu.destroy();
     for (Impl::Pad& p : d.pads) {
         SDL_RumbleGamepad(p.pad, 0, 0, 0);
@@ -575,6 +612,25 @@ bool Display::poll() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) return false;
         if (e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) d.need_rebuild = true;
+#if defined(QILIN_IOS)
+        // iPadOS allows no GPU work in the background: from "will enter the
+        // background" (the app no longer in front: Control Centre, a call,
+        // the home screen) nothing is drawn, and what was submitted is let
+        // finish. The game parks (video.cpp) until the app is in front
+        // again, when the window's images are made again (they may have
+        // changed size, or be out of date).
+        if (e.type == SDL_EVENT_WILL_ENTER_BACKGROUND || e.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+            if (!d.background) {
+                d.background = true;
+                vkDeviceWaitIdle(d.gpu.device);
+                say("the app is in the background: the game is paused");
+            }
+        } else if (e.type == SDL_EVENT_DID_ENTER_FOREGROUND && d.background) {
+            d.background = false;
+            d.need_rebuild = true;
+            say("the app is in front again: the game goes on");
+        }
+#endif
         if (e.type == SDL_EVENT_JOYSTICK_ADDED && !SDL_IsGamepad(e.jdevice.which)) list_controllers();  // say why it isn't used
         if (e.type == SDL_EVENT_GAMEPAD_ADDED) d.open_pad(e.gdevice.which);
         if (e.type == SDL_EVENT_GAMEPAD_REMOVED) d.close_pad(e.gdevice.which);
@@ -683,7 +739,13 @@ float Display::screen_aspect() const {
     SDL_GetWindowSizeInPixels(impl_->window, &w, &h);
     return w > 0 && h > 0 ? float(w) / float(h) : 0.0f;
 }
+#if defined(QILIN_IOS)
+// The app's only window has the input whenever the app is in front.
+bool Display::focused() const { return impl_->window && !impl_->background; }
+#else
 bool Display::focused() const { return impl_->window && (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_INPUT_FOCUS); }
+#endif
+bool Display::in_background() const { return impl_->background; }
 Display::PadState Display::pad_state() const { return pad_state(0); }
 Display::PadState Display::pad_state(unsigned player) const {
     const Impl::Pad* p = player < Impl::kPlaces ? impl_->at_place(player) : nullptr;
@@ -739,6 +801,7 @@ void Display::Impl::show(VkImage src, VkImageView view, uint32_t sw, uint32_t sh
     VkExtent2D dst_size;
     uint32_t index = 0;
     if (d.window) {
+        if (d.background) return;  // iPadOS: nothing drawn in the background
         if (d.need_rebuild || d.vsync_built != d.picture.vsync) d.build_swapchain();
         if (d.extent.width == 0) return;  // minimised
         const auto waited_from = std::chrono::steady_clock::now();
@@ -900,7 +963,11 @@ const std::string& Display::device_name() const { return impl_->gpu.name; }
 void Display::set_picture(const Picture& p) { impl_->picture = p; }
 const Picture& Display::picture() const { return impl_->picture; }
 
+#if defined(QILIN_IOS)
+bool Display::fullscreen() const { return impl_->window != nullptr; }  // the whole screen, always
+#else
 bool Display::fullscreen() const { return impl_->window && (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0; }
+#endif
 // The fullscreen mode for even frames: the desktop's (borderless) when its
 // refresh is a whole multiple of 60 Hz (or of 59.94) within 0.5%, or with
 // variable refresh; else the highest mode at the same size that is, if any.
@@ -940,6 +1007,9 @@ static const SDL_DisplayMode* even_mode(SDL_Window* w, const Picture& p, std::st
 
 void Display::set_fullscreen(bool on) {
     if (!impl_->window) return;
+#if defined(QILIN_IOS)
+    return;  // the whole screen, always: no modes to choose
+#endif
     std::string why;
     const SDL_DisplayMode* mode = on ? even_mode(impl_->window, impl_->picture, why) : nullptr;
     impl_->mode_note = why;

@@ -60,5 +60,7 @@ void set_tick(void (*tick)());
 void start();
 // The output's volume, 0 to 100, or muted (the settings).
 void set_volume(unsigned percent, bool muted);
+// The output stopped (the app in the background, iPadOS) or playing again.
+void set_paused(bool paused);
 
 }  // namespace dreamcast::sound
