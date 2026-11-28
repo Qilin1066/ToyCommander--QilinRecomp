@@ -37,6 +37,12 @@ simulator) sysroot=iphonesimulator; moltenvk=${MOLTENVK_SIMULATOR_LIB:?set MOLTE
 esac
 [ -f "$moltenvk" ] || { echo "package-ios-kit: no $moltenvk" >&2; exit 1; }
 build=${BUILD_DIR:-$root/build-ios-kit-$sdk}
+# The Simulator's library holds x86_64 too: the kit is arm64 only.
+if [ "$(lipo -archs "$moltenvk")" != arm64 ]; then
+    mkdir -p "$build"
+    lipo "$moltenvk" -thin arm64 -output "$build/libMoltenVK-arm64.a"
+    moltenvk="$build/libMoltenVK-arm64.a"
+fi
 
 # shellcheck disable=SC2086
 cmake -S "$root" -B "$build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS "-DCMAKE_OSX_SYSROOT=$sysroot" \
