@@ -2,6 +2,7 @@
 #include "qilin/host/ios.hpp"
 
 #include <SDL3/SDL.h>
+#include <TargetConditionals.h>
 #include <execinfo.h>
 #include <sys/mman.h>
 
@@ -75,6 +76,13 @@ void start() {
     // first (a second swipe goes to the system): SDL's "2". Landscape only.
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#if TARGET_OS_SIMULATOR
+    // The Simulator's Metal (GPU family Apple 2, argument buffers tier 1)
+    // aborts in MoltenVK's argument-buffer descriptors at the first
+    // vkUpdateDescriptorSets: MoltenVK binds resources directly there
+    // instead. A real iPad keeps MoltenVK's default.
+    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) die("SDL can't start: %s", SDL_GetError());
     const std::filesystem::path data = user_folder();
     const char* log = std::getenv("QILIN_LOG");
