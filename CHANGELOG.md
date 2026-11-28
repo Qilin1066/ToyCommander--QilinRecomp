@@ -6,6 +6,17 @@ This is Toy Commander's changelog; Toy Racer's is `toyracer/CHANGELOG.md`. A cha
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-28
+
+### Added
+- **Linux downloads**, for x86-64 and for ARM64 (the Raspberry Pi 4 and 5 on the 64-bit Raspberry Pi OS): unpack, double-click `Play Toy Commander`, choose your disc. The compiler comes with it (zig); the launcher can add the game to the applications menu.
+- **A macOS download**: one disk image for Apple silicon and Intel Macs (macOS 14.5 or later), `Toy Commander.app` to drag to Applications. It builds the game with Apple's free command line tools, and offers Apple's installer if they're missing. The app isn't notarised: the first time, open it from System Settings, Privacy & Security, "Open Anyway".
+- **A check before building that the graphics driver has Vulkan 1.3**, with what to do if it hasn't (on a Raspberry Pi: update Raspberry Pi OS).
+
+### Changed
+- **The launcher builds no more files at once than memory allows**, so a computer with little memory (a 2 GB Raspberry Pi) builds slowly rather than running out.
+- **The launcher starts faster**: it remembers what it has checked of the download instead of reading it all at every start.
+
 ## [0.14.1] - 2026-11-28
 
 ### Changed
