@@ -287,7 +287,7 @@ std::string signing_failure(const std::string& text, const std::string& team) {
     if (says(text, "maximum App ID limit") || says(text, "maximum number of apps"))
         return "Apple's limit for free Apple IDs has been reached (a few apps per device, and 10 new app identifiers a week). Delete "
                "another app you installed from Xcode from the iPad, or wait a few days, then try again.";
-    if (says(text, "no devices") || says(text, "register"))
+    if (says(text, "has no devices") || says(text, "register the device") || says(text, "device registration"))
         return "Xcode couldn't register the iPad with your team. Keep it plugged in and unlocked, then try again.";
     if (says(text, "No Account for Team") || says(text, "No signing certificate") || says(text, "requires a development team") ||
         says(text, "not signed in") || says(text, "session has expired"))
@@ -303,7 +303,7 @@ std::string install_failure(const std::string& text, const std::string& device) 
     if (says(text, "locked")) return "Unlock " + device + " and keep it unlocked while the game installs, then try again.";
     if (says(text, "not paired") || says(text, "pairing") || says(text, "trust"))
         return "Unlock " + device + " and tap Trust when it asks whether to trust this computer, then try again.";
-    if (says(text, "space") || says(text, "storage"))
+    if (says(text, "not enough space") || says(text, "insufficient") || says(text, "storage"))
         return device + " hasn't enough free space for the game and its disc (about 1.5 GB). Free some, then try again.";
     if (says(text, "unavailable") || says(text, "not connected") || says(text, "disconnected"))
         return device + " isn't connected any more. Plug it in, unlock it, then try again.";
