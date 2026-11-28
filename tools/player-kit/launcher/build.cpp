@@ -7,6 +7,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -139,12 +140,41 @@ std::expected<std::string, std::string> build_identity(const Kit& kit) {
     };
     for (auto& [rel, path] : files_under(kit.kit / "lib")) parts.emplace_back("lib/" + rel, path);
     for (auto& [rel, path] : files_under(kit.kit / "include")) parts.emplace_back("include/" + rel, path);
+
+    // The files' hashes, remembered by path, size and time: hashing the
+    // compiler and the library (a few hundred MB) at every start takes
+    // seconds on a Raspberry Pi. A file whose size or time changed is read again.
+    const fs::path remembered = kit.user / "file-hashes.txt";
+    std::map<std::string, std::string, std::less<>> known;  // "path|size|time" -> hash
+    if (const auto text = read_file(remembered)) {
+        for (std::string_view rest = *text; !rest.empty();) {
+            const size_t end = std::min(rest.find('\n'), rest.size());
+            const std::string_view line = rest.substr(0, end);
+            rest.remove_prefix(std::min(end + 1, rest.size()));
+            if (const size_t tab = line.find('\t'); tab != std::string_view::npos) known.emplace(line.substr(tab + 1), line.substr(0, tab));
+        }
+    }
+    std::string fresh;
+    bool changed = false;
     std::string lines;
     for (const auto& [name, path] : parts) {
-        const auto h = sha256_file(path);
-        if (!h) return std::unexpected("This download is incomplete: " + h.error() + ". Unpack it again.");
-        lines += name + ":" + *h + "\n";
+        std::error_code ec;
+        const auto size = fs::file_size(path, ec);
+        const auto time = ec ? fs::file_time_type{} : fs::last_write_time(path, ec);
+        const std::string key = show(fs::absolute(path, ec)) + "|" + std::to_string(size) + "|" + std::to_string(static_cast<long long>(time.time_since_epoch().count()));
+        std::string hash;
+        if (const auto it = known.find(key); it != known.end()) {
+            hash = it->second;
+        } else {
+            const auto h = sha256_file(path);
+            if (!h) return std::unexpected("This download is incomplete: " + h.error() + ". Unpack it again.");
+            hash = *h;
+            changed = true;
+        }
+        fresh += hash + "\t" + key + "\n";
+        lines += name + ":" + hash + "\n";
     }
+    if (changed) (void)write_file(remembered, fresh);  // only what's here now: old folders' entries go
     return kit.version + " | " + cpu_identity() + " | " + hash_text(lines);
 }
 
