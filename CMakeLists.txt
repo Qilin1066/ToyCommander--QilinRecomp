@@ -151,11 +151,12 @@ add_test(NAME qilin_tests COMMAND qilin_tests)
 
 # The Windows download's launcher (tools/player-kit/launcher): its portable
 # parts (the JSON reader, versions and the releases list, the kit's text
-# files) are tested everywhere; the rest is built further down, on Windows.
+# files, and what "Play on iPad" reads from Apple's tools: ios_text.hpp) are
+# tested everywhere; the rest is built further down, on Windows.
 add_executable(qilin_launcher_test tools/player-kit/launcher/launcher_test.cpp)
 target_link_libraries(qilin_launcher_test PRIVATE qilin_warnings)
 qilin_tool(qilin_launcher_test)
-foreach(part IN ITEMS json version kit)
+foreach(part IN ITEMS json version kit ios)
     add_test(NAME qilin_launcher_${part}_test COMMAND qilin_launcher_test ${part})
 endforeach()
 

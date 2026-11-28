@@ -11,13 +11,18 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "kit.hpp"
 
 namespace qilin::launcher {
+
+struct Command;
 
 enum class Stage { CheckingDisc, Recompiling, Compiling, Linking, Done };
 
@@ -53,5 +58,49 @@ std::expected<void, std::string> build_game(const Kit& kit, const std::filesyste
 
 // "1.4 GB"
 std::string show_bytes(std::uintmax_t bytes);
+
+// A build's log (work\build.log; the iPad's work/ios/build.log): what every
+// tool printed, one tool after another. Safe from several threads.
+class BuildLog {
+public:
+    explicit BuildLog(const std::filesystem::path& path) : file_(path, std::ios::binary | std::ios::trunc) {}
+    void line(std::string_view text);
+    // A tool's command and output (its own log file, then removed).
+    void tool(const Command& command, const std::filesystem::path& output, std::string_view result);
+
+private:
+    std::mutex mutex_;
+    std::ofstream file_;
+};
+
+// Compiling the lifted C++ (every .cpp in `gen`) with a pool of workers and
+// the object cache: the game's build for this computer, and the iPad's
+// (ios_install.cpp) with another compiler, flags and cache.
+struct CompileJob {
+    std::filesystem::path cwd;               // where the compiler runs (work/); `gen` and `obj` are relative to it
+    std::string gen = "gen";
+    std::string obj = "obj";
+    std::filesystem::path logs;              // each compiler's own output, before it goes into the log
+    std::filesystem::path cache;
+    std::filesystem::path compiler;
+    std::vector<std::string> compiler_args;  // before every compiler call (zig's "c++"; xcrun's "--sdk iphoneos clang++")
+    std::vector<std::string> cxxflags;
+    std::vector<std::pair<std::string, std::string>> environment;  // set for the compiler (macOS: DEVELOPER_DIR)
+    // What the objects are for, first in each cache key: "cpu\n<cpu_identity()>\n"
+    // for this computer's game, another target's name for another's.
+    std::string target;
+    std::filesystem::path include;           // the kit's headers, which every object depends on
+    bool use_cache = true;
+    unsigned jobs = 0;                       // 0: one per core (no more than memory allows)
+    std::string see_log;                     // added to a failure's message
+};
+
+// The objects (relative to `cwd`, sorted), or a plain message. progress.total
+// and .done count the files; `cancel` stops it ("The build was stopped.").
+std::expected<std::vector<std::string>, std::string> compile_lifted(const CompileJob& job, BuildLog& log, BuildProgress& progress,
+                                                                   const std::atomic<bool>& cancel);
+
+// The newest `keep` bytes of cached objects stay in `cache`; the rest go.
+void trim_cache(const std::filesystem::path& cache, std::uintmax_t keep);
 
 }  // namespace qilin::launcher
