@@ -164,6 +164,28 @@ std::expected<Kit, std::string> load_kit(const fs::path& launcher, const fs::pat
         }
     if (k.steps.empty()) k.steps.push_back(std::string(kDefaultStep));
     k.run_args = get("run_args", "{input}");
+    // `old_files = Play Ghoulies.bat; work/kit.ninja` and `old_input_file =
+    // work/disc-folder.txt`: ';'-separated, relative to the download folder.
+    // Toy Commander's own (the .bat, play.ps1's work/disc.txt) are tidy.cpp's
+    // built-in ones.
+    const auto list = [&](std::string_view key) {
+        std::vector<std::string> out;
+        const std::string text = get(key);
+        for (std::string_view rest = text; !rest.empty();) {
+            const size_t end = std::min(rest.find(';'), rest.size());
+            const std::string_view item = trim(rest.substr(0, end));
+            rest.remove_prefix(std::min(end + 1, rest.size()));
+            if (item.empty()) continue;
+            // Only plain relative paths inside the download: never "..", never absolute.
+            const fs::path p = from_utf8(item);
+            bool inside = !p.is_absolute() && !p.has_root_name() && !p.has_root_directory();
+            for (const fs::path& part : p) inside = inside && part != "..";
+            if (inside) out.emplace_back(item);
+        }
+        return out;
+    };
+    k.old_files = list("old_files");
+    k.old_input_files = list("old_input_file");
     const auto number = [&](std::string_view key, std::uint64_t& into) -> bool {
         if (!has(key)) return true;
         const std::string text = get(key);

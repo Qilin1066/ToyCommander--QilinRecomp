@@ -69,6 +69,11 @@ struct Kit {
     std::string identify;            // prints the identify contract's JSON (ADOPTING.md)
     std::vector<std::string> steps;  // step.1 to step.9: the recompiler's work, in order
     std::string run_args;            // the game's arguments
+    // What this project's downloads before the launcher left behind (paths
+    // relative to the download folder; tidy.cpp removes them), and where one
+    // remembered the player's data (its path is taken over, then removed).
+    std::vector<std::string> old_files;
+    std::vector<std::string> old_input_files;
     std::uint64_t compile_memory_mb = 1200;  // what one compiler needs at its peak
     std::uint64_t build_space_mb = 2048;     // free space a build needs on the work folder's drive
     std::uint64_t cache_mb = 2048;           // the object cache is trimmed to its newest this much

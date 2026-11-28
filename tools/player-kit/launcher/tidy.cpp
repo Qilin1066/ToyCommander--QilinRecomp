@@ -107,6 +107,23 @@ Tidied tidy_folder(const Kit& kit) {
     for (fs::directory_iterator it(kit.work / "obj", ec), end; !ec && it != end; it.increment(ec))
         if (it->path().extension() == ".d") remove_file(it->path(), out);  // Ninja's dependency files
 #endif
+
+    // This project's own leftovers, as its game.txt names them: where an
+    // older download remembered the player's data (taken over if the
+    // launcher remembers none yet), then the files themselves.
+    for (const std::string& rel : kit.old_input_files) {
+        const fs::path old = kit.top / from_utf8(rel);
+        std::error_code e;
+        if (!fs::is_regular_file(fs::symlink_status(old, e)) || fs::exists(kit.disc_file(), e)) continue;
+        if (const auto text = read_file(old)) {
+            std::string_view line = trim(*text);
+            if (line.starts_with("\xEF\xBB\xBF")) line.remove_prefix(3);  // Windows PowerShell's UTF-8 mark
+            line = trim(line.substr(0, std::min(line.find('\n'), line.size())));
+            if (!line.empty()) (void)write_file(kit.disc_file(), std::string(line));
+        }
+    }
+    for (const std::string& rel : kit.old_input_files) remove_file(kit.top / from_utf8(rel), out);
+    for (const std::string& rel : kit.old_files) remove_file(kit.top / from_utf8(rel), out);
     return out;
 }
 

@@ -415,7 +415,8 @@ int main(int argc, char** argv) {
             "identify={qilin} identify {input} --json\n"
             "step.1={qilin} lift {input} --out {gen} --files 64\n"
             "step.2=\"{tool:qilin helper}\" sub {input} --out \"{gen}/sub dir\" \"--note=two words\"\n"
-            "compile_memory_mb=3000\nbuild_space_mb=1\ncache_mb=64\nrun_args=--data {input} --fullscreen\n";
+            "compile_memory_mb=3000\nbuild_space_mb=1\ncache_mb=64\nrun_args=--data {input} --fullscreen\n"
+            "old_files=Play Folder.bat; work/old build.ninja ;../outside.txt\nold_input_file=work/disc-folder.txt\n";
         put(top2 / "kit" / "game.txt", game_txt);
         const fs::path data = top2 / fs::path(u8"game data \u4fdd & %PATH% $HOME");
         fs::create_directories(data / "sys");
@@ -431,6 +432,27 @@ int main(int argc, char** argv) {
         CHECK(kit2.input == InputKind::Folder && kit2.input_noun == "game folder" && kit2.input_extensions.empty());
         CHECK(kit2.steps.size() == 2 && kit2.compile_memory_mb == 3000 && kit2.build_space_mb == 1 && kit2.cache_mb == 64);
         CHECK(kit2.release_tag_prefix == "folder-v" && kit2.release_asset_prefix == "Folder--QilinRecomp-" && kit2.repo == "example/Folder--QilinRecomp");
+        // An older download's own leftovers (game.txt's old_files and
+        // old_input_file): removed, the remembered data taken over, and
+        // nothing outside the download folder touched.
+        CHECK(kit2.old_files.size() == 2 && kit2.old_input_files.size() == 1);
+        {
+            fs::create_directories(kit2.work);
+            put(top2 / "Play Folder.bat", "old");
+            put(kit2.work / "old build.ninja", "old");
+            put(top2.parent_path() / "outside.txt", "not the launcher's");
+            put(kit2.work / "disc-folder.txt", "\xEF\xBB\xBF" + show(data) + "\r\n");
+            std::error_code rm;
+            fs::remove(kit2.disc_file(), rm);
+            const Tidied t = tidy_folder(kit2);
+            CHECK(t.problems.empty());
+            CHECK(!fs::exists(top2 / "Play Folder.bat") && !fs::exists(kit2.work / "old build.ninja") && !fs::exists(kit2.work / "disc-folder.txt"));
+            CHECK(fs::exists(top2.parent_path() / "outside.txt"));
+            const auto taken = read_file(kit2.disc_file());
+            CHECK(taken && *taken == show(data));
+            fs::remove(kit2.disc_file(), rm);
+            fs::remove(top2.parent_path() / "outside.txt", rm);
+        }
         CHECK(kit2.the_input() == "the game folder");
         {
             const auto words = expand_command(kit2, kit2.steps[1], data);

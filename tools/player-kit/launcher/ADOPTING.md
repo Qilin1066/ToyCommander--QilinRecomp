@@ -66,6 +66,8 @@ The chosen file or folder is remembered in the data folder (`launcher-disc.txt`)
 | `build_space_mb` | `2048` | free space a build needs on the drive holding `work/`. |
 | `cache_mb` | `2048` | the object cache (`build-cache` in the data folder) is trimmed to its newest this much after a build. |
 | `run_args` | `{input}` | the game's arguments (`--data {input} --fullscreen`; empty: none). The game starts in the download's folder, its output in `work/run.log` and `work/run-errors.log`. |
+| `old_files` | (none) | what this project's downloads before the launcher left in the download folder, `;`-separated, relative to it (`Play Ghoulies.bat; work/kit.ninja`). Removed at every start. Only plain relative paths inside the folder count; `..` and absolute paths are ignored. |
+| `old_input_file` | (none) | where an older download remembered the player's data (`work/disc-folder.txt`): its first line is taken over if the launcher remembers nothing yet, then the file is removed. |
 | `compiler` | `toolchain/bin/x86_64-w64-mingw32-clang++.exe` | the compiler: a path in the kit, or absolute (`/usr/bin/clang++` on macOS). |
 | `compiler_args` | empty | put before every compiler argument (zig's `c++`). |
 
@@ -165,5 +167,7 @@ The `<system>` part is fixed by the launcher (`platform_*.cpp`'s `release_asset_
 - Placeholders are replaced after splitting: `{input}` with spaces is safe unquoted, but a literal argument with spaces needs quotes.
 
 ## Changes that need the projects
+
+- Launcher 2: two new, optional `game.txt` keys, `old_files` and `old_input_file`, for the files a project's downloads before the launcher left behind (its old `.bat`, its own remembered-data file). Without them nothing changes; with them, unzipping the new download over an old one leaves no clutter and keeps the player's choice.
 
 - Launcher 1 (the first game-neutral copy): projects need `qilin identify` (the defaults run it), `repo` in `game.txt` (it used to default to Toy Commander's repository), and `launcher.cmake` in place of their own launcher targets. The test stub moved from `tools/check/launcher_stub.cpp` to `test_stub.cpp` here.
