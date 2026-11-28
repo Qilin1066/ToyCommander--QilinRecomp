@@ -291,9 +291,11 @@ if(QILIN_HOST)
     # system's: SDL adds them as a system folder, and zig's compiler (the
     # Linux download's) searches the system's /usr/include first, whose
     # older wayland-client-protocol.h lacks what SDL uses
-    # (WL_KEYBOARD_KEY_STATE_REPEATED). A plain -I comes before both.
-    if(TARGET SDL3-static AND EXISTS "${sdl3_BINARY_DIR}/wayland-generated-protocols")
-        target_include_directories(SDL3-static BEFORE PRIVATE "${sdl3_BINARY_DIR}/wayland-generated-protocols")
+    # (WL_KEYBOARD_KEY_STATE_REPEATED). SDL includes them in quotes, and
+    # -iquote folders come before every -I and -isystem one. (An option, not
+    # an include folder: CMake would merge that into SDL's system one.)
+    if(TARGET SDL3-static AND EXISTS "${sdl3_BINARY_DIR}/wayland-generated-protocols" AND NOT MSVC)
+        target_compile_options(SDL3-static BEFORE PRIVATE "-iquote${sdl3_BINARY_DIR}/wayland-generated-protocols")
     endif()
     add_library(qilin_volk STATIC ${volk_SOURCE_DIR}/volk.c)
     target_include_directories(qilin_volk PUBLIC ${volk_SOURCE_DIR})
