@@ -1,0 +1,145 @@
+name: Linux downloads
+
+# Builds each game's Linux downloads (tools/player-kit/package-linux.sh),
+# x86-64 and ARM64 (the Raspberry Pi's), each on its own processor: on every
+# push, as artifacts to check; on a game's version tag (toycommander-vX.Y.Z
+# or toyracer-vX.Y.Z), attached to that tag's GitHub Release as
+# <Game>--QilinRecomp-X.Y.Z-linux-x86_64.tar.gz and -linux-arm64.tar.gz.
+# Built on Ubuntu 22.04, whose glibc (2.35) is the oldest the downloads run
+# on. No game data is used or included: players lift the boot file from
+# their own disc dump with the bundled tools.
+on:
+  push:
+    branches: ['**']
+    tags: ['toycommander-v*', 'toyracer-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to create the release and attach the downloads
+
+env:
+  ZIG_VERSION: "0.17.1"   # the compiler the downloads bundle (MIT), checked against ziglang.org's index
+  ZIG_X86_64_SHA256: 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+  ZIG_AARCH64_SHA256: a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
+  ZSTD_LICENSE_SHA256: 7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8   # zstd v1.5.7 LICENSE (BSD), for libchdr's bundled decompressor
+  GLIBC_FLOOR: "2.35"     # Ubuntu 22.04's: the smoke test fails anything that needs newer
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        game: [toycommander, toyracer]
+        target:
+          - { arch: x86_64, zig: x86_64, runner: ubuntu-22.04 }
+          - { arch: arm64, zig: aarch64, runner: ubuntu-22.04-arm }
+        include:
+          - game: toycommander
+            package: ToyCommander--QilinRecomp
+            title: Toy Commander
+            disc: the USA release (MK-57020, version 1.022)
+            changelog: CHANGELOG.md
+          - game: toyracer
+            package: ToyRacer--QilinRecomp
+            title: Toy Racer
+            disc: the European release (MK-5114950, version 1.050)
+            changelog: toyracer/CHANGELOG.md
+    name: ${{ matrix.game }} linux-${{ matrix.target.arch }}
+    runs-on: ${{ matrix.target.runner }}
+    env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/../zig-cache
+      ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/../zig-cache
+    steps:
+      # A tag builds only its own game's downloads (a job's own if can't read the matrix).
+      - name: This game?
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$GAME"-v* ]]; then echo "BUILD=no" >> "$GITHUB_ENV"; else echo "BUILD=yes" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v5
+        if: env.BUILD == 'yes'
+        with:
+          fetch-depth: 0   # the tags, for the version of an untagged build
+      - name: Annotate compiler messages
+        if: env.BUILD == 'yes'
+        run: echo "::add-matcher::.github/matchers/compilers.json"
+      - name: Build tools and SDL3's headers
+        if: env.BUILD == 'yes'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build python3-pip binutils
+          # What SDL3 builds against (it loads them at run time): without X11 or Wayland it refuses to configure.
+          sudo apt-get install -y -qq libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxtst-dev libxfixes-dev libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libdrm-dev libgbm-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
+          # CMake 3.25 or later (22.04's own is 3.22), the same on both processors.
+          python3 -m pip install --user --quiet cmake==3.31.6
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Get zig (pinned, checked)
+        if: env.BUILD == 'yes'
+        env:
+          ZIG_ARCH: ${{ matrix.target.zig }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools" && cd "$RUNNER_TEMP/tools"
+          name="zig-$ZIG_ARCH-linux-$ZIG_VERSION"
+          curl -sSfL --retry 3 -o zig.tar.xz "https://ziglang.org/download/$ZIG_VERSION/$name.tar.xz"
+          if [ "$ZIG_ARCH" = x86_64 ]; then sum=$ZIG_X86_64_SHA256; else sum=$ZIG_AARCH64_SHA256; fi
+          echo "$sum  zig.tar.xz" | sha256sum -c
+          tar xJf zig.tar.xz
+          echo "ZIG_DIR=$PWD/$name" >> "$GITHUB_ENV"
+          curl -sSfL -o zstd-LICENSE https://raw.githubusercontent.com/facebook/zstd/v1.5.7/LICENSE
+          echo "$ZSTD_LICENSE_SHA256  zstd-LICENSE" | sha256sum -c
+          echo "ZSTD_LICENSE=$PWD/zstd-LICENSE" >> "$GITHUB_ENV"
+          "$PWD/$name/zig" version
+          ldd --version | head -1
+      - name: Package
+        if: env.BUILD == 'yes'
+        env:
+          GAME: ${{ matrix.game }}
+          PACKAGE: ${{ matrix.package }}
+          ARCH: ${{ matrix.target.arch }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/$GAME-v* ]]; then version="${GITHUB_REF_NAME#$GAME-v}"
+          else version="$(git describe --tags --always --match "$GAME-v*")"; version="${version#$GAME-v}"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          tarball="$PACKAGE-$version-linux-$ARCH.tar.gz"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+          BUILD_DIR="$PWD/build-player-kit-linux" tools/player-kit/package-linux.sh "$GAME" "$version" "$PWD/$tarball"
+      # The launcher's build test and its portable parts, built with the bundled zig.
+      - name: Launcher tests (zig)
+        if: env.BUILD == 'yes'
+        run: |
+          cmake --build build-player-kit-linux --target qilin_launcher_test qilin_launcher_build_test qilin_launcher_stub --parallel
+          ctest --test-dir build-player-kit-linux -R qilin_launcher --output-on-failure
+      - name: Smoke test (the unpacked download)
+        if: env.BUILD == 'yes'
+        run: tools/player-kit/smoke-linux.sh "$TARBALL" "$GLIBC_FLOOR"
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD == 'yes'
+        with:
+          name: ${{ matrix.package }}-${{ env.VERSION }}-linux-${{ matrix.target.arch }}
+          path: ${{ env.TARBALL }}
+          retention-days: 14
+      # The release may already be there (the Windows or macOS download's
+      # workflow made it), or be made by one of them at the same moment:
+      # upload if it exists, else create it, and once more after a pause if
+      # that lost the race.
+      - name: Attach to the release
+        if: env.BUILD == 'yes' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ matrix.package }}
+          TITLE: ${{ matrix.title }}
+          DISC: ${{ matrix.disc }}
+          CHANGELOG: ${{ matrix.changelog }}
+        run: |
+          command -v gh > /dev/null || sudo apt-get install -y -qq gh
+          attach() {
+            if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" "$TARBALL" --title "$TITLE QilinRecomp $VERSION" \
+                --notes "To play on Windows: download $PACKAGE-$VERSION-windows-x64.zip below, unzip it, open the folder and double-click Play $TITLE.exe. On Linux: $PACKAGE-$VERSION-linux-x86_64.tar.gz, or -linux-arm64.tar.gz for ARM computers such as a Raspberry Pi 4 or 5 (64-bit Raspberry Pi OS only); unpack it and double-click Play $TITLE. Choose your disc (or drag it onto the window); the first start builds the game from it. You need your own disc, $DISC, as a .cue with its .bin tracks, a .gdi or a .chd. Changes: $CHANGELOG."
+            fi
+          }
+          attach || { sleep 20; attach; }

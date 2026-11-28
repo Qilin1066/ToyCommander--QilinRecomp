@@ -44,7 +44,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 option(QILIN_WERROR "Treat warnings in our own code as errors" OFF)
-option(QILIN_REQUIRE_LAUNCHER_TESTS "Require Windows launcher regression tools (CI)" OFF)
+option(QILIN_REQUIRE_LAUNCHER_TESTS "Require the launcher's build test (CI): a native build, not a cross-compile" OFF)
 
 # ---- Warnings for our own targets ----
 add_library(qilin_warnings INTERFACE)
@@ -162,10 +162,10 @@ endforeach()
 # The launcher's build engine, process handling, disc check and updates, on
 # every desktop system: what the system provides is platform_win.cpp,
 # process_win.cpp and shortcut_win.cpp on Windows, the _posix.cpp ones on
-# Linux and macOS. The build test (Windows for now) runs the real build with
-# stand-in children (launcher_stub.cpp).
-if(QILIN_REQUIRE_LAUNCHER_TESTS AND (NOT WIN32 OR CMAKE_CROSSCOMPILING))
-    message(FATAL_ERROR "the launcher's tests need a native Windows build")
+# Linux and macOS. The build test runs the real build with stand-in children
+# (launcher_stub.cpp), on every system it is built for (not a cross-compile).
+if(QILIN_REQUIRE_LAUNCHER_TESTS AND CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "the launcher's build test needs a native build")
 endif()
 set(QILIN_LAUNCHER_DIR tools/player-kit/launcher)
 if(WIN32)
@@ -184,17 +184,21 @@ if(WIN32)
     target_link_libraries(qilin_launcher_core PUBLIC winhttp ole32 uuid shell32)
 endif()
 qilin_tool(qilin_launcher_core)
-if(WIN32)
-    if(NOT CMAKE_CROSSCOMPILING)
-        add_executable(qilin_launcher_stub tools/check/launcher_stub.cpp)
-        target_include_directories(qilin_launcher_stub PRIVATE recomp/runtime)
-        target_link_libraries(qilin_launcher_stub PRIVATE qilin_warnings shell32)
-        add_executable(qilin_launcher_build_test ${QILIN_LAUNCHER_DIR}/launcher_build_test.cpp)
-        target_link_libraries(qilin_launcher_build_test PRIVATE qilin_launcher_core qilin_warnings shell32)
-        add_test(NAME qilin_launcher_build_test COMMAND qilin_launcher_build_test "$<TARGET_FILE:qilin_launcher_stub>" "$<TARGET_FILE:qilin>"
-                                                        "${CMAKE_CURRENT_BINARY_DIR}/launcher-check/$<CONFIG>")
-        set_tests_properties(qilin_launcher_build_test PROPERTIES TIMEOUT 120)
+if(NOT CMAKE_CROSSCOMPILING)
+    add_executable(qilin_launcher_stub tools/check/launcher_stub.cpp)
+    target_include_directories(qilin_launcher_stub PRIVATE recomp/runtime)
+    target_link_libraries(qilin_launcher_stub PRIVATE qilin_warnings)
+    add_executable(qilin_launcher_build_test ${QILIN_LAUNCHER_DIR}/launcher_build_test.cpp)
+    target_link_libraries(qilin_launcher_build_test PRIVATE qilin_launcher_core qilin_warnings)
+    if(WIN32)
+        target_link_libraries(qilin_launcher_stub PRIVATE shell32)
+        target_link_libraries(qilin_launcher_build_test PRIVATE shell32)
     endif()
+    qilin_tool(qilin_launcher_stub)
+    qilin_tool(qilin_launcher_build_test)
+    add_test(NAME qilin_launcher_build_test COMMAND qilin_launcher_build_test "$<TARGET_FILE:qilin_launcher_stub>" "$<TARGET_FILE:qilin>"
+                                                    "${CMAKE_CURRENT_BINARY_DIR}/launcher-check/$<CONFIG>")
+    set_tests_properties(qilin_launcher_build_test PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(qilin_file_store_test host/tests/file_store_test.cpp)
@@ -283,6 +287,16 @@ if(QILIN_HOST)
     FetchContent_Declare(volk GIT_REPOSITORY https://github.com/zeux/volk GIT_TAG vulkan-sdk-1.4.363.0 GIT_SHALLOW ON
                          SOURCE_SUBDIR no-cmake)
     FetchContent_MakeAvailable(SDL3 VulkanHeaders volk)
+    # SDL's Wayland protocol headers, made from its own XML, before the
+    # system's: SDL adds them as a system folder, and zig's compiler (the
+    # Linux download's) searches the system's /usr/include first, whose
+    # older wayland-client-protocol.h lacks what SDL uses
+    # (WL_KEYBOARD_KEY_STATE_REPEATED). SDL includes them in quotes, and
+    # -iquote folders come before every -I and -isystem one. (An option, not
+    # an include folder: CMake would merge that into SDL's system one.)
+    if(TARGET SDL3-static AND EXISTS "${sdl3_BINARY_DIR}/wayland-generated-protocols" AND NOT MSVC)
+        target_compile_options(SDL3-static BEFORE PRIVATE "-iquote${sdl3_BINARY_DIR}/wayland-generated-protocols")
+    endif()
     add_library(qilin_volk STATIC ${volk_SOURCE_DIR}/volk.c)
     target_include_directories(qilin_volk PUBLIC ${volk_SOURCE_DIR})
     target_link_libraries(qilin_volk PUBLIC Vulkan::Headers ${CMAKE_DL_LIBS})
@@ -390,8 +404,9 @@ if(QILIN_HOST)
     else()
         target_compile_options(qilin_imgui_sdlrenderer PRIVATE -w)
     endif()
-    add_executable(qilin_launcher WIN32 tools/player-kit/launcher/main.cpp)
-    target_link_libraries(qilin_launcher PRIVATE qilin_launcher_core qilin_imgui_sdlrenderer qilin_imgui SDL3::SDL3-static Threads::Threads qilin_warnings)
+    add_executable(qilin_launcher WIN32 tools/player-kit/launcher/main.cpp tools/player-kit/launcher/vulkan_check.cpp)
+    target_link_libraries(qilin_launcher PRIVATE qilin_launcher_core qilin_imgui_sdlrenderer qilin_imgui qilin_volk SDL3::SDL3-static Threads::Threads
+                                                 qilin_warnings)
     qilin_tool(qilin_launcher)
     if(WIN32)
         # Its icon, file details and manifest (launcher.rc), and the same icon
@@ -425,7 +440,7 @@ endif()
 set(QILIN_TOYCOMMANDER_BOOT "" CACHE FILEPATH "Toy Commander (USA, MK-57020, V1.022) 1GUTH.BIN or the disc's .cue: builds toycommander")
 set(QILIN_TOYRACER_BOOT "" CACHE FILEPATH "Toy Racer (Europe, MK-5114950, V1.050) 1TOYRACE.BIN or the disc's .cue: builds toyracer")
 option(QILIN_RUN_CHECKED "the games check every guest memory access (bring-up; off for the player kit)" ON)
-option(QILIN_PLAYER_KIT "Build the player kits (tools/player-kit): each game's library as one archive, for the Windows downloads" OFF)
+option(QILIN_PLAYER_KIT "Build the player kits (tools/player-kit): each game's library as one archive, for the Windows and Linux downloads" OFF)
 set(QILIN_RT_SOURCES recomp/runtime/dispatch.cpp recomp/runtime/system.cpp recomp/runtime/memory.cpp recomp/runtime/bus.cpp)
 set(QILIN_DREAMCAST_SOURCES dreamcast/src/pvr.cpp dreamcast/src/texture.cpp dreamcast/src/renderer.cpp dreamcast/src/video.cpp
                             dreamcast/src/maple.cpp dreamcast/src/sh4.cpp dreamcast/src/clock.cpp dreamcast/src/ta.cpp
@@ -505,11 +520,13 @@ function(qilin_game game title boot version)
     target_link_libraries(${game} PRIVATE ${game}_game)
 endfunction()
 
-# ---- The player kits: the Windows downloads (tools/player-kit, as Punch-Out's) ----
+# ---- The player kits: the downloads (tools/player-kit, as Punch-Out's) ----
 # Per game, everything but the lifted code in one archive (lib<game>_kit.a),
 # the runtime's headers, the recompiler, and build-flags.txt (how the player's PC
-# compiles and links the code it lifts from its own disc). Cross-compiled on
-# Linux with llvm-mingw (tools/player-kit/package.sh).
+# compiles and links the code it lifts from its own disc). Windows:
+# cross-compiled on Linux with llvm-mingw (tools/player-kit/package.sh).
+# Linux: built with the zig the download bundles, so the library's libc++ is
+# the one the player's compiles link with (tools/player-kit/package-linux.sh).
 function(qilin_player_kit game)
     if(NOT TARGET SDL3-static)
         message(FATAL_ERROR "the player kit needs SDL3 built statically (QILIN_HOST=ON)")
@@ -528,18 +545,38 @@ function(qilin_player_kit game)
         DEPENDS ${kit_libraries} "${CMAKE_BINARY_DIR}/kit/${game}/kit.mri"
         COMMENT "Merging ${game}'s player kit" VERBATIM)
     add_custom_target(${game}_kit ALL DEPENDS "${kit_archive}")
-    # The system libraries SDL3 and the runtime need (MinGW names).
-    set(kit_system_libraries -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32
-        -lsetupapi -lshell32 -ldinput8 -lwinspool -lcomdlg32)
-    string(JOIN " " kit_system_text ${kit_system_libraries})
     string(JOIN " " lifted_text ${QILIN_LIFTED_OPTIONS})
+    if(WIN32)
+        # The system libraries SDL3 and the runtime need (MinGW names).
+        set(kit_system_libraries -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32
+            -lsetupapi -lshell32 -ldinput8 -lwinspool -lcomdlg32)
+        set(kit_ldflags "-static -O2 -Wl,--stack,16777216")
+        set(kit_icon " $kit/lib/icon.o")
+        set(kit_native "")  # the launcher's default, -march=native
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # SDL3 loads X11, Wayland, the sound servers and Vulkan at run time:
+        # the game links only glibc's own libraries (and zig's libc++).
+        set(kit_system_libraries -lm -ldl -lpthread -lrt)
+        set(kit_ldflags "-O2")
+        set(kit_icon "")
+        # For the player's processor: x86-64's -march, ARM's -mcpu.
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+            set(kit_native "native = -mcpu=native\n")
+        else()
+            set(kit_native "native = -march=native\n")
+        endif()
+    else()
+        message(FATAL_ERROR "no player kit for ${CMAKE_SYSTEM_NAME} yet")
+    endif()
+    string(JOIN " " kit_system_text ${kit_system_libraries})
     # Read by the launcher (tools/player-kit/launcher/build.cpp): `name = value`
     # lines, $kit the kit's folder.
     file(WRITE "${CMAKE_BINARY_DIR}/kit/${game}/build-flags.txt"
         "# Written by CMake for the player kit (QILIN_PLAYER_KIT).\n"
         "cxxflags = -O2 -DNDEBUG -std=c++23 -w ${lifted_text} -I$kit/include\n"
-        "ldflags = -static -O2 -Wl,--stack,16777216\n"
-        "libs = $kit/lib/lib${game}_kit.a $kit/lib/icon.o ${kit_system_text}\n")
+        "${kit_native}"
+        "ldflags = ${kit_ldflags}\n"
+        "libs = $kit/lib/lib${game}_kit.a${kit_icon} ${kit_system_text}\n")
     # The kit's archive linked with stand-ins for the lifted code: it's complete.
     add_executable(${game}_kit_link_check tools/player-kit/link_check.cpp)
     target_include_directories(${game}_kit_link_check PRIVATE recomp/runtime)
@@ -547,9 +584,11 @@ function(qilin_player_kit game)
     add_dependencies(${game}_kit_link_check ${game}_kit)
     install(TARGETS qilin RUNTIME DESTINATION kit COMPONENT ${game})
     install(FILES "${kit_archive}" DESTINATION kit/lib COMPONENT ${game})
-    # The game's icon (the launcher's), linked into it on the player's PC.
-    add_dependencies(${game}_kit qilin_game_icon)
-    install(FILES $<TARGET_OBJECTS:qilin_game_icon> DESTINATION kit/lib RENAME icon.o COMPONENT ${game})
+    if(WIN32)
+        # The game's icon (the launcher's), linked into it on the player's PC.
+        add_dependencies(${game}_kit qilin_game_icon)
+        install(FILES $<TARGET_OBJECTS:qilin_game_icon> DESTINATION kit/lib RENAME icon.o COMPONENT ${game})
+    endif()
     install(FILES "${CMAKE_BINARY_DIR}/kit/${game}/build-flags.txt" DESTINATION kit COMPONENT ${game})
     file(GLOB kit_headers recomp/runtime/*.hpp)
     install(FILES ${kit_headers} DESTINATION kit/include COMPONENT ${game})

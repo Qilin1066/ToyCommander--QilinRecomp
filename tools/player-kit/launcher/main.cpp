@@ -32,6 +32,7 @@
 #include "shortcut.hpp"
 #include "tidy.hpp"
 #include "update.hpp"
+#include "vulkan_check.hpp"
 
 namespace fs = std::filesystem;
 using namespace qilin::launcher;
@@ -228,6 +229,14 @@ private:
         screen_ = Screen::Building;
         cancel_ = false;
         run_task([this, disc = *disc_, use_cache] {
+            // No Vulkan 1.3 device: the game couldn't start, so don't build it.
+            if (auto vulkan = check_vulkan(); !vulkan) {
+                post([this, why = vulkan.error()] {
+                    screen_ = Screen::BuildFailed;
+                    failure_ = why;
+                });
+                return;
+            }
             BuildOptions options;
             options.use_cache = use_cache;
             const auto built = build_game(kit_, disc, build_, cancel_, options);

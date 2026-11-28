@@ -1,0 +1,140 @@
+@TITLE@ QilinRecomp for Linux (64-bit)
+========================================
+
+Raspberry Pi: this needs the 64-bit Raspberry Pi OS. On the 32-bit one,
+"Play @TITLE@" can't start (the system says it can't execute it, or that
+the file isn't found). In a terminal, "getconf LONG_BIT" says 64 on a
+64-bit system.
+
+@TITLE@ (@STUDIO@), recompiled to run natively: the game's own program
+translated into C++ and compiled for your computer, drawn with Vulkan.
+
+No game data is included. You need your own copy of the game: @RELEASE@,
+dumped from the GD-ROM as a .cue file with its .bin tracks (a Redump-style
+dump, music tracks included), a .gdi with its tracks, or a .chd.
+
+
+Playing
+-------
+1. Unpack the download anywhere you can write to (your home folder is
+   fine): double-click it in your file manager, or in a terminal
+   "tar xzf @PACKAGE@-*.tar.gz". Building the game needs about 2 GB free.
+2. Open the @PACKAGE@ folder and double-click "Play @TITLE@" (if your file
+   manager asks, choose Execute or Run). From a terminal: ./"Play @TITLE@"
+3. Click "Choose your disc" and pick your disc's .cue, .gdi or .chd file,
+   or drag the file onto the window. (Where the desktop has no file
+   chooser, type or paste the file's path.) It tells you straight away if
+   the disc is the wrong game or another version.
+4. Wait for the first build: a few minutes on a desktop PC. Your game
+   files never leave your computer.
+5. Click Play. The window hides while the game runs. "Add to the
+   applications menu" puts @TITLE@ in your desktop's menu.
+
+After that, Play @TITLE@ remembers your disc (even in a new download
+folder), and Play starts the game straight away. After an update it builds
+the game again first, recompiling only what changed.
+
+The game's output is in work/run.log and work/run-errors.log, and the
+build's in work/build.log. Send them when reporting a problem.
+
+Needs: a 64-bit Linux on x86-64 (the linux-x86_64 download) or ARM64 (the
+linux-arm64 download) with glibc 2.35 or later (Ubuntu 22.04, Debian 12,
+Fedora 36, Raspberry Pi OS Bookworm or later), and a graphics driver with
+Vulkan 1.3: Mesa's Vulkan drivers (on Debian and Ubuntu, the
+mesa-vulkan-drivers package) or NVIDIA's. Before building, Play @TITLE@
+checks that there is one and says what to install if not. Updates use
+curl (or wget) and tar, which nearly every Linux has.
+
+
+Raspberry Pi
+------------
+- The 64-bit Raspberry Pi OS (see the top of this file), on a Raspberry Pi
+  4 or 5 with 2 GB of memory or more. Use the linux-arm64 download.
+- Vulkan 1.3 for the Pi's graphics arrived with Mesa 24.3: Raspberry Pi OS
+  Trixie (October 2025) or later has it. On an older Raspberry Pi OS, Play
+  @TITLE@ says so before building: update Raspberry Pi OS.
+- The first build compiles the whole game on the Pi itself, so it takes a
+  while: much longer than on a desktop PC, and longer on a Pi 4 than a Pi
+  5, and on a 2 GB Pi, which compiles one file at a time. Leave it
+  running. Later builds take compiled files from the cache.
+- "Add to the applications menu" (once the game is built) puts @TITLE@ in
+  the Raspberry Pi menu, under Games.
+
+
+Controls
+--------
+A Dreamcast controller. Up to four players: the first controller (or the
+keyboard) is port A, the others ports B to D.
+
+  Controller           Keyboard        Dreamcast
+  left stick           arrows          the analogue stick
+  D-pad                I J K L         the D-pad
+  A, B, X, Y           Z, X, A, S      A, B, X, Y
+  LB, RB, triggers     Q, W            L, R
+  Start                Enter           Start
+
+Back + Start together, or F1 or Esc: the settings menu (the game pauses):
+controls (set by pressing them), the window, the picture, the refresh
+rate, enhancements and the Dreamcast's own settings (language, sound).
+Alt+Enter or F11: full screen. A controller that rumbles plays the Jump Pack.
+
+Settings and memory-card saves are kept in ~/.local/share/qilin/@GAME@ (or
+$XDG_DATA_HOME/qilin/@GAME@), with the disc you chose and the build's cache
+of compiled files (build-cache).
+
+
+What's in here
+--------------
+Play @TITLE@        chooses your disc, builds the game (once) and starts it
+kit/qilin           the recompiler: turns the disc's @BOOT@ into C++
+kit/lib, include    the prebuilt rest of the game: its runtime, the renderer,
+                    sound, the window and controls (SDL3), the menu (Dear ImGui)
+kit/toolchain/zig   zig, a C++ compiler (Clang, with its own libc++)
+kit/icon.png        the menu entry's icon
+kit/files.txt       every file this release holds (see below)
+work/               made when building: the game (@EXE_LINUX@), built from your
+                    disc, the recompiled code, the build's files and the logs
+LICENSES/           the licences of everything included
+
+zig keeps its own cache of compiled libraries in ~/.cache/zig.
+
+Source, changes and issues: https://github.com/Qilin1066/ToyCommander--QilinRecomp
+
+Updates and recovery
+--------------------
+"Check for updates" in Play @TITLE@ asks GitHub for a newer release of
+@TITLE@ (it sends nothing about you or your computer). If there is one, it
+downloads it, unpacks it beside this folder and swaps in the new kit and
+launcher, then starts again and builds the game for the new version. If
+anything fails on the way, the old version is left as it was. You can also
+unpack a new download anywhere, even over this folder: it finds your disc
+and the cache by itself, and at its first start it removes files the new
+kit no longer has (anything in kit/ or LICENSES/ that kit/files.txt doesn't
+name). Your saves and settings are never in this folder, so nothing of
+yours is touched.
+
+The game is compiled for this computer's processor; moved to another
+computer, it is built again. Compiled files come from the cache when
+nothing they're made from has changed. A failed build leaves the working
+game as it was; the one before a new build is kept as
+work/@EXE_LINUX@.previous until the new one has run and closed normally.
+"Build again from scratch" compiles everything anew.
+
+Before a save burst, the memory card is copied into its five-entry history;
+flash updates keep their own history too. Use the settings menu's Game page
+to restore a copy and restart. VMU packets are checked small writes; the
+history supports recovery after an interrupted save, rather than making a
+whole game save transactional. Existing unreadable or malformed card/flash
+files stop the game and are left unchanged. Keep a separate copy before
+manual recovery.
+
+Sound and controller recovery
+-----------------------------
+If the sound output is unavailable, the game keeps running and retries it
+once a second. Playback resumes with the selected volume and mute setting;
+sound from the outage is discarded rather than played late. Recovery and
+errors are recorded in run-errors.log.
+
+A controller that pressed while all four ports were full can take a port
+when another controller disconnects. Existing players keep their ports.
+Vibration expires quickly if the game stops updating it.
