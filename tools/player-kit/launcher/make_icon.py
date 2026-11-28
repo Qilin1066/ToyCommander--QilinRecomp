@@ -4,8 +4,12 @@
 # 48, 64 and 256 pixels, each antialiased by 4x4 supersampling. Original
 # artwork, made only by this script: run it again after changing it.
 #   python3 tools/player-kit/launcher/make_icon.py
+# With --png <file>, it writes only that: the 256-pixel image as a PNG (the
+# Linux download's kit/icon.png, for its applications-menu entry), and
+# leaves launcher.ico as it is.
 import math
 import os
+import sys
 import struct
 import zlib
 
@@ -68,6 +72,14 @@ def png(size):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--png":
+        data = png(256)
+        with open(sys.argv[2], "wb") as f:
+            f.write(data)
+        print(f"{sys.argv[2]}: {len(data)} bytes")
+        return
+    if len(sys.argv) != 1:
+        sys.exit("usage: make_icon.py [--png <file>]")
     images = [png(s) for s in SIZES]
     out = struct.pack("<HHH", 0, 1, len(images))
     offset = 6 + 16 * len(images)
